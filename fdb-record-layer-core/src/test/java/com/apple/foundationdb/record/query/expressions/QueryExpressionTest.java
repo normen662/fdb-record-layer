@@ -91,6 +91,11 @@ public class QueryExpressionTest {
             return 0;
         }
 
+        @Override
+        public int queryHash(@Nonnull final QueryHashKind hashKind) {
+            return 0;
+        }
+
         @Nonnull
         @Override
         public QueryPredicate normalizeForPlanner(@Nonnull Source source, @Nonnull List<String> fieldNamePrefix) {

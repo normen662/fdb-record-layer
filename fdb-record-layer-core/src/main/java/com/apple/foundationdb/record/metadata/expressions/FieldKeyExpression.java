@@ -32,6 +32,7 @@ import com.apple.foundationdb.record.query.plan.temp.view.FieldElement;
 import com.apple.foundationdb.record.query.plan.temp.view.RepeatedFieldSource;
 import com.apple.foundationdb.record.query.plan.temp.view.Source;
 import com.apple.foundationdb.record.query.plan.temp.view.ValueElement;
+import com.apple.foundationdb.record.util.HashUtils;
 import com.google.common.collect.ImmutableList;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.Message;
@@ -380,6 +381,11 @@ public class FieldKeyExpression extends BaseKeyExpression implements AtomKeyExpr
             default:
                 throw new UnsupportedOperationException("Hash kind " + hashKind.name() + " is not supported");
         }
+    }
+
+    @Override
+    public int queryHash(@Nonnull final QueryHashKind hashKind) {
+        return HashUtils.queryHash(hashKind, BASE_HASH, fieldName, fanType);
     }
 
     @Override

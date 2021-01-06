@@ -30,6 +30,7 @@ import com.apple.foundationdb.record.query.expressions.ComponentWithNoChildren;
 import com.apple.foundationdb.record.query.expressions.Query;
 import com.apple.foundationdb.record.query.plan.temp.view.Source;
 import com.apple.foundationdb.record.query.predicates.QueryPredicate;
+import com.apple.foundationdb.record.util.HashUtils;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.Message;
 import org.locationtech.jts.geom.Coordinate;
@@ -129,7 +130,6 @@ public class GeoPointWithinDistanceComponent implements ComponentWithNoChildren 
 
     @Override
     public int planHash(@Nonnull final PlanHashKind hashKind) {
-        // TODO Right?
         switch (hashKind) {
             case LEGACY:
                 return PlanHashable.objectsPlanHash(hashKind, centerLatitude, centerLongitude, distance, latitudeFieldName, longitudeFieldName);
@@ -139,6 +139,11 @@ public class GeoPointWithinDistanceComponent implements ComponentWithNoChildren 
             default:
                 throw new UnsupportedOperationException("Hash kind " + hashKind.name() + " is not supported");
         }
+    }
+
+    @Override
+    public int queryHash(@Nonnull final QueryHashKind hashKind) {
+        return HashUtils.queryHash(hashKind, BASE_HASH, latitudeFieldName, longitudeFieldName);
     }
 
     @Override

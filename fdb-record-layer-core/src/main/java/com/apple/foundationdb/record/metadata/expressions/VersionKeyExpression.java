@@ -29,6 +29,7 @@ import com.apple.foundationdb.record.provider.foundationdb.FDBRecord;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordVersion;
 import com.apple.foundationdb.record.query.plan.temp.view.Source;
 import com.apple.foundationdb.record.query.plan.temp.view.VersionElement;
+import com.apple.foundationdb.record.util.HashUtils;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.Message;
 
@@ -135,6 +136,11 @@ public class VersionKeyExpression extends BaseKeyExpression implements AtomKeyEx
             default:
                 throw new UnsupportedOperationException("Hash Kind " + hashKind.name() + " is not supported");
         }
+    }
+
+    @Override
+    public int queryHash(@Nonnull final QueryHashKind hashKind) {
+        return HashUtils.queryHash(hashKind, BASE_HASH);
     }
 
     @Override

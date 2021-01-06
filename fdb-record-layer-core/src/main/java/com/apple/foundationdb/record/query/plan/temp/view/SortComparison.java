@@ -21,14 +21,17 @@
 package com.apple.foundationdb.record.query.plan.temp.view;
 
 import com.apple.foundationdb.record.EvaluationContext;
+import com.apple.foundationdb.record.ObjectPlanHash;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordStoreBase;
 import com.apple.foundationdb.record.query.expressions.Comparisons;
+import com.apple.foundationdb.record.util.HashUtils;
 import com.google.protobuf.Descriptors;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 class SortComparison implements Comparisons.Comparison {
+    private static final ObjectPlanHash BASE_HASH = new ObjectPlanHash("Sort-Comparison");
     /**
      * A "comparison" that represents a sort on the given field, based on the observation that the planner can generally
      * treat a requested sort order as a pair of comparisons requiring the field to be greater than "negative infinity"
@@ -76,5 +79,10 @@ class SortComparison implements Comparisons.Comparison {
     @Override
     public int planHash(@Nonnull final PlanHashKind hashKind) {
         return 0;
+    }
+
+    @Override
+    public int queryHash(@Nonnull final QueryHashKind hashKind) {
+        return HashUtils.queryHash(hashKind, BASE_HASH);
     }
 }

@@ -20,11 +20,13 @@
 
 package com.apple.foundationdb.record.metadata;
 
+import com.apple.foundationdb.record.ObjectPlanHash;
 import com.apple.foundationdb.record.RecordMetaDataProto;
 import com.apple.foundationdb.record.metadata.expressions.BaseKeyExpression;
 import com.apple.foundationdb.record.metadata.expressions.KeyExpression;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecord;
 import com.apple.foundationdb.record.query.plan.temp.view.Source;
+import com.apple.foundationdb.record.util.HashUtils;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.Message;
 
@@ -38,6 +40,8 @@ import java.util.List;
  * to throw an error if they counter a {@link KeyExpression} that they don't know about.
  */
 public class UnknownKeyExpression extends BaseKeyExpression {
+    private static final ObjectPlanHash BASE_HASH = new ObjectPlanHash("Unknown-Key-Expression");
+
 
     /**
      * Get the instance of this singleton. If this were a real class for use by end clients, this
@@ -90,5 +94,10 @@ public class UnknownKeyExpression extends BaseKeyExpression {
     @Override
     public int planHash(@Nonnull final PlanHashKind hashKind) {
         return 1066;
+    }
+
+    @Override
+    public int queryHash(@Nonnull final QueryHashKind hashKind) {
+        return HashUtils.queryHash(hashKind, BASE_HASH);
     }
 }
