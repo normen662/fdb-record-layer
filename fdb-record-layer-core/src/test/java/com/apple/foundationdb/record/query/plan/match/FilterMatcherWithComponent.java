@@ -26,7 +26,7 @@ import com.apple.foundationdb.record.query.plan.plans.RecordQueryPlan;
 import com.apple.foundationdb.record.query.plan.plans.RecordQueryPredicateFilterPlan;
 import com.apple.foundationdb.record.query.plan.temp.AliasMap;
 import com.apple.foundationdb.record.query.plan.temp.CorrelationIdentifier;
-import com.apple.foundationdb.record.query.plan.temp.ExpandedPredicates;
+import com.apple.foundationdb.record.query.plan.temp.GraphExpansion;
 import com.apple.foundationdb.record.query.predicates.PredicateWithValue;
 import com.apple.foundationdb.record.query.predicates.QueryComponentPredicate;
 import com.apple.foundationdb.record.query.predicates.QueryPredicate;
@@ -61,12 +61,12 @@ public class FilterMatcherWithComponent extends PlanMatcherWithChild {
     public FilterMatcherWithComponent(@Nonnull QueryComponent component, @Nonnull Matcher<RecordQueryPlan> childMatcher) {
         super(childMatcher);
         this.component = component;
-        this.baseAlias = CorrelationIdentifier.randomID();
+        this.baseAlias = CorrelationIdentifier.uniqueID();
         this.componentAsPredicateSupplier = Suppliers.memoize(() -> {
-            final ExpandedPredicates expandedPredicates =
-                    component.normalizeForPlanner(baseAlias);
-            Verify.verify(expandedPredicates.getQuantifiers().isEmpty());
-            return expandedPredicates.asAndPredicate();
+            final GraphExpansion graphExpansion =
+                    component.expand(baseAlias);
+            Verify.verify(graphExpansion.getQuantifiers().isEmpty());
+            return graphExpansion.asAndPredicate();
         });
     }
 

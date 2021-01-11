@@ -69,7 +69,7 @@ import static com.apple.foundationdb.record.query.plan.temp.matchers.MultiChildr
  *
  * As an intermediate expression has children (and the candidate expression also has at least one child) we
  * need to match up the quantifiers of the query expression to the quantifiers of the possible candidate expression
- * in order to determines if the query expression is in fact subsumed by the candidate. The property of subsumption
+ * in order to determine if the query expression is in fact subsumed by the candidate. The property of subsumption
  * is defined as the ability of replacing the query expression with the candidate expression with the additional
  * application of compensation. Equivalence between expressions is stronger than subsumption in a way that if two
  * expressions are semantically equal, the compensation is considered to be a no op.

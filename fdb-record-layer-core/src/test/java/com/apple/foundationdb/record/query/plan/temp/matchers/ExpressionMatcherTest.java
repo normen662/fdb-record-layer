@@ -206,7 +206,7 @@ public class ExpressionMatcherTest {
         QueryComponent andBranch2 = Query.field("field2").equalsParameter("param");
         final Quantifier.ForEach quantifier = Quantifier.forEach(GroupExpressionRef.of(new RecordQueryIndexPlan("an_index", IndexScanType.BY_VALUE, ScanComparisons.EMPTY, true)));
         LogicalFilterExpression filterPlan =
-                new LogicalFilterExpression(Query.and(andBranch1, andBranch2).normalizeForPlanner(quantifier.getAlias()).asAndPredicate(),
+                new LogicalFilterExpression(Query.and(andBranch1, andBranch2).expand(quantifier.getAlias()).asAndPredicate(),
                         quantifier);
         RecordQueryScanPlan scanPlan = new RecordQueryScanPlan(ScanComparisons.EMPTY, true);
         ExpressionRef<RelationalExpression> root = GroupExpressionRef.of(

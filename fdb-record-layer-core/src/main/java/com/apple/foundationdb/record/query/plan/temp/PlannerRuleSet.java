@@ -136,5 +136,4 @@ public class PlannerRuleSet {
     public Stream<PlannerRule<? extends MatchPartition>> getMatchPartitionRules() {
         return MATCH_PARTITION_RULES.stream();
     }
-
 }

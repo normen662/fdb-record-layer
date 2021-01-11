@@ -23,7 +23,7 @@ package com.apple.foundationdb.record.query.plan.temp.rules;
 import com.apple.foundationdb.annotation.API;
 import com.apple.foundationdb.record.query.plan.temp.CascadesPlanner;
 import com.apple.foundationdb.record.query.plan.temp.ExpressionRef;
-import com.apple.foundationdb.record.query.plan.temp.IndexScanMatchCandidate;
+import com.apple.foundationdb.record.query.plan.temp.ValueIndexScanMatchCandidate;
 import com.apple.foundationdb.record.query.plan.temp.MatchCandidate;
 import com.apple.foundationdb.record.query.plan.temp.MatchInfo;
 import com.apple.foundationdb.record.query.plan.temp.PartialMatch;
@@ -54,7 +54,7 @@ import java.util.Set;
  *
  * <ul>
  *     <li>a {@link PrimaryScanExpression} for a single {@link PrimaryScanMatchCandidate},</li>
- *     <li>an {@link IndexScanExpression} for a single {@link IndexScanMatchCandidate}</li>
+ *     <li>an {@link IndexScanExpression} for a single {@link ValueIndexScanMatchCandidate}</li>
  * </ul>
  *
  * The logic that this rules delegates to to actually create the expressions can be found in

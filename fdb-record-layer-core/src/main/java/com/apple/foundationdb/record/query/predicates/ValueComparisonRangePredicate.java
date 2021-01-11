@@ -33,16 +33,20 @@ import com.apple.foundationdb.record.query.plan.temp.AliasMap;
 import com.apple.foundationdb.record.query.plan.temp.Bindable;
 import com.apple.foundationdb.record.query.plan.temp.ComparisonRange;
 import com.apple.foundationdb.record.query.plan.temp.CorrelationIdentifier;
+import com.apple.foundationdb.record.query.plan.temp.PredicateMultiMap.PredicateMapping;
 import com.apple.foundationdb.record.query.plan.temp.matchers.ExpressionMatcher;
 import com.apple.foundationdb.record.query.plan.temp.matchers.PlannerBindings;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
 import com.google.protobuf.Message;
+import org.checkerframework.checker.nullness.qual.NonNull;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 
@@ -231,9 +235,43 @@ public abstract class ValueComparisonRangePredicate implements PredicateWithValu
             return PlanHashable.objectsPlanHash(hashKind, super.planHash(), BASE_HASH, comparisonRange.getRangeType());
         }
 
+        @Nonnull
         @Override
-        public String toString() {
-            return getValue() + " " + comparisonRange;
+        public Optional<PredicateMapping> impliesCandidatePredicate(@NonNull final AliasMap aliasMap,
+                                                                    @Nonnull final QueryPredicate candidatePredicate) {
+            if (candidatePredicate instanceof Placeholder) {
+                final Placeholder placeHolderPredicate = (Placeholder)candidatePredicate;
+                if (!getValue().semanticEquals(placeHolderPredicate.getValue(), aliasMap)) {
+                    return Optional.empty();
+                }
+
+                // we found a compatible association between a comparison range in the query and a
+                // parameter placeholder in the candidate
+                return Optional.of(new PredicateMapping(this,
+                        candidatePredicate,
+                        ((matchInfo, boundParameterPrefixMap) -> reapplyPredicateMaybe(boundParameterPrefixMap, placeHolderPredicate)),
+                        placeHolderPredicate.getParameterAlias()));
+            } else if (candidatePredicate.isTautology()) {
+                return Optional.of(new PredicateMapping(this,
+                        candidatePredicate,
+                        ((matchInfo, boundParameterPrefixMap) -> Optional.of(reapplyPredicate()))));
+
+            }
+
+            return Optional.empty();
+        }
+
+        private Optional<QueryPredicate> reapplyPredicateMaybe(@Nonnull final Map<CorrelationIdentifier, ComparisonRange> boundParameterPrefixMap,
+                                                               @Nonnull final Placeholder placeholderPredicate) {
+            if (boundParameterPrefixMap.containsKey(placeholderPredicate.getParameterAlias())) {
+                return Optional.empty();
+            }
+
+            return Optional.of(reapplyPredicate());
+        }
+
+        private QueryPredicate reapplyPredicate() {
+            return AndPredicate.and(toResiduals());
         }
 
         public List<QueryPredicate> toResiduals() {
@@ -250,5 +288,11 @@ public abstract class ValueComparisonRangePredicate implements PredicateWithValu
 
             return residuals.build();
         }
+
+        @Override
+        public String toString() {
+            return getValue() + " " + comparisonRange;
+        }
+
     }
 }
