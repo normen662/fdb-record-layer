@@ -1,0 +1,158 @@
+/*
+ * test_records_4.proto
+ *
+ * This source file is part of the FoundationDB open source project
+ *
+ * Copyright 2015-2018 Apple Inc. and the FoundationDB project authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+syntax = "proto2";
+
+package com.apple.foundationdb.record.tpcc;
+
+option java_package = "com.apple.foundationdb.record";
+option java_outer_classname = "TestRecordsTpccProto";
+
+import "record_metadata_options.proto";
+
+message Warehouse {
+  required int64  W_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true];
+  optional string W_NAME = 2;
+  optional string W_STREET_1 = 3;
+  optional string W_STREET_2 = 4;
+  optional string W_CITY = 5;
+  optional string W_STATE = 6;
+  optional string W_ZIP = 7;
+  optional float  W_TAX = 8;
+  optional float  W_YTD = 9;
+}
+
+message District {
+  required int64  D_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true];
+  required int64  D_W_ID = 2; // Also part of the primary key: Reference to W_ID
+  optional string D_NAME = 3;
+  optional string D_STREET_1 = 4;
+  optional string D_STREET_2 = 5;
+  optional string D_CITY = 6;
+  optional string D_STATE = 7;
+  optional string D_ZIP = 8;
+  optional float  D_TAX = 9;
+  optional float  D_YTD = 10;
+  optional int64  D_NEXT_O_ID = 11;
+}
+
+message Customer {
+  required int64   C_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true];
+  required int64   C_D_ID = 2; // Also part of the primary key: Reference to D_ID
+  required int64   C_W_ID = 3; // Also part of the primary key: Reference to D_W_ID
+  optional string  C_FIRST = 4;
+  optional string  C_MIDDLE = 5;
+  optional string  C_LAST = 6;
+  optional string  C_STREET_1 = 7;
+  optional string  C_STREET_2 = 8;
+  optional string  C_CITY = 9;
+  optional string  C_STATE = 10;
+  optional string  C_ZIP = 11;
+  optional string  C_PHONE = 12;
+  optional int64   C_SINCE = 13; // Date
+  optional string  C_CREDIT = 14;
+  optional int32   C_CREDIT_LIM = 15;
+  optional int32   C_DISCOUNT = 16;
+  optional int32   C_BALANCE = 17;
+  optional int32   C_YTD_PAYMENT = 18;
+  optional int32   C_PAYMENT_CNT = 19;
+  optional int32   C_DELIVERY_CNT = 20;
+  optional string  C_DATA = 21;
+  repeated History C_HISTORY = 22;
+}
+
+// This is a nested record of the customer record, since in the TPCC spec the history records do not need to be individually accessed
+message History {
+  option (com.apple.foundationdb.record.record).usage = NESTED;
+  required int64  H_C_ID = 1; // Denormalized reference to C_ID
+  required int64  H_C_D_ID = 2; // Denormalized reference to C_D_ID
+  required int64  H_C_W_ID = 3; // Denormalized reference to C_W_ID
+  required int64  H_D_ID = 4; // Denormalized reference to D_ID
+  required int64  H_W_ID = 5; // Denormalized reference to D_W_ID
+}
+
+message NewOrder {
+  required int64 NO_O_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true]; // Reference to O_ID
+  required int64 NO_D_ID = 2; // Also part of the primary key: Reference to O_D_ID
+  required int64 NO_W_ID = 3; // Also part of the primary key: Reference to O_W_ID
+}
+
+message Order {
+  required int64 O_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true];
+  required int64 O_D_ID = 2; // Also part of the primary key: Reference to C_D_ID
+  required int64 O_W_ID = 3; // Also part of the primary key: Reference to C_W_ID
+  required int64 O_C_ID = 4; // Reference to C_W_ID
+  optional int64 O_ENTRY_D = 5; // Date
+  optional int64 O_CARRIER_ID = 6;
+  optional int32 O_OL_CNT = 7; // Count of Order-Lines
+  optional int32 O_ALL_LOCAL = 8;
+}
+
+message OrderLine {
+  required int64  OL_O_ID = 1; // Also part of the primary key: Reference to O_ID
+  required int64  OL_D_ID = 2; // Also part of the primary key: Reference to O_D_ID
+  required int64  OL_W_ID = 3; // Also part of the primary key: Reference to O_W_ID
+  required int64  OL_NUMBER = 4 [(com.apple.foundationdb.record.field).primary_key = true];
+  required int64  OL_I_ID = 5; // Reference to S_I_ID
+  required int64  OL_SUPPLY_W_ID = 6; // Reference to S_W_ID
+  optional int64  OL_DELIVERY_D = 7; // Date
+  optional int32  OL_QUANTITY = 8;
+  optional int32  OL_AMOUNT = 9;
+  optional string OL_DIST_INFO = 10;
+}
+
+message Item {
+  required int64  I_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true];
+  optional int64  I_IM_ID = 2; // Image ID associated to Item
+  optional string I_NAME = 3;
+  optional int32  I_PRICE = 4;
+  optional string I_DATA = 5; // Brand information
+}
+
+message Stock {
+  required int64  S_I_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true]; // Reference to I_ID
+  required int64  S_W_ID = 2; // Also part of the primary key: Reference to W_ID
+  optional int32  S_QUANTITY = 3;
+  optional string S_DIST_01 = 4;
+  optional string S_DIST_02 = 5;
+  optional string S_DIST_03 = 6;
+  optional string S_DIST_04 = 7;
+  optional string S_DIST_05 = 8;
+  optional string S_DIST_06 = 9;
+  optional string S_DIST_07 = 10;
+  optional string S_DIST_08 = 11;
+  optional string S_DIST_09 = 12;
+  optional string S_DIST_10 = 13;
+  optional int32  S_YTD = 14;
+  optional int32  S_ORDER_CNT = 15;
+  optional int32  S_REMOTE_CNT = 16;
+  optional string S_DATA = 17; // Make information
+}
+
+message UnionDescriptor {
+  option (com.apple.foundationdb.record.record).usage = UNION;
+  optional Warehouse _WarehouseRecord = 1;
+  optional District _DistrictRecord = 2;
+  optional Customer _CustomerRecord = 3;
+  optional NewOrder _NewOrderRecord = 4;
+  optional Order _OrderRecord = 5;
+  optional OrderLine _OrderLineRecord = 6;
+  optional Item _ItemRecord = 7;
+  optional Stock _StockRecord = 8;
+}

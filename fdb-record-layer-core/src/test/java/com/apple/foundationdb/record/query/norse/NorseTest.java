@@ -24,13 +24,14 @@ import com.apple.foundationdb.record.Bindings;
 import com.apple.foundationdb.record.EvaluationContext;
 import com.apple.foundationdb.record.RecordCursorIterator;
 import com.apple.foundationdb.record.RecordMetaData;
-import com.apple.foundationdb.record.TestRecords4Proto;
 import com.apple.foundationdb.record.TestRecords4Proto.RestaurantRecord;
 import com.apple.foundationdb.record.provider.foundationdb.FDBQueriedRecord;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecord;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordContext;
 import com.apple.foundationdb.record.provider.foundationdb.query.FDBRecordStoreQueryTestBase;
 import com.apple.foundationdb.record.query.norse.dynamic.DynamicSchema;
+import com.apple.foundationdb.record.query.norse.setup.StoreSetup;
+import com.apple.foundationdb.record.query.norse.setup.TpccStoreSetup;
 import com.apple.foundationdb.record.query.plan.debug.PlannerRepl;
 import com.apple.foundationdb.record.query.plan.plans.QueryResult;
 import com.apple.foundationdb.record.query.plan.plans.RecordQueryPlan;
@@ -67,7 +68,10 @@ class NorseTest extends FDBRecordStoreQueryTestBase {
 
     @Test
     void repl() throws Exception {
-        setupStore();
+        // Choose the records to load to the DB
+        StoreSetup storeSetup = new TpccStoreSetup();
+
+        setupStore(storeSetup);
 
         final PlannerRepl repl = Objects.requireNonNull((PlannerRepl)Debugger.getDebugger());
         final CascadesPlanner planner = new CascadesPlanner(recordStore.getRecordMetaData(), recordStore.getRecordStoreState());
@@ -135,7 +139,7 @@ class NorseTest extends FDBRecordStoreQueryTestBase {
             try {
                 long numRecords = 0;
                 try (FDBRecordContext context = openContext()) {
-                    openNestedRecordStore(context);
+                    openGenericRecordStore(context, storeSetup.metadataHook());
                     try (RecordCursorIterator<QueryResult> cursor = recordStore.executePlan(recordQueryPlan, EvaluationContext.forBindingsAndDynamicSchema(Bindings.EMPTY_BINDINGS, dynamicSchemaBuilder.build())).asIterator()) {
                         while (cursor.hasNext()) {
                             final QueryResult rec = Objects.requireNonNull(cursor.next());
@@ -159,7 +163,7 @@ class NorseTest extends FDBRecordStoreQueryTestBase {
                                         .map(columnToPrint -> Strings.padEnd(columnToPrint.length() > 40 ? columnToPrint.substring(0, 40) : columnToPrint, 40, ' '))
                                         .collect(Collectors.joining("    ")));
                             }
-                            numRecords ++;
+                            numRecords++;
                         }
                     }
                 }
@@ -200,48 +204,16 @@ class NorseTest extends FDBRecordStoreQueryTestBase {
         }
     }
 
-    private void setupStore() throws Exception {
+    private void setupStore(final StoreSetup storeSetup) throws Exception {
         try (FDBRecordContext context = openContext()) {
-            openNestedRecordStore(context);
-
-            TestRecords4Proto.RestaurantReviewer.Builder reviewerBuilder = TestRecords4Proto.RestaurantReviewer.newBuilder();
-            reviewerBuilder.setId(1);
-            reviewerBuilder.setName("Lemuel");
-            recordStore.saveRecord(reviewerBuilder.build());
-
-            reviewerBuilder.setId(2);
-            reviewerBuilder.setName("Gulliver");
-            recordStore.saveRecord(reviewerBuilder.build());
-
-            RestaurantRecord.Builder recBuilder = RestaurantRecord.newBuilder();
-            recBuilder.setRestNo(101);
-            recBuilder.setName("The Emperor's Three Tables");
-            TestRecords4Proto.RestaurantReview.Builder reviewBuilder = recBuilder.addReviewsBuilder();
-            reviewBuilder.setReviewer(1);
-            reviewBuilder.setRating(10);
-            reviewBuilder = recBuilder.addReviewsBuilder();
-            reviewBuilder.setReviewer(2);
-            reviewBuilder.setRating(3);
-            TestRecords4Proto.RestaurantTag.Builder tagBuilder = recBuilder.addTagsBuilder();
-            tagBuilder.setValue("Lilliput");
-            tagBuilder.setWeight(5);
-            recordStore.saveRecord(recBuilder.build());
-
-            recBuilder = RestaurantRecord.newBuilder();
-            recBuilder.setRestNo(102);
-            recBuilder.setName("Small Fry's Fried Victuals");
-            reviewBuilder = recBuilder.addReviewsBuilder();
-            reviewBuilder.setReviewer(1);
-            reviewBuilder.setRating(5);
-            reviewBuilder = recBuilder.addReviewsBuilder();
-            reviewBuilder.setReviewer(2);
-            reviewBuilder.setRating(5);
-            tagBuilder = recBuilder.addTagsBuilder();
-            tagBuilder.setValue("Lilliput");
-            tagBuilder.setWeight(1);
-            recordStore.saveRecord(recBuilder.build());
+            openGenericRecordStore(context, storeSetup.metadataHook());
+            storeSetup.SetupStore(recordStore);
 
             commit(context);
+        } catch (Exception ex) {
+            System.out.println("Failed to initialize store: " + ex.getMessage());
+            ex.printStackTrace();
+            throw ex;
         }
         final RecordMetaData recordMetaData = recordStore.getRecordMetaData();
 

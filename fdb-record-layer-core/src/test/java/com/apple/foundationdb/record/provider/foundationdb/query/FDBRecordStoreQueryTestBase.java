@@ -175,6 +175,21 @@ public abstract class FDBRecordStoreQueryTestBase extends FDBRecordStoreTestBase
         return metaDataBuilder.getRecordMetaData();
     }
 
+    /**
+     * Create a generic record store, where the metadata is created entirely by the provided hook
+     * @param context record context
+     * @param hook hook to apply to create metadata. NOTE: Hook given MUST set the records in the metadata builder.
+     */
+    protected void openGenericRecordStore(FDBRecordContext context, @Nonnull RecordMetaDataHook hook) {
+        createOrOpenRecordStore(context, genericMetaData(hook));
+    }
+
+    protected RecordMetaData genericMetaData(final @Nonnull RecordMetaDataHook hook) {
+        RecordMetaDataBuilder metaDataBuilder = RecordMetaData.newBuilder();
+        hook.apply(metaDataBuilder);
+        return metaDataBuilder.getRecordMetaData();
+    }
+
     protected void nestedWithAndSetup(@Nullable RecordMetaDataHook hook) throws Exception {
         try (FDBRecordContext context = openContext()) {
             openNestedRecordStore(context, hook);
