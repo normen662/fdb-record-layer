@@ -27,7 +27,7 @@ option java_outer_classname = "TestRecordsTpccProto";
 import "record_metadata_options.proto";
 
 message Warehouse {
-  required int64  W_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true];
+  required int64  W_ID = 1;
   optional string W_NAME = 2;
   optional string W_STREET_1 = 3;
   optional string W_STREET_2 = 4;
@@ -39,8 +39,8 @@ message Warehouse {
 }
 
 message District {
-  required int64  D_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true];
-  required int64  D_W_ID = 2; // Also part of the primary key: Reference to W_ID
+  required int64  D_ID = 1;   // PK
+  required int64  D_W_ID = 2; // PK, Reference to W_ID
   optional string D_NAME = 3;
   optional string D_STREET_1 = 4;
   optional string D_STREET_2 = 5;
@@ -53,9 +53,9 @@ message District {
 }
 
 message Customer {
-  required int64   C_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true];
-  required int64   C_D_ID = 2; // Also part of the primary key: Reference to D_ID
-  required int64   C_W_ID = 3; // Also part of the primary key: Reference to D_W_ID
+  required int64   C_ID = 1;   // PK
+  required int64   C_D_ID = 2; // PK, Reference to D_ID
+  required int64   C_W_ID = 3; // PK, Reference to D_W_ID
   optional string  C_FIRST = 4;
   optional string  C_MIDDLE = 5;
   optional string  C_LAST = 6;
@@ -88,46 +88,46 @@ message History {
 }
 
 message NewOrder {
-  required int64 NO_O_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true]; // Reference to O_ID
-  required int64 NO_D_ID = 2; // Also part of the primary key: Reference to O_D_ID
-  required int64 NO_W_ID = 3; // Also part of the primary key: Reference to O_W_ID
+  required int64 NO_O_ID = 1; // PK, Reference to O_ID
+  required int64 NO_D_ID = 2; // PK, Reference to O_D_ID
+  required int64 NO_W_ID = 3; // PK, Reference to O_W_ID
 }
 
 message Order {
-  required int64 O_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true];
-  required int64 O_D_ID = 2; // Also part of the primary key: Reference to C_D_ID
-  required int64 O_W_ID = 3; // Also part of the primary key: Reference to C_W_ID
-  required int64 O_C_ID = 4; // Reference to C_W_ID
+  required int64 O_ID = 1;      // PK
+  required int64 O_D_ID = 2;    // PK, Reference to C_D_ID
+  required int64 O_W_ID = 3;    // PK, Reference to C_W_ID
+  required int64 O_C_ID = 4;    // Reference to C_W_ID
   optional int64 O_ENTRY_D = 5; // Date
   optional int64 O_CARRIER_ID = 6;
-  optional int32 O_OL_CNT = 7; // Count of Order-Lines
+  optional int32 O_OL_CNT = 7;  // Count of Order-Lines
   optional int32 O_ALL_LOCAL = 8;
 }
 
 message OrderLine {
-  required int64  OL_O_ID = 1; // Also part of the primary key: Reference to O_ID
-  required int64  OL_D_ID = 2; // Also part of the primary key: Reference to O_D_ID
-  required int64  OL_W_ID = 3; // Also part of the primary key: Reference to O_W_ID
-  required int64  OL_NUMBER = 4 [(com.apple.foundationdb.record.field).primary_key = true];
-  required int64  OL_I_ID = 5; // Reference to S_I_ID
+  required int64  OL_O_ID = 1;        // PK, Reference to O_ID
+  required int64  OL_D_ID = 2;        // PK, Reference to O_D_ID
+  required int64  OL_W_ID = 3;        // PK, Reference to O_W_ID
+  required int64  OL_NUMBER = 4;      // PK
+  required int64  OL_I_ID = 5;        // Reference to S_I_ID
   required int64  OL_SUPPLY_W_ID = 6; // Reference to S_W_ID
-  optional int64  OL_DELIVERY_D = 7; // Date
+  optional int64  OL_DELIVERY_D = 7;  // Date
   optional int32  OL_QUANTITY = 8;
   optional int32  OL_AMOUNT = 9;
   optional string OL_DIST_INFO = 10;
 }
 
 message Item {
-  required int64  I_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true];
+  required int64  I_ID = 1;    // PK
   optional int64  I_IM_ID = 2; // Image ID associated to Item
   optional string I_NAME = 3;
   optional int32  I_PRICE = 4;
-  optional string I_DATA = 5; // Brand information
+  optional string I_DATA = 5;  // Brand information
 }
 
 message Stock {
-  required int64  S_I_ID = 1 [(com.apple.foundationdb.record.field).primary_key = true]; // Reference to I_ID
-  required int64  S_W_ID = 2; // Also part of the primary key: Reference to W_ID
+  required int64  S_I_ID = 1; // PK, Reference to I_ID
+  required int64  S_W_ID = 2; // PK, Reference to W_ID
   optional int32  S_QUANTITY = 3;
   optional string S_DIST_01 = 4;
   optional string S_DIST_02 = 5;

@@ -21,12 +21,18 @@
 package com.apple.foundationdb.record.query.norse.setup;
 
 import com.apple.foundationdb.record.TestRecordsTpccProto;
+import com.apple.foundationdb.record.metadata.RecordTypeBuilder;
+import com.apple.foundationdb.record.metadata.expressions.KeyExpression;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordStore;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordStoreTestBase;
 
 import javax.annotation.Nonnull;
 import java.util.Collections;
 import java.util.List;
+
+import static com.apple.foundationdb.record.metadata.Key.Expressions.concat;
+import static com.apple.foundationdb.record.metadata.Key.Expressions.field;
+import static com.apple.foundationdb.record.metadata.Key.Expressions.recordType;
 
 public class TpccStoreSetup implements StoreSetup {
 
@@ -36,6 +42,33 @@ public class TpccStoreSetup implements StoreSetup {
         return (metadataBuilder) -> {
             // Register the TPCC record metadata
             metadataBuilder.setRecords(TestRecordsTpccProto.getDescriptor());
+
+            RecordTypeBuilder warehouse = metadataBuilder.getRecordType("Warehouse");
+            RecordTypeBuilder district = metadataBuilder.getRecordType("District");
+            RecordTypeBuilder customer = metadataBuilder.getRecordType("Customer");
+            RecordTypeBuilder newOrder = metadataBuilder.getRecordType("NewOrder");
+            RecordTypeBuilder order = metadataBuilder.getRecordType("Order");
+            RecordTypeBuilder orderLine = metadataBuilder.getRecordType("OrderLine");
+            RecordTypeBuilder item = metadataBuilder.getRecordType("Item");
+            RecordTypeBuilder stock = metadataBuilder.getRecordType("Stock");
+
+            // set up primary keys
+            KeyExpression pkey = concat(recordType(), field("W_ID"));
+            warehouse.setPrimaryKey(pkey);
+            pkey = concat(recordType(), field("D_W_ID"), field("D_ID"));
+            district.setPrimaryKey(pkey);
+            pkey = concat(recordType(), field("C_W_ID"), field("C_D_ID"), field("C_ID"));
+            customer.setPrimaryKey(pkey);
+            pkey = concat(recordType(), field("NO_W_ID"), field("NO_D_ID"), field("NO_O_ID"));
+            newOrder.setPrimaryKey(pkey);
+            pkey = concat(recordType(), field("O_W_ID"), field("O_D_ID"), field("O_ID"));
+            order.setPrimaryKey(pkey);
+            pkey = concat(recordType(), field("OL_W_ID"), field("OL_D_ID"), field("OL_O_ID"), field("OL_NUMBER"));
+            orderLine.setPrimaryKey(pkey);
+            pkey = concat(recordType(), field("I_ID"));
+            item.setPrimaryKey(pkey);
+            pkey = concat(recordType(), field("S_W_ID"), field("S_I_ID"));
+            stock.setPrimaryKey(pkey);
         };
     }
 
@@ -44,10 +77,10 @@ public class TpccStoreSetup implements StoreSetup {
         TestRecordsTpccProto.Warehouse.Builder warehouse = createWarehouse(13, "Warehouse 13", "1 Main st.", "Springfield", "QU", "00000");
         recordStore.saveRecord(warehouse.build());
 
-        TestRecordsTpccProto.District.Builder district = createDistrict(1, 1, "District 1", "1 Main st.", "Springfield", "QU", "00000", 10, 100, 21);
+        TestRecordsTpccProto.District.Builder district = createDistrict(1, 13, "District 1", "1 Main st.", "Springfield", "QU", "00000", 10, 100, 21);
         recordStore.saveRecord(district.build());
 
-        district = createDistrict(9, 1, "District 9", "1 Side st.", "Blah", "QU", "00001", 10, 100, 21);
+        district = createDistrict(9, 13, "District 9", "1 Side st.", "Blah", "QU", "00001", 10, 100, 21);
         recordStore.saveRecord(district.build());
 
         TestRecordsTpccProto.History.Builder historyBuilder = createHistory(1, 9, 13, 9, 13);
