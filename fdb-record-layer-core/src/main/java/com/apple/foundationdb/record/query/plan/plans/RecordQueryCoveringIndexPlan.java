@@ -172,8 +172,8 @@ public class RecordQueryCoveringIndexPlan implements RecordQueryPlanWithNoChildr
 
     @Nonnull
     @Override
-    public List<? extends Value> getResultValues() {
-        return ImmutableList.of(new IndexedValue());
+    public Value getResultValue() {
+        return new IndexedValue();
     }
 
     @Nonnull
