@@ -35,12 +35,12 @@ import com.apple.foundationdb.record.query.plan.temp.AliasMap;
 import com.apple.foundationdb.record.query.plan.temp.CorrelationIdentifier;
 import com.apple.foundationdb.record.query.plan.temp.GroupExpressionRef;
 import com.apple.foundationdb.record.query.plan.temp.Quantifier;
+import com.apple.foundationdb.record.query.plan.temp.RecordConstructorValue;
 import com.apple.foundationdb.record.query.plan.temp.RelationalExpression;
 import com.apple.foundationdb.record.query.plan.temp.explain.NodeInfo;
 import com.apple.foundationdb.record.query.plan.temp.explain.PlannerGraph;
 import com.apple.foundationdb.record.query.predicates.AggregateValue;
 import com.apple.foundationdb.record.query.predicates.Value;
-import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -56,7 +56,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Supplier;
 
 /**
  * A query plan that applies an aggregate function(s) to its inputs and also places them into groups.
@@ -78,7 +77,7 @@ public class RecordQueryStreamingAggregatePlan implements RecordQueryPlanWithChi
     @Nonnull
     private final Quantifier.Physical inner;
     @Nonnull
-    private final Supplier<List<? extends Value>> resultValuesSupplier;
+    private final Value resultValue;
     @Nonnull
     private final List<AggregateValue<?, ?>> aggregateValues;
     @Nonnull
@@ -95,7 +94,7 @@ public class RecordQueryStreamingAggregatePlan implements RecordQueryPlanWithChi
         this.inner = inner;
         this.groupingKeys = groupingKeys;
         this.aggregateValues = aggregateValues;
-        this.resultValuesSupplier = Suppliers.memoize(this::createValuesList);
+        this.resultValue = RecordConstructorValue.ofUnnamed(ImmutableList.<Value>builder().addAll(this.groupingKeys).addAll(this.aggregateValues).build());
     }
 
     @Nonnull
@@ -150,8 +149,8 @@ public class RecordQueryStreamingAggregatePlan implements RecordQueryPlanWithChi
 
     @Nonnull
     @Override
-    public List<? extends Value> getResultValues() {
-        return resultValuesSupplier.get();
+    public Value getResultValue() {
+        return resultValue;
     }
 
     @SuppressWarnings("EqualsWhichDoesntCheckParameterClass")

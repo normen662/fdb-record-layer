@@ -106,7 +106,7 @@ public class ExistsValue implements BooleanValue, Value.CompileTimeValue {
     public static class ExistsFn extends BuiltInFunction<Value> {
         public ExistsFn() {
             super("exists",
-                    ImmutableList.of(new Type.Stream()), (parserContext, builtInFunction, arguments) -> encapsulateInternal(parserContext, arguments));
+                    ImmutableList.of(new Type.Relation()), (parserContext, builtInFunction, arguments) -> encapsulateInternal(parserContext, arguments));
         }
 
         private static Value encapsulateInternal(@Nonnull ParserContext parserContext, @Nonnull final List<Typed> arguments) {
@@ -121,7 +121,7 @@ public class ExistsValue implements BooleanValue, Value.CompileTimeValue {
             final Quantifier.Existential existsQuantifier = Quantifier.existential(GroupExpressionRef.of((RelationalExpression)in));
             graphExpansionBuilder.addQuantifier(existsQuantifier);
 
-            return new ExistsValue(QuantifiedObjectValue.of(existsQuantifier.getAlias()));
+            return new ExistsValue(existsQuantifier.getFlowedObjectValue());
         }
     }
 }

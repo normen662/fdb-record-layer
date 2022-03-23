@@ -33,8 +33,9 @@ import com.apple.foundationdb.record.query.plan.temp.AliasMap;
 import com.apple.foundationdb.record.query.plan.temp.Correlated;
 import com.apple.foundationdb.record.query.plan.temp.CorrelationIdentifier;
 import com.apple.foundationdb.record.query.plan.temp.CreatesDynamicTypesValue;
-import com.apple.foundationdb.record.query.plan.temp.Formatter;
 import com.apple.foundationdb.record.query.plan.temp.KeyExpressionVisitor;
+import com.apple.foundationdb.record.query.plan.temp.Narrowable;
+import com.apple.foundationdb.record.query.plan.temp.Quantifier;
 import com.apple.foundationdb.record.query.plan.temp.ScalarTranslationVisitor;
 import com.apple.foundationdb.record.query.plan.temp.TreeLike;
 import com.apple.foundationdb.record.query.plan.temp.Type;
@@ -59,7 +60,7 @@ import java.util.stream.StreamSupport;
  * A scalar value type.
  */
 @API(API.Status.EXPERIMENTAL)
-public interface Value extends Correlated<Value>, TreeLike<Value>, PlanHashable, KeyExpressionVisitor.Result, Typed {
+public interface Value extends Correlated<Value>, TreeLike<Value>, PlanHashable, KeyExpressionVisitor.Result, Typed, Narrowable<Value> {
 
     @Nonnull
     @Override
@@ -102,15 +103,6 @@ public interface Value extends Correlated<Value>, TreeLike<Value>, PlanHashable,
             nestedBuilder.addAll(thisTypes);
             return nestedBuilder.build();
         });
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Nonnull
-    @Override
-    default String describe(@Nonnull final Formatter formatter) {
-        throw new UnsupportedOperationException("object of class " + this.getClass().getSimpleName() + " does not override explain");
     }
 
     /**
@@ -312,10 +304,14 @@ public interface Value extends Correlated<Value>, TreeLike<Value>, PlanHashable,
         return other.getClass() == getClass();
     }
 
-    static List<? extends Value> fromKeyExpressions(@Nonnull final Collection<? extends KeyExpression> expressions, @Nonnull final CorrelationIdentifier alias) {
+    static List<? extends Value> fromKeyExpressions(@Nonnull final Collection<? extends KeyExpression> expressions, @Nonnull final Quantifier quantifier) {
+        return fromKeyExpressions(expressions, quantifier.getAlias(), quantifier.getFlowedObjectType());
+    }
+
+    static List<? extends Value> fromKeyExpressions(@Nonnull final Collection<? extends KeyExpression> expressions, @Nonnull final CorrelationIdentifier alias, @Nonnull final Type inputType) {
         return expressions
                 .stream()
-                .map(keyExpression -> new ScalarTranslationVisitor(keyExpression).toResultValue(alias))
+                .map(keyExpression -> new ScalarTranslationVisitor(keyExpression).toResultValue(alias, inputType))
                 .collect(ImmutableList.toImmutableList());
     }
 
