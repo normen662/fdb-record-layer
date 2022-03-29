@@ -189,6 +189,9 @@ public interface Type extends Narrowable<Type> {
     static Type primitiveType(@Nonnull final TypeCode typeCode, final boolean isNullable) {
         Verify.verify(typeCode.isPrimitive());
         return new Type() {
+
+            private final int memoizedHashCode = Objects.hash(getTypeCode().hashCode(), isNullable());
+
             @Override
             public TypeCode getTypeCode() {
                 return typeCode;
@@ -222,13 +225,17 @@ public interface Type extends Narrowable<Type> {
 
             @Override
             public int hashCode() {
-                return Objects.hash(getTypeCode().hashCode(), isNullable());
+                return memoizedHashCode;
             }
 
             @Override
             public boolean equals(final Object obj) {
                 if (obj == null) {
                     return false;
+                }
+
+                if (obj == this) {
+                    return true;
                 }
 
                 if (getClass() != obj.getClass()) {
@@ -427,6 +434,16 @@ public interface Type extends Narrowable<Type> {
      */
     class Any implements Type {
         /**
+         * Memoized hash function.
+         */
+        @Nonnull
+        private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
+
+        private int computeHashCode() {
+            return Objects.hash(getTypeCode().hashCode(), isNullable());
+        }
+
+        /**
          * {@inheritDoc}
          */
         @Override
@@ -465,13 +482,17 @@ public interface Type extends Narrowable<Type> {
 
         @Override
         public int hashCode() {
-            return Objects.hash(getTypeCode().hashCode(), isNullable());
+            return hashCodeSupplier.get();
         }
 
         @Override
         public boolean equals(final Object obj) {
             if (obj == null) {
                 return false;
+            }
+
+            if (this == obj) {
+                return true;
             }
 
             if (getClass() != obj.getClass()) {
@@ -515,6 +536,16 @@ public interface Type extends Narrowable<Type> {
          */
         @Nonnull
         private final Supplier<List<Type>> elementTypesSupplier;
+
+        /**
+         * Memoized hash function.
+         */
+        @Nonnull
+        private final Supplier<Integer> hashFunctionSupplier = Suppliers.memoize(this::computeHashCode);
+
+        private int computeHashCode() {
+            return Objects.hash(getTypeCode().hashCode(), isNullable(), fields);
+        }
 
         /**
          * Constructs a new {@link Record} using a list of {@link Field}s.
@@ -641,7 +672,7 @@ public interface Type extends Narrowable<Type> {
 
         @Override
         public int hashCode() {
-            return Objects.hash(getTypeCode().hashCode(), isNullable(), fields);
+            return hashFunctionSupplier.get();
         }
 
         @Override
@@ -900,6 +931,16 @@ public interface Type extends Narrowable<Type> {
             private final Optional<Integer> fieldIndexOptional;
 
             /**
+             * Memoized hash function.
+             */
+            @Nonnull
+            private final Supplier<Integer> hashFunctionSupplier = Suppliers.memoize(this::computeHashFunction);
+
+            private int computeHashFunction() {
+                return Objects.hash(getFieldType(), getFieldNameOptional(), getFieldIndexOptional());
+            }
+
+            /**
              * Constructs a new field.
              *
              * @param fieldType The field {@link Type}.
@@ -959,6 +1000,9 @@ public interface Type extends Narrowable<Type> {
 
             @Override
             public boolean equals(final Object o) {
+                if (o == null) {
+                    return false;
+                }
                 if (this == o) {
                     return true;
                 }
@@ -973,7 +1017,7 @@ public interface Type extends Narrowable<Type> {
 
             @Override
             public int hashCode() {
-                return Objects.hash(getFieldType(), getFieldNameOptional(), getFieldIndexOptional());
+                return hashFunctionSupplier.get();
             }
 
             /**
@@ -1017,6 +1061,16 @@ public interface Type extends Narrowable<Type> {
          */
         @Nullable
         private final Type innerType;
+
+        /**
+         * Memoized hash function.
+         */
+        @Nonnull
+        private final Supplier<Integer> hashFunctionSupplier = Suppliers.memoize(this::computeHashFunction);
+
+        private int computeHashFunction() {
+            return Objects.hash(getTypeCode().hashCode(), isNullable(), innerType);
+        }
 
         /**
          * Constructs a new {@link Relation} object without a value type.
@@ -1095,13 +1149,17 @@ public interface Type extends Narrowable<Type> {
 
         @Override
         public int hashCode() {
-            return Objects.hash(getTypeCode().hashCode(), isNullable(), innerType);
+            return hashFunctionSupplier.get();
         }
 
         @Override
         public boolean equals(final Object obj) {
             if (obj == null) {
                 return false;
+            }
+
+            if (obj == this) {
+                return true;
             }
 
             if (getClass() != obj.getClass()) {
@@ -1141,6 +1199,16 @@ public interface Type extends Narrowable<Type> {
          */
         @Nullable
         private final Type elementType;
+
+        /**
+         * Memoized hash function.
+         */
+        @Nonnull
+        private final Supplier<Integer> hashFunctionSupplier = Suppliers.memoize(this::computeHashFunction);
+
+        private int computeHashFunction() {
+            return Objects.hash(getTypeCode().hashCode(), isNullable(), elementType);
+        }
 
         /**
          * Constructs a new <i>nullable</i> array type instance without a value {@link Type}.
@@ -1261,13 +1329,17 @@ public interface Type extends Narrowable<Type> {
 
         @Override
         public int hashCode() {
-            return Objects.hash(getTypeCode().hashCode(), isNullable(), elementType);
+            return hashFunctionSupplier.get();
         }
 
         @Override
         public boolean equals(final Object obj) {
             if (obj == null) {
                 return false;
+            }
+
+            if (obj == this) {
+                return true;
             }
 
             if (getClass() != obj.getClass()) {
