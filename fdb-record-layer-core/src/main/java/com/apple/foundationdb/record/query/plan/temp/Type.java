@@ -21,6 +21,7 @@
 package com.apple.foundationdb.record.query.plan.temp;
 
 import com.apple.foundationdb.record.RecordCoreException;
+import com.apple.foundationdb.record.query.plan.temp.dynamic.TypeRepository;
 import com.apple.foundationdb.record.query.predicates.Value;
 import com.google.common.base.Suppliers;
 import com.google.common.base.Verify;
@@ -110,23 +111,25 @@ public interface Type extends Narrowable<Type> {
     /**
      * Creates a synthetic protobuf descriptor that is equivalent to <code>this</code> {@link Type}.
      *
+     * @param typeRepositoryBuilder The type repository builder.
      * @param typeName The name of the descriptor.
      * @return a syncthetic protobuf descriptor that is equivalent to <code>this</code> {@link Type}.
      */
     @Nullable
-    DescriptorProto buildDescriptor(@Nonnull final String typeName);
+    DescriptorProto buildDescriptor(final TypeRepository.Builder typeRepositoryBuilder, @Nonnull final String typeName);
 
     /**
      * Creates a synthetic protobuf descriptor that is equivalent to the <code>this</code> {@link Type} within a given
      * protobuf descriptor.
-     *
+     * @param typeRepositoryBuilder The type repository.
      * @param descriptorBuilder The parent descriptor into which the newly created descriptor will be created.
      * @param fieldIndex The field index of the descriptor.
      * @param fieldName The field name of the descriptor.
      * @param typeName The type name of the descriptor.
      * @param label The label of the descriptor.
      */
-    void addProtoField(@Nonnull final DescriptorProto.Builder descriptorBuilder,
+    void addProtoField(@Nonnull final TypeRepository.Builder typeRepositoryBuilder,
+                       @Nonnull final DescriptorProto.Builder descriptorBuilder,
                        final int fieldIndex,
                        @Nonnull final String fieldName,
                        @Nonnull final String typeName,
@@ -140,16 +143,6 @@ public interface Type extends Narrowable<Type> {
      */
     static Map<Class<?>, TypeCode> getClassToTypeCodeMap() {
         return CLASS_TO_TYPE_CODE_SUPPLIER.get();
-    }
-
-    /**
-     * Constructs a type name for a given field suffix.
-     *
-     * @param fieldSuffix The field suffix.
-     * @return a type name generated using the field suffix.
-     */
-    static String typeName(final Object fieldSuffix) {
-        return "__type__" + fieldSuffix;
     }
 
     /**
@@ -204,15 +197,16 @@ public interface Type extends Narrowable<Type> {
 
             @Nullable
             @Override
-            public DescriptorProto buildDescriptor(@Nonnull final String typeName) {
+            public DescriptorProto buildDescriptor(final TypeRepository.Builder typeRepositoryBuilder, @Nonnull final String typeName) {
                 return null;
             }
 
             @Override
-            public void addProtoField(@Nonnull final DescriptorProto.Builder descriptorBuilder,
+            public void addProtoField(@Nonnull final TypeRepository.Builder typeRepositoryBuilder,
+                                      @Nonnull final DescriptorProto.Builder descriptorBuilder,
                                       final int fieldIndex,
                                       @Nonnull final String fieldName,
-                                      @Nonnull final String typeName,
+                                      @Nonnull final String ignored,
                                       @Nonnull final FieldDescriptorProto.Label label) {
                 final FieldDescriptorProto.Type protoType = Objects.requireNonNull(getTypeCode().getProtoType());
                 descriptorBuilder.addField(FieldDescriptorProto.newBuilder()
@@ -464,7 +458,7 @@ public interface Type extends Narrowable<Type> {
          */
         @Nullable
         @Override
-        public DescriptorProto buildDescriptor(@Nonnull final String typeName) {
+        public DescriptorProto buildDescriptor(final TypeRepository.Builder typeRepositoryBuilder, @Nonnull final String typeName) {
             throw new UnsupportedOperationException("type any cannot be represented in protobuf");
         }
 
@@ -472,8 +466,8 @@ public interface Type extends Narrowable<Type> {
          * {@inheritDoc}
          */
         @Override
-        public void addProtoField(@Nonnull final DescriptorProto.Builder descriptorBuilder,
-                                  final int fieldIndex,
+        public void addProtoField(@Nonnull final TypeRepository.Builder typeRepositoryBuilder,
+                                  final DescriptorProto.Builder descriptorBuilder, final int fieldIndex,
                                   @Nonnull final String fieldName,
                                   @Nonnull final String typeName,
                                   @Nonnull final FieldDescriptorProto.Label label) {
@@ -638,7 +632,7 @@ public interface Type extends Narrowable<Type> {
          */
         @Nullable
         @Override
-        public DescriptorProto buildDescriptor(@Nonnull final String typeName) {
+        public DescriptorProto buildDescriptor(final TypeRepository.Builder typeRepositoryBuilder, @Nonnull final String typeName) {
             Objects.requireNonNull(fields);
             final DescriptorProto.Builder recordMsgBuilder = DescriptorProto.newBuilder();
             recordMsgBuilder.setName(typeName);
@@ -646,13 +640,20 @@ public interface Type extends Narrowable<Type> {
             for (final Field field : fields) {
                 final Type fieldType = field.getFieldType();
                 final String fieldName = field.getFieldName();
-                fieldType.addProtoField(recordMsgBuilder,
-                        field.getFieldIndex(),
-                        fieldName,
-                        typeName(fieldName),
-                        FieldDescriptorProto.Label.LABEL_OPTIONAL);
+                if (!fieldType.isPrimitive()) {
+                    fieldType.addProtoField(typeRepositoryBuilder, recordMsgBuilder,
+                            field.getFieldIndex(),
+                            fieldName,
+                            typeRepositoryBuilder.addTypeAndGetName(fieldType),
+                            FieldDescriptorProto.Label.LABEL_OPTIONAL);
+                } else {
+                    fieldType.addProtoField(typeRepositoryBuilder, recordMsgBuilder,
+                            field.getFieldIndex(),
+                            fieldName,
+                            "ignored", // gets the built-in PB primitive type name.
+                            FieldDescriptorProto.Label.LABEL_OPTIONAL);
+                }
             }
-
             return recordMsgBuilder.build();
         }
 
@@ -660,8 +661,12 @@ public interface Type extends Narrowable<Type> {
          * {@inheritDoc}
          */
         @Override
-        public void addProtoField(@Nonnull final DescriptorProto.Builder descriptorBuilder, final int fieldIndex, @Nonnull final String fieldName, @Nonnull final String typeName, @Nonnull final FieldDescriptorProto.Label label) {
-            descriptorBuilder.addNestedType(buildDescriptor(typeName));
+        public void addProtoField(@Nonnull final TypeRepository.Builder typeRepositoryBuilder,
+                                  final DescriptorProto.Builder descriptorBuilder,
+                                  final int fieldIndex,
+                                  @Nonnull final String fieldName,
+                                  @Nonnull final String typeName,
+                                  @Nonnull final FieldDescriptorProto.Label label) {
             descriptorBuilder.addField(FieldDescriptorProto.newBuilder()
                     .setName(fieldName)
                     .setNumber(fieldIndex)
@@ -1135,7 +1140,7 @@ public interface Type extends Narrowable<Type> {
          */
         @Nullable
         @Override
-        public DescriptorProto buildDescriptor(@Nonnull final String typeName) {
+        public DescriptorProto buildDescriptor(final TypeRepository.Builder typeRepositoryBuilder, @Nonnull final String typeName) {
             throw new IllegalStateException("this should not have been called");
         }
 
@@ -1143,7 +1148,7 @@ public interface Type extends Narrowable<Type> {
          * {@inheritDoc}
          */
         @Override
-        public void addProtoField(@Nonnull final DescriptorProto.Builder descriptorBuilder, final int fieldIndex, @Nonnull final String fieldName, @Nonnull final String typeName, @Nonnull final FieldDescriptorProto.Label label) {
+        public void addProtoField(@Nonnull final TypeRepository.Builder typeRepositoryBuilder, final DescriptorProto.Builder descriptorBuilder, final int fieldIndex, @Nonnull final String fieldName, @Nonnull final String typeName, @Nonnull final FieldDescriptorProto.Label label) {
             throw new IllegalStateException("this should not have been called");
         }
 
@@ -1292,11 +1297,11 @@ public interface Type extends Narrowable<Type> {
          */
         @Nullable
         @Override
-        public DescriptorProto buildDescriptor(@Nonnull final String typeName) {
+        public DescriptorProto buildDescriptor(final TypeRepository.Builder typeRepositoryBuilder, @Nonnull final String typeName) {
             Objects.requireNonNull(elementType);
             final DescriptorProto.Builder helperDescriptorBuilder = DescriptorProto.newBuilder();
             helperDescriptorBuilder.setName(typeName);
-            elementType.addProtoField(helperDescriptorBuilder, 1, "value", typeName, FieldDescriptorProto.Label.LABEL_OPTIONAL);
+            elementType.addProtoField(typeRepositoryBuilder, helperDescriptorBuilder, 1, "value", typeName, FieldDescriptorProto.Label.LABEL_OPTIONAL);
 
             return helperDescriptorBuilder.build();
         }
@@ -1305,16 +1310,14 @@ public interface Type extends Narrowable<Type> {
          * {@inheritDoc}
          */
         @Override
-        public void addProtoField(@Nonnull final DescriptorProto.Builder descriptorBuilder, final int fieldIndex, @Nonnull final String fieldName, @Nonnull final String typeName, @Nonnull final FieldDescriptorProto.Label label) {
+        public void addProtoField(@Nonnull final TypeRepository.Builder typeRepositoryBuilder, @Nonnull final DescriptorProto.Builder descriptorBuilder, final int fieldIndex, @Nonnull final String fieldName, @Nonnull final String typeName, @Nonnull final FieldDescriptorProto.Label label) {
             Objects.requireNonNull(elementType);
             //
             // If the inner type is nullable, we need to create a nested helper message to keep track of
             // nulls.
             //
             if (definesNestedProto()) {
-                final DescriptorProto helperDescriptor = buildDescriptor(typeName);
-
-                descriptorBuilder.addNestedType(helperDescriptor);
+                buildDescriptor(typeRepositoryBuilder, typeName);
                 descriptorBuilder.addField(FieldDescriptorProto.newBuilder()
                         .setName(fieldName)
                         .setNumber(fieldIndex)
@@ -1323,7 +1326,7 @@ public interface Type extends Narrowable<Type> {
                         .build());
             } else {
                 // if inner type is not nullable we can just put is straight into its parent
-                elementType.addProtoField(descriptorBuilder, fieldIndex, fieldName, typeName, FieldDescriptorProto.Label.LABEL_REPEATED);
+                elementType.addProtoField(typeRepositoryBuilder, descriptorBuilder, fieldIndex, fieldName, typeName, FieldDescriptorProto.Label.LABEL_REPEATED);
             }
         }
 
