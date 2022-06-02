@@ -729,10 +729,6 @@ public interface RelationalExpression extends Correlated<RelationalExpression>, 
         throw new RecordCoreException("expression matched but no compensation logic implemented");
     }
 
-    default Set<Quantifier.ForEach> computeUnmatchedForEachQuantifiers(@Nonnull final PartialMatch partialMatch) {
-        return ImmutableSet.of();
-    }
-
     @Nonnull
     @Override
     default RelationalExpression rebase(@Nonnull AliasMap aliasMap) {

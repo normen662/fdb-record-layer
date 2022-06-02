@@ -25,10 +25,11 @@ import com.apple.foundationdb.record.query.plan.cascades.PredicateMultiMap.Expan
 import com.apple.foundationdb.record.query.plan.cascades.expressions.LogicalFilterExpression;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalExpression;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.SelectExpression;
+import com.apple.foundationdb.record.query.plan.cascades.predicates.QueryPredicate;
 import com.apple.foundationdb.record.query.plan.cascades.rules.DataAccessRule;
 import com.apple.foundationdb.record.query.plan.cascades.values.QuantifiedValue;
-import com.apple.foundationdb.record.query.plan.cascades.predicates.QueryPredicate;
 import com.apple.foundationdb.record.query.plan.cascades.values.Value;
+import com.google.common.base.Suppliers;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -42,6 +43,7 @@ import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * Interface for all kinds of compensation. A compensation is the byproduct of expression DAG matching.
@@ -307,7 +309,7 @@ public interface Compensation {
      * @param predicateCompensationMap map that maps {@link QueryPredicate}s of the query to {@link QueryPredicate}s
      *        used for compensation
      * @param mappedQuantifiers a set of quantifiers that are mapped in the original {@link PartialMatch}.
-     * @param unmappedForEachQuantifiers a set of for each quantifiers that are not mapped in the original {@link PartialMatch}
+     * @param unmatchedQuantifiers a set of quantifiers that are not mapped in the original {@link PartialMatch}
      * @param remainingComputationOptional an optional containing (if not empty) a {@link Value} that needs to be
      *        computed by some means when this compensation is applied
      * @return a new compensation
@@ -316,11 +318,10 @@ public interface Compensation {
     static Compensation ofChildCompensationAndPredicateMap(@Nonnull final Compensation childCompensation,
                                                            @Nonnull final Map<QueryPredicate, ExpandCompensationFunction> predicateCompensationMap,
                                                            @Nonnull final Set<Quantifier> mappedQuantifiers,
-                                                           @Nonnull final Set<Quantifier.ForEach> unmappedForEachQuantifiers,
+                                                           @Nonnull final Set<Quantifier> unmatchedQuantifiers,
                                                            @Nonnull final Optional<Value> remainingComputationOptional) {
-        return predicateCompensationMap.isEmpty() && remainingComputationOptional.isEmpty()
-               ? noCompensation()
-               : new ForMatch(childCompensation, predicateCompensationMap, mappedQuantifiers, unmappedForEachQuantifiers, remainingComputationOptional);
+        Verify.verify(!predicateCompensationMap.isEmpty() || remainingComputationOptional.isPresent());
+        return new ForMatch(childCompensation, predicateCompensationMap, mappedQuantifiers, unmatchedQuantifiers, remainingComputationOptional);
     }
 
     /**
@@ -346,7 +347,10 @@ public interface Compensation {
         Compensation getChildCompensation();
 
         @Nonnull
-        Set<Quantifier> getMappedQuantifiers();
+        Set<Quantifier> getMatchedQuantifiers();
+
+        @Nonnull
+        Set<Quantifier> getUnmatchedQuantifiers();
 
         @Nonnull
         Set<Quantifier> getUnmatchedForEachQuantifiers();
@@ -393,7 +397,7 @@ public interface Compensation {
 
             final WithSelectCompensation otherWithSelectCompensation = (WithSelectCompensation)otherCompensation;
 
-            final var unionedMappedQuantifiers = Sets.union(getMappedQuantifiers(), otherWithSelectCompensation.getMappedQuantifiers());
+            final var unionedMappedQuantifiers = Sets.union(getMatchedQuantifiers(), otherWithSelectCompensation.getMatchedQuantifiers());
             final var numberForEachInUnion = unionedMappedQuantifiers.stream().filter(quantifier -> quantifier instanceof Quantifier.ForEach).collect(ImmutableList.toImmutableList()).size();
             if (numberForEachInUnion > 1) {
                 // TODO This should be made better in the future. For now we just return the impossible compensation.
@@ -479,7 +483,8 @@ public interface Compensation {
         @Override
         default Compensation intersect(@Nonnull Compensation otherCompensation) {
             if (!(otherCompensation instanceof WithSelectCompensation)) {
-                return Compensation.super.intersect(otherCompensation);
+                //return Compensation.super.intersect(otherCompensation);
+                return otherCompensation.intersect(this);
             }
             final var otherWithSelectCompensation = (WithSelectCompensation)otherCompensation;
 
@@ -535,15 +540,15 @@ public interface Compensation {
             // Note that at the current time each side can only contribute at most one foreach quantifier, thus the
             // intersection should also only contain at most one for each quantifier.
             final Sets.SetView<Quantifier> intersectedMappedQuantifiers =
-                    Sets.intersection(getMappedQuantifiers(), otherWithSelectCompensation.getMappedQuantifiers());
+                    Sets.intersection(getMatchedQuantifiers(), otherWithSelectCompensation.getMatchedQuantifiers());
 
-            final Sets.SetView<Quantifier> intersectedUnmappedForEachQuantifiers =
-                    Sets.intersection(getUnmatchedForEachQuantifiers(), otherWithSelectCompensation.getUnmatchedForEachQuantifiers());
+            final Sets.SetView<Quantifier> intersectedUnmatchedQuantifiers =
+                    Sets.intersection(getUnmatchedQuantifiers(), otherWithSelectCompensation.getUnmatchedQuantifiers());
 
             return derivedWithPredicateCompensationMap(intersectedChildCompensation,
                     combinedPredicateMap,
                     intersectedMappedQuantifiers,
-                    intersectedUnmappedForEachQuantifiers,
+                    intersectedUnmatchedQuantifiers,
                     resultRemainingComputationValueOptional);
         }
     }
@@ -557,25 +562,29 @@ public interface Compensation {
         @Nonnull
         final Map<QueryPredicate, ExpandCompensationFunction> predicateCompensationMap;
         @Nonnull
-        private final Set<Quantifier> mappedQuantifiers;
+        private final Set<Quantifier> matchedQuantifiers;
         @Nonnull
-        private final Set<Quantifier> unmatchedForEachQuantifiers;
+        private final Set<Quantifier> unmatchedQuantifiers;
         @Nonnull
         private final Optional<Value> remainingComputationValueOptional;
 
+        @Nonnull
+        private final Supplier<Set<Quantifier>> unmatchedForEachQuantifiersSuppplier;
+
         private ForMatch(@Nonnull final Compensation childCompensation,
                          @Nonnull final Map<QueryPredicate, ExpandCompensationFunction> predicateCompensationMap,
-                         @Nonnull final Collection<? extends Quantifier> mappedQuantifiers,
-                         @Nonnull final Collection<? extends Quantifier> unmatchedForEachQuantifiers,
+                         @Nonnull final Collection<? extends Quantifier> matchedQuantifiers,
+                         @Nonnull final Collection<? extends Quantifier> unmatchedQuantifiers,
                          @Nonnull final Optional<Value> remainingComputationOptional) {
             this.childCompensation = childCompensation;
-            this.predicateCompensationMap = Maps.newIdentityHashMap();
+            this.predicateCompensationMap = new LinkedIdentityMap<>();
             this.predicateCompensationMap.putAll(predicateCompensationMap);
-            this.mappedQuantifiers = new LinkedIdentitySet<>();
-            this.mappedQuantifiers.addAll(mappedQuantifiers);
-            this.unmatchedForEachQuantifiers = new LinkedIdentitySet<>();
-            this.unmatchedForEachQuantifiers.addAll(unmatchedForEachQuantifiers);
+            this.matchedQuantifiers = new LinkedIdentitySet<>();
+            this.matchedQuantifiers.addAll(matchedQuantifiers);
+            this.unmatchedQuantifiers = new LinkedIdentitySet<>();
+            this.unmatchedQuantifiers.addAll(unmatchedQuantifiers);
             this.remainingComputationValueOptional = remainingComputationOptional;
+            this.unmatchedForEachQuantifiersSuppplier = Suppliers.memoize(this::computeUnmatchedForEachQuantifiers);
         }
 
         @Override
@@ -586,14 +595,27 @@ public interface Compensation {
 
         @Nonnull
         @Override
-        public Set<Quantifier> getMappedQuantifiers() {
-            return mappedQuantifiers;
+        public Set<Quantifier> getMatchedQuantifiers() {
+            return matchedQuantifiers;
+        }
+
+        @Nonnull
+        @Override
+        public Set<Quantifier> getUnmatchedQuantifiers() {
+            return unmatchedQuantifiers;
         }
 
         @Nonnull
         @Override
         public Set<Quantifier> getUnmatchedForEachQuantifiers() {
-            return unmatchedForEachQuantifiers;
+            return unmatchedForEachQuantifiersSuppplier.get();
+        }
+
+        @Nonnull
+        public Set<Quantifier> computeUnmatchedForEachQuantifiers() {
+            return unmatchedQuantifiers.stream()
+                    .filter(quantifier -> quantifier instanceof Quantifier.ForEach)
+                    .collect(LinkedIdentitySet.toLinkedIdentitySet());
         }
 
         @Nonnull
@@ -639,7 +661,7 @@ public interface Compensation {
             }
 
             final var mappedForEachQuantifierAliases =
-                    mappedQuantifiers
+                    matchedQuantifiers
                             .stream()
                             .filter(quantifier -> quantifier instanceof Quantifier.ForEach)
                             .map(Quantifier::getAlias)
