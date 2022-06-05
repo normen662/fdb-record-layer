@@ -212,7 +212,7 @@ public class PartialMatch {
      * @return {@code true} if compensation can be deferred, {@code false} otherwise.
      */
     public boolean compensationCanBeDeferred() {
-        return computeUnmatchedQuantifiers(getQueryExpression()).stream().anyMatch(quantifier -> quantifier instanceof Quantifier.ForEach) &&
+        return computeUnmatchedQuantifiers(getQueryExpression()).stream().anyMatch(quantifier -> quantifier instanceof Quantifier.ForEach) ||
                matchInfo.getRemainingComputationValueOptional().isEmpty();
     }
 

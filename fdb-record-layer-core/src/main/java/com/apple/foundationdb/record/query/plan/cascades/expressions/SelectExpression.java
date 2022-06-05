@@ -258,11 +258,11 @@ public class SelectExpression implements RelationalExpressionWithChildren, Relat
 
         matchedCorrelatedToBuilder.addAll(getResultValue().getCorrelatedTo());
 
-        if (getQuantifiers()
-                .stream()
-                .anyMatch(quantifier -> quantifier instanceof Quantifier.ForEach && !partialMatchMap.containsKeyUnwrapped(quantifier))) {
-            return ImmutableList.of();
-        }
+//        if (getQuantifiers()
+//                .stream()
+//                .anyMatch(quantifier -> quantifier instanceof Quantifier.ForEach && !partialMatchMap.containsKeyUnwrapped(quantifier))) {
+//            return ImmutableList.of();
+//        }
 
         final var matchedCorrelatedTo = matchedCorrelatedToBuilder.build();
         final var allNonMatchedQuantifiersIndependent =

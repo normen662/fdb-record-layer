@@ -24,7 +24,6 @@ import com.apple.foundationdb.record.RecordCoreException;
 import com.apple.foundationdb.record.query.plan.cascades.PredicateMultiMap.ExpandCompensationFunction;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.LogicalFilterExpression;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalExpression;
-import com.apple.foundationdb.record.query.plan.cascades.expressions.SelectExpression;
 import com.apple.foundationdb.record.query.plan.cascades.predicates.QueryPredicate;
 import com.apple.foundationdb.record.query.plan.cascades.rules.DataAccessRule;
 import com.apple.foundationdb.record.query.plan.cascades.values.QuantifiedValue;
@@ -660,50 +659,80 @@ public interface Compensation {
                 relationalExpression = childCompensation.apply(relationalExpression);
             }
 
-            final var mappedForEachQuantifierAliases =
+            final var matchedForEachQuantifierAliases =
                     matchedQuantifiers
                             .stream()
                             .filter(quantifier -> quantifier instanceof Quantifier.ForEach)
                             .map(Quantifier::getAlias)
-                            .collect(ImmutableList.toImmutableList());
+                            .collect(ImmutableSet.toImmutableSet());
 
-            Verify.verify(mappedForEachQuantifierAliases.size() <= 1);
-            final var mappedForEachQuantifierAlias = Iterables.getOnlyElement(mappedForEachQuantifierAliases);
+            Verify.verify(matchedForEachQuantifierAliases.size() <= 1);
+            final var mappedForEachQuantifierAlias = Iterables.getOnlyElement(matchedForEachQuantifierAliases);
+
+            if (unmatchedQuantifiers.isEmpty() && predicateCompensationMap.isEmpty() && remainingComputationValueOptional.isEmpty()) {
+                // no additional unmatched quantifiers, all predicates taken care of and no remaining computation
+                return relationalExpression;
+            }
+
+            //
+            // At this point we definitely need a new SELECT expression.
+            //
+            final var newBaseQuantifier = Quantifier.forEach(GroupExpressionRef.of(relationalExpression));
+            final var compensationExpansionsBuilder = ImmutableList.<GraphExpansion>builder();
+
+            final var translationMap =
+                    TranslationMap.rebaseWithAliasMap(AliasMap.of(mappedForEachQuantifierAlias, newBaseQuantifier.getAlias()));
 
             final var injectCompensationFunctions = predicateCompensationMap.values();
             if (!injectCompensationFunctions.isEmpty()) {
-                final var quantifier = Quantifier.forEach(GroupExpressionRef.of(relationalExpression));
-                final var translationMap =
-                        TranslationMap.rebaseWithAliasMap(AliasMap.of(mappedForEachQuantifierAlias, quantifier.getAlias()));
-
-                final var compensationExpansionsBuilder = ImmutableList.<GraphExpansion>builder();
                 for (final var injectCompensationFunction : injectCompensationFunctions) {
                     compensationExpansionsBuilder.add(injectCompensationFunction.applyCompensation(translationMap));
                 }
-                compensationExpansionsBuilder.add(GraphExpansion.ofQuantifier(quantifier));
-                relationalExpression = GraphExpansion.ofOthers(compensationExpansionsBuilder.build()).buildSimpleSelectOverQuantifier(quantifier);
             }
+
+            final var compensatedPredicatesExpansion =
+                    GraphExpansion.ofOthers(compensationExpansionsBuilder.build()).seal();
+            Verify.verify(compensatedPredicatesExpansion.getResultColumns().isEmpty());
+
+            final var compensatedPredicatesCorrelatedTo =
+                    compensatedPredicatesExpansion.getPredicates()
+                            .stream()
+                            .flatMap(predicate -> predicate.getCorrelatedTo().stream())
+                            .collect(ImmutableSet.toImmutableSet());
+
+            final var allQuantifiers = Iterables.concat(matchedQuantifiers, unmatchedQuantifiers);
+            final var allQuantifiersMap = Quantifiers.aliasToQuantifierMap(allQuantifiers);
+            final var unmatchedQuantifierMap = Quantifiers.aliasToQuantifierMap(unmatchedQuantifiers);
+
+            final var toBePulledUpQuantifiers =
+                    allQuantifiersMap
+                            .values()
+                            .stream()
+                            .filter(quantifier -> !mappedForEachQuantifierAlias.equals(quantifier.getAlias()))
+                            .filter(quantifier -> unmatchedQuantifierMap.containsKey(quantifier.getAlias()) ||
+                                                  compensatedPredicatesCorrelatedTo.contains(quantifier.getAlias()))
+                            .collect(LinkedIdentitySet.toLinkedIdentitySet());
+
+            if (!toBePulledUpQuantifiers.isEmpty()) {
+                final var pulledUpQuantifiers = Quantifiers.translateCorrelations(toBePulledUpQuantifiers, translationMap);
+                compensationExpansionsBuilder.add(GraphExpansion.builder().addAllQuantifiers(pulledUpQuantifiers).build());
+            }
+
+            // add base quantifier
+            compensationExpansionsBuilder.add(GraphExpansion.ofQuantifier(newBaseQuantifier));
+
+            final var completeExpansion = GraphExpansion.ofOthers(compensationExpansionsBuilder.build());
 
             if (remainingComputationValueOptional.isPresent()) {
                 final var remainingComputationValue = remainingComputationValueOptional.get();
                 if (!(remainingComputationValue instanceof QuantifiedValue) ||
                         !((QuantifiedValue)remainingComputationValue).getAlias().equals(mappedForEachQuantifierAlias)) {
-
-                    final var quantifier = Quantifier.forEach(GroupExpressionRef.of(relationalExpression));
-
-                    final var translationMap =
-                            AliasMap.of(mappedForEachQuantifierAlias, quantifier.getAlias());
-
-                    final var rebasedRemainingComputationValue = remainingComputationValue.rebase(translationMap);
-
-                    relationalExpression =
-                            new SelectExpression(rebasedRemainingComputationValue,
-                                    ImmutableList.of(quantifier),
-                                    ImmutableList.of());
+                    final var rebasedRemainingComputationValue = remainingComputationValue.translateCorrelations(translationMap);
+                    return completeExpansion.buildSelectWithResultValue(rebasedRemainingComputationValue);
                 }
             }
 
-            return relationalExpression;
+            return completeExpansion.buildSimpleSelectOverQuantifier(newBaseQuantifier);
         }
     }
 }

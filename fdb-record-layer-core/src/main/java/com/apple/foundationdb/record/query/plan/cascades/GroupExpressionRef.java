@@ -225,6 +225,8 @@ public class GroupExpressionRef<T extends RelationalExpression> implements Expre
         }
     }
 
+    @Nonnull
+    @Override
     @SuppressWarnings("unchecked")
     public ExpressionRef<T> translateCorrelations(@Nonnull final TranslationMap translationMap) {
         final var translatedRefs = ExpressionRefs.translateCorrelations(ImmutableList.of(this), translationMap);
