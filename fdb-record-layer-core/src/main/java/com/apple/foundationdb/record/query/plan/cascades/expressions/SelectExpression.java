@@ -256,7 +256,7 @@ public class SelectExpression implements RelationalExpressionWithChildren, Relat
             }
         }
 
-        matchedCorrelatedToBuilder.addAll(getResultValue().getCorrelatedTo());
+        //matchedCorrelatedToBuilder.addAll(getResultValue().getCorrelatedTo());
 
 //        if (getQuantifiers()
 //                .stream()
@@ -520,10 +520,6 @@ public class SelectExpression implements RelationalExpressionWithChildren, Relat
         final var predicateMap = matchInfo.getPredicateMap();
 
         final var quantifiers = getQuantifiers();
-        final var forEachQuantifiers =
-                quantifiers.stream()
-                        .filter(quantifier -> quantifier instanceof Quantifier.ForEach)
-                        .collect(ImmutableList.toImmutableList());
 
         //
         // The partial match we are called with here has child matches that have compensations on their own.
@@ -565,27 +561,31 @@ public class SelectExpression implements RelationalExpressionWithChildren, Relat
             injectCompensationFunctionOptional.ifPresent(injectCompensationFunction -> predicateCompensationMap.put(predicate, injectCompensationFunction));
         }
 
+        final var unmatchedQuantifiers = partialMatch.computeUnmatchedQuantifiers(this);
         final var isCompensationNeeded =
-                !predicateCompensationMap.isEmpty() || matchInfo.getRemainingComputationValueOptional().isPresent();
+                !unmatchedQuantifiers.isEmpty() || !predicateCompensationMap.isEmpty() || matchInfo.getRemainingComputationValueOptional().isPresent();
 
         if (!isCompensationNeeded) {
             return Compensation.noCompensation();
         }
 
         //
-        // If we need an actual compensation, and we have more than one quantifier, we would have to translate
+        // We now know we need compensationIf we need an actual compensation, and we have more than one quantifier, we would have to translate
         // the references of the values from the query graph to values operating on the MQT in order to do that
         // compensation. We cannot do that (yet). If we, however, do not have to worry about compensation we just
         // this select entirely with the scan and there are no additional references to be considered.
         //
-        if (forEachQuantifiers.size() > 1) {
+        final var partialMatchMap = partialMatch.getMatchInfo().getQuantifierToPartialMatchMap();
+        if (quantifiers.stream()
+                    .filter(quantifier -> quantifier instanceof Quantifier.ForEach && partialMatchMap.containsKeyUnwrapped(quantifier))
+                    .count() > 1) {
             return Compensation.impossibleCompensation();
         }
 
         return Compensation.ofChildCompensationAndPredicateMap(childCompensation,
                 predicateCompensationMap,
                 computeMappedQuantifiers(partialMatch),
-                partialMatch.computeUnmatchedQuantifiers(this),
+                unmatchedQuantifiers,
                 matchInfo.getRemainingComputationValueOptional());
     }
 }

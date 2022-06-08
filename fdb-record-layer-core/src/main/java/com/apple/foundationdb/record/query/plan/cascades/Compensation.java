@@ -332,6 +332,7 @@ public interface Compensation {
         @Override
         default boolean isNeeded() {
             return getChildCompensation().isNeeded() ||
+                   !getUnmatchedForEachQuantifiers().isEmpty() ||
                    !getPredicateCompensationMap().isEmpty() ||
                    getRemainingComputationValueOptional().isPresent();
         }
@@ -339,6 +340,7 @@ public interface Compensation {
         @Override
         default boolean isNeededForFiltering() {
             return getChildCompensation().isNeededForFiltering() ||
+                   !getUnmatchedForEachQuantifiers().isEmpty() ||
                    !getPredicateCompensationMap().isEmpty();
         }
 

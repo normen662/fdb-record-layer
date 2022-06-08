@@ -150,6 +150,17 @@ public class MetaDataPlanContext implements PlanContext {
         MatchCandidate.fromPrimaryDefinition(metaData, recordTypes, commonPrimaryKey, isSortReverse)
                 .ifPresent(matchCandidatesBuilder::add);
 
+        // TODO hack begin
+        for (final String recordTypeName : getMetaData().getRecordTypes().keySet()) {
+            // exclude the one we might have created earlier
+            if (!recordTypes.contains(recordTypeName)) {
+                final var recordType = metaData.getRecordType(recordTypeName);
+                MatchCandidate.fromPrimaryDefinition(metaData, ImmutableSet.of(recordTypeName), recordType.getPrimaryKey(), isSortReverse)
+                        .ifPresent(matchCandidatesBuilder::add);
+            }
+        }
+        // TODO hack end
+
         this.matchCandidates = matchCandidatesBuilder.build();
     }
 

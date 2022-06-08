@@ -249,6 +249,9 @@ public class FDBSimpleQueryGraphTest extends FDBRecordStoreQueryTestBase {
 
                     graphExpansionBuilder.addQuantifier(outerQun);
                     graphExpansionBuilder.addQuantifier(explodeQun);
+                    graphExpansionBuilder.addPredicate(new ValuePredicate(new FieldValue(QuantifiedObjectValue.of(outerQun.getAlias(), outerQun.getFlowedObjectType()), ImmutableList.of("name")),
+                            new Comparisons.SimpleComparison(Comparisons.Type.EQUALS, "name")));
+
                     final var explodeResultValue = QuantifiedObjectValue.of(explodeQun.getAlias(), explodeQun.getFlowedObjectType());
                     graphExpansionBuilder.addResultColumn(Column.of(Type.Record.Field.of(explodeResultValue.getResultType(), Optional.of("review")), explodeResultValue));
                     outerQun = Quantifier.forEach(GroupExpressionRef.of(
