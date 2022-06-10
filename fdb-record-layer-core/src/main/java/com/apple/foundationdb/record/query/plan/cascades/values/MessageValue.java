@@ -104,7 +104,7 @@ public class MessageValue {
         }
         if (field.hasDefaultValue() || message.hasField(field)) {
             if (field.getJavaType() == Descriptors.FieldDescriptor.JavaType.MESSAGE &&
-                    TupleFieldsHelper.isTupleField(field.getMessageType())) {
+                TupleFieldsHelper.isTupleField(field.getMessageType())) {
                 return TupleFieldsHelper.fromProto((Message)message.getField(field), field.getMessageType());
             } else {
                 return message.getField(field);
