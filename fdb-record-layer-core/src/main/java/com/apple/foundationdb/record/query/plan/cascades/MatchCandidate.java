@@ -253,6 +253,7 @@ public interface MatchCandidate {
         final var availableRecordTypes = recordTypeMap.values();
 
         final var type = index.getType();
+        System.out.println("MatchCandidate.fromIndexDefinition recordMetadata:" + metaData.getRecordMetaData().toProto() + " index: " + index.toProto());
 
         if (IndexTypes.VALUE.equals(type)) {
             expandIndexMatchCandidate(index,
