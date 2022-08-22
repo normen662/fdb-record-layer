@@ -191,6 +191,12 @@ public class KeyExpressionExpansionVisitor implements KeyExpressionVisitor<Visit
                         .build();
                 return pop(child.expand(push(state.withFieldNamePrefix(newPrefix))));
             case FanOut:
+                //TODO check also on field index
+                if (parent.getFieldName().equals(NullableArrayTypeUtils.getRepeatedFieldName())) {
+                    // tunnel through the values field
+                    return visitExpression(child);
+                }
+
                 // explode the parent field(s) also depending on the prefix
                 final Quantifier.ForEach childBase = parent.explodeField(baseQuantifier, fieldNamePrefix);
                 // expand the children of the key expression and then unify them into an expansion of this expression

@@ -28,6 +28,7 @@ import com.apple.foundationdb.record.PlanHashable;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordStoreBase;
 import com.apple.foundationdb.record.query.plan.cascades.AliasMap;
 import com.apple.foundationdb.record.query.plan.cascades.Formatter;
+import com.apple.foundationdb.record.query.plan.cascades.NullableArrayTypeUtils;
 import com.apple.foundationdb.record.query.plan.cascades.SemanticException;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.google.protobuf.Message;
@@ -90,7 +91,6 @@ public class OrdinalFieldValue implements ValueWithChild {
         return child.explain(formatter) + "#" + ordinalPosition;
     }
 
-    @SuppressWarnings("ConstantConditions")
     @Nullable
     @Override
     public <M extends Message> Object eval(@Nonnull final FDBRecordStoreBase<M> store, @Nonnull final EvaluationContext context) {
@@ -98,7 +98,13 @@ public class OrdinalFieldValue implements ValueWithChild {
         if (childMessage == null) {
             return null;
         }
-        return MessageValue.getFieldOnMessage(childMessage, field.getFieldIndex());
+        final var fieldValue = MessageValue.getFieldOnMessage(childMessage, field.getFieldIndex());
+
+        //
+        // If the last step in the field path is an array that is also nullable, then we need to unwrap the value
+        // wrapper.
+        //
+        return NullableArrayTypeUtils.unwrapIfArray(fieldValue, getResultType());
     }
 
     @Override

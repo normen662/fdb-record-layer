@@ -291,7 +291,7 @@ public interface Type extends Narrowable<Type> {
             } else {
                 Objects.requireNonNull(descriptor);
                 final var messageDescriptor = (Descriptors.Descriptor)descriptor;
-                // case 2: helper type to model null-ed out array elements
+                //TODO remove this stuff case 2: helper type to model null-ed out array elements
                 final Optional<Descriptors.FieldDescriptor> elementFieldDescriptorMaybe =
                         Record.arrayElementFieldDescriptorMaybe(messageDescriptor);
                 if (elementFieldDescriptorMaybe.isPresent()) {
@@ -313,17 +313,18 @@ public interface Type extends Narrowable<Type> {
                 final var messageDescriptor = (Descriptors.Descriptor)descriptor;
                 if (NullableArrayTypeUtils.describesWrappedArray(messageDescriptor)) {
                     // find TypeCode of array elements
-                    TypeCode t = TypeCode.fromProtobufType(messageDescriptor.findFieldByName(NullableArrayTypeUtils.getRepeatedFieldName()).getType());
-                    if (t.isPrimitive()) {
-                        final var primitiveType = primitiveType(t, true);
+                    final var elementField = messageDescriptor.findFieldByName(NullableArrayTypeUtils.getRepeatedFieldName());
+                    final var elementTypeCode = TypeCode.fromProtobufType(elementField.getType());
+                    if (elementTypeCode.isPrimitive()) {
+                        final var primitiveType = primitiveType(elementTypeCode, true);
                         return new Array(true, true, primitiveType);
-                    } else if (t == TypeCode.ENUM) {
+                    } else if (elementTypeCode == TypeCode.ENUM) {
                         final var enumDescriptor = (Descriptors.EnumDescriptor)Objects.requireNonNull(descriptor);
                         final var enumType = new Enum(true, Enum.enumValuesFromProto(enumDescriptor.getValues()));
                         return new Array(true, true, enumType);
                     } else {
                         // array elements is Record type
-                        Descriptors.Descriptor wrappedDescriptor = messageDescriptor.findFieldByName(NullableArrayTypeUtils.getRepeatedFieldName()).getMessageType();
+                        Descriptors.Descriptor wrappedDescriptor = elementField.getMessageType();
                         Objects.requireNonNull(wrappedDescriptor);
                         return new Array(true, true, fromProtoType(wrappedDescriptor, Descriptors.FieldDescriptor.Type.MESSAGE, FieldDescriptorProto.Label.LABEL_OPTIONAL, true));
                     }
