@@ -385,6 +385,7 @@ public class CascadesPlanner implements QueryPlanner {
         traversal = Traversal.withRoot(currentRoot);
         taskStack = new ArrayDeque<>();
         taskStack.push(new OptimizeGroup(context, currentRoot, evaluationContext));
+        taskStack.push(new ExploreGroup(context, currentRoot, evaluationContext));
         taskCount = 0;
         maxQueueSize = 0;
         while (!taskStack.isEmpty()) {
@@ -426,6 +427,7 @@ public class CascadesPlanner implements QueryPlanner {
                 taskStack.clear();
                 currentRoot = referenceSupplier.get();
                 taskStack.push(new OptimizeGroup(context, currentRoot, evaluationContext));
+                taskStack.push(new ExploreGroup(context, currentRoot, evaluationContext));
             }
         }
     }
@@ -495,37 +497,24 @@ public class CascadesPlanner implements QueryPlanner {
 
         @Override
         public void execute() {
-            if (group.needsExploration()) {
-                // Explore the group, then come back here to pick an optimal expression.
-                taskStack.push(this);
-                for (RelationalExpression member : group.getMembers()) {
-                    // enqueue explore expression which then in turn enqueues necessary rules for transformations
-                    // and matching
-                    exploreExpressionAndOptimizeInputs(context, group, member, false, evaluationContext);
-                }
-                // the second time around we want to visit the else and prune the plan space
-                group.startExploration();
-            } else {
-                RelationalExpression bestMember = null;
-                for (RelationalExpression member : group.getMembers()) {
-                    if (bestMember == null || new CascadesCostModel(configuration).compare(member, bestMember) < 0) {
-                        if (bestMember != null) {
-                            // best member is being pruned
-                            traversal.removeExpression(group, bestMember);
-                        }
-                        bestMember = member;
-                    } else {
-                        // member is being pruned
-                        traversal.removeExpression(group, member);
+            RelationalExpression bestMember = null;
+            for (RelationalExpression member : group.getMembers()) {
+                if (bestMember == null || new CascadesCostModel(configuration).compare(member, bestMember) < 0) {
+                    if (bestMember != null) {
+                        // best member is being pruned
+                        traversal.removeExpression(group, bestMember);
                     }
+                    bestMember = member;
+                } else {
+                    // member is being pruned
+                    traversal.removeExpression(group, member);
                 }
-                if (bestMember == null) {
-                    throw new RecordCoreException("there we no members in a group expression used by the Cascades planner");
-                }
-
-                group.pruneWith(bestMember);
-                group.commitExploration();
             }
+            if (bestMember == null) {
+                throw new RecordCoreException("there we no members in a group expression used by the Cascades planner");
+            }
+
+            group.pruneWith(bestMember);
         }
 
         @Override
