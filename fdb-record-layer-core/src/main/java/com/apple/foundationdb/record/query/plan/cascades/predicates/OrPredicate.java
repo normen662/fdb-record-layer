@@ -54,7 +54,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -334,12 +333,7 @@ public class OrPredicate extends AndOrPredicate {
             return Optional.of(
                     PredicateMapping.regularMappingBuilder(originalQueryPredicate, this,
                                     candidatePredicate)
-                            .setPredicateCompensation((partialMatch, boundParameterPrefixMap, pullUp) ->
-                                    Objects.requireNonNull(foldNullable(Function.identity(),
-                                            (queryPredicate, childFunctions) -> queryPredicate.computeCompensationFunction(partialMatch,
-                                                    boundParameterPrefixMap,
-                                                    ImmutableList.copyOf(childFunctions),
-                                                    pullUp))))
+                            .setPredicateCompensation(getDefaultPredicateCompensation())
                             .build());
         } else {
             return Optional.of(
