@@ -845,11 +845,11 @@ public class Comparisons {
         @Nonnull
         @Override
         default Comparison rebase(@Nonnull AliasMap translationMap) {
-            return translateCorrelations(TranslationMap.rebaseWithAliasMap(translationMap));
+            return translateCorrelations(TranslationMap.rebaseWithAliasMap(translationMap), false);
         }
 
         @Nonnull
-        Comparison translateCorrelations(@Nonnull TranslationMap translationMap);
+        Comparison translateCorrelations(@Nonnull TranslationMap translationMap, boolean shouldSimplifyValues);
 
         @Override
         default boolean semanticEquals(@Nullable Object other, @Nonnull AliasMap aliasMap) {
@@ -1042,7 +1042,8 @@ public class Comparisons {
 
         @Nonnull
         @Override
-        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap) {
+        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                final boolean shouldSimplifyValues) {
             return this;
         }
     }
@@ -1210,7 +1211,7 @@ public class Comparisons {
         @Nonnull
         @Override
         @SuppressWarnings("PMD.CompareObjectsWithEquals")
-        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap) {
+        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap, final boolean shouldSimplifyValues) {
             if (isCorrelation()) {
                 final var alias = CorrelationIdentifier.of(Bindings.Internal.CORRELATION.identifier(parameter));
                 final var quantifiedObjectValue = QuantifiedObjectValue.of(alias,
@@ -1221,7 +1222,7 @@ public class Comparisons {
                 //
                 final var translatedQuantifiedObjectValue =
                         (QuantifiedObjectValue)quantifiedObjectValue
-                                .translateCorrelations(translationMap);
+                                .translateCorrelations(translationMap, shouldSimplifyValues);
                 if (quantifiedObjectValue == translatedQuantifiedObjectValue) {
                     return this;
                 }
@@ -1541,14 +1542,15 @@ public class Comparisons {
 
         @Nonnull
         @Override
-        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap) {
+        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap, final boolean shouldSimplifyValues) {
             if (comparandValue.getCorrelatedTo()
                     .stream()
                     .noneMatch(translationMap::containsSourceAlias)) {
                 return this;
             }
 
-            return new ValueComparison(type, comparandValue.translateCorrelations(translationMap), parameterRelationshipGraph);
+            return new ValueComparison(type, comparandValue.translateCorrelations(translationMap, shouldSimplifyValues),
+                    parameterRelationshipGraph);
         }
 
         @Nonnull
@@ -1787,7 +1789,8 @@ public class Comparisons {
 
         @Nonnull
         @Override
-        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap) {
+        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                final boolean shouldSimplifyValues) {
             return this;
         }
 
@@ -1969,7 +1972,8 @@ public class Comparisons {
 
         @Nonnull
         @Override
-        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap) {
+        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                final boolean shouldSimplifyValues) {
             return this;
         }
 
@@ -2091,7 +2095,8 @@ public class Comparisons {
 
         @Nonnull
         @Override
-        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap) {
+        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                final boolean shouldSimplifyValues) {
             return this;
         }
 
@@ -2203,7 +2208,8 @@ public class Comparisons {
 
         @Nonnull
         @Override
-        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap) {
+        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                final boolean shouldSimplifyValues) {
             return this;
         }
 
@@ -2640,8 +2646,9 @@ public class Comparisons {
         @Nonnull
         @Override
         @SuppressWarnings("PMD.CompareObjectsWithEquals")
-        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap) {
-            final var translatedInner = inner.translateCorrelations(translationMap);
+        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                final boolean shouldSimplifyValues) {
+            final var translatedInner = inner.translateCorrelations(translationMap, shouldSimplifyValues);
             if (inner == translatedInner) {
                 return this;
             } else {
@@ -2907,8 +2914,9 @@ public class Comparisons {
         @Nonnull
         @Override
         @SuppressWarnings({"PMD.CompareObjectsWithEquals"}) // used here for referential equality
-        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap) {
-            Comparison translated = originalComparison.translateCorrelations(translationMap);
+        public Comparison translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                final boolean shouldSimplifyValues) {
+            Comparison translated = originalComparison.translateCorrelations(translationMap, shouldSimplifyValues);
             if (translated == originalComparison) {
                 return this;
             } else {

@@ -145,7 +145,7 @@ public class IndexScanComparisons implements IndexScanParameters {
     @Nonnull
     @Override
     public IndexScanParameters rebase(@Nonnull final AliasMap translationMap) {
-        return translateCorrelations(TranslationMap.rebaseWithAliasMap(translationMap));
+        return translateCorrelations(TranslationMap.rebaseWithAliasMap(translationMap), false);
     }
 
     @Override
@@ -176,8 +176,10 @@ public class IndexScanComparisons implements IndexScanParameters {
     @Nonnull
     @Override
     @SuppressWarnings("PMD.CompareObjectsWithEquals")
-    public IndexScanParameters translateCorrelations(@Nonnull final TranslationMap translationMap) {
-        final var translatedScanComparisons = scanComparisons.translateCorrelations(translationMap);
+    public IndexScanParameters translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                     final boolean shouldSimplifyValues) {
+        final var translatedScanComparisons =
+                scanComparisons.translateCorrelations(translationMap, shouldSimplifyValues);
         if (translatedScanComparisons != scanComparisons) {
             return withScanComparisons(translatedScanComparisons);
         }

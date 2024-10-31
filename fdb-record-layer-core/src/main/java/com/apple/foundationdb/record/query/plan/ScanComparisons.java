@@ -349,7 +349,7 @@ public class ScanComparisons implements PlanHashable, Correlated<ScanComparisons
     @Nonnull
     @Override
     public ScanComparisons rebase(@Nonnull final AliasMap translationMap) {
-        return translateCorrelations(TranslationMap.rebaseWithAliasMap(translationMap));
+        return translateCorrelations(TranslationMap.rebaseWithAliasMap(translationMap), false);
     }
 
     @Override
@@ -388,11 +388,11 @@ public class ScanComparisons implements PlanHashable, Correlated<ScanComparisons
 
     @Nonnull
     @SuppressWarnings("PMD.CompareObjectsWithEquals")
-    public ScanComparisons translateCorrelations(@Nonnull final TranslationMap translationMap) {
+    public ScanComparisons translateCorrelations(@Nonnull final TranslationMap translationMap, final boolean shouldSimplifyValues) {
         boolean needsCopy = false;
         final var translatedEqualityComparisonsBuilder = ImmutableList.<Comparisons.Comparison>builder();
         for (final var comparison : equalityComparisons) {
-            final var translatedComparison = comparison.translateCorrelations(translationMap);
+            final var translatedComparison = comparison.translateCorrelations(translationMap, shouldSimplifyValues);
             translatedEqualityComparisonsBuilder.add(translatedComparison);
             if (translatedComparison != comparison) {
                 needsCopy = true;
@@ -401,7 +401,7 @@ public class ScanComparisons implements PlanHashable, Correlated<ScanComparisons
 
         final var translatedInequalityComparisonsBuilder = ImmutableSet.<Comparisons.Comparison>builder();
         for (final var comparison : inequalityComparisons) {
-            final var translatedComparison = comparison.translateCorrelations(translationMap);
+            final var translatedComparison = comparison.translateCorrelations(translationMap, shouldSimplifyValues);
             translatedInequalityComparisonsBuilder.add(translatedComparison);
             if (translatedComparison != comparison) {
                 needsCopy = true;

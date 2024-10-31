@@ -1565,7 +1565,8 @@ public abstract class MultidimensionalIndexTestBase extends FDBRecordStoreQueryT
 
         @Nonnull
         @Override
-        public IndexScanParameters translateCorrelations(@Nonnull final TranslationMap translationMap) {
+        public IndexScanParameters translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                         final boolean shouldSimplifyValues) {
             throw new RecordCoreException("not supported");
         }
 
@@ -1647,7 +1648,8 @@ public abstract class MultidimensionalIndexTestBase extends FDBRecordStoreQueryT
 
         @Nonnull
         @Override
-        public IndexScanParameters translateCorrelations(@Nonnull final TranslationMap translationMap) {
+        public IndexScanParameters translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                         final boolean shouldSimplifyValues) {
             throw new RecordCoreException("not supported");
         }
 

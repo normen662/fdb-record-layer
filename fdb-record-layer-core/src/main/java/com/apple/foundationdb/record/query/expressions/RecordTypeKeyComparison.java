@@ -183,7 +183,8 @@ public class RecordTypeKeyComparison implements ComponentWithComparison {
 
         @Nonnull
         @Override
-        public Comparisons.Comparison translateCorrelations(@Nonnull final TranslationMap translationMap) {
+        public Comparisons.Comparison translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                            final boolean shouldSimplifyValues) {
             return this;
         }
 

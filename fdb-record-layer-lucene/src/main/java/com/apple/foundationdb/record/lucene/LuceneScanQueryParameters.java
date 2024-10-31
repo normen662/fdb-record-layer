@@ -174,7 +174,8 @@ public class LuceneScanQueryParameters extends LuceneScanParameters implements P
 
     @Nonnull
     @Override
-    public IndexScanParameters translateCorrelations(@Nonnull final TranslationMap translationMap) {
+    public IndexScanParameters translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                     final boolean shouldSimplifyValues) {
         return this;
     }
 
@@ -187,7 +188,7 @@ public class LuceneScanQueryParameters extends LuceneScanParameters implements P
     @Nonnull
     @Override
     public IndexScanParameters rebase(@Nonnull final AliasMap translationMap) {
-        return translateCorrelations(TranslationMap.rebaseWithAliasMap(translationMap));
+        return translateCorrelations(TranslationMap.rebaseWithAliasMap(translationMap), false);
     }
 
     @Override
