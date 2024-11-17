@@ -90,9 +90,10 @@ public class TempTableInsertExpression implements RelationalExpressionWithChildr
     @Nonnull
     @Override
     public TempTableInsertExpression translateCorrelations(@Nonnull final TranslationMap translationMap,
+                                                           final boolean shouldSimplifyValues,
                                                            @Nonnull final List<? extends Quantifier> translatedQuantifiers) {
         return new TempTableInsertExpression(Iterables.getOnlyElement(translatedQuantifiers).narrow(Quantifier.ForEach.class),
-                tempTableReferenceValue.translateCorrelations(translationMap));
+                tempTableReferenceValue.translateCorrelations(translationMap, shouldSimplifyValues));
     }
 
     @Nonnull
