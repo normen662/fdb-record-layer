@@ -180,7 +180,7 @@ public interface QueryPredicate extends Correlated<QueryPredicate>, TreeLike<Que
 
         if (candidatePredicate.isTautology()) {
             return Optional.of(
-                    PredicateMapping.regularMappingBuilder(originalQueryPredicate, originalQueryPredicate, candidatePredicate)
+                    PredicateMapping.regularMappingBuilder(this, originalQueryPredicate, candidatePredicate)
                             .setPredicateCompensation(getDefaultPredicateCompensation(originalQueryPredicate))
                             .build());
         }
@@ -190,6 +190,7 @@ public interface QueryPredicate extends Correlated<QueryPredicate>, TreeLike<Que
                 .mapToOptional(queryPlanConstraint ->
                         PredicateMapping.regularMappingBuilder(this, originalQueryPredicate,
                                         candidatePredicate)
+                                .setPredicateCompensation(getDefaultPredicateCompensation(originalQueryPredicate))
                                 .setConstraint(queryPlanConstraint)
                                 .build());
     }
