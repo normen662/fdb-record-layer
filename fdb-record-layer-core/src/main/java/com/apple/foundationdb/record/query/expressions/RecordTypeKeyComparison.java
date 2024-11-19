@@ -36,6 +36,7 @@ import com.apple.foundationdb.record.query.plan.cascades.GraphExpansion;
 import com.apple.foundationdb.record.query.plan.cascades.Quantifier;
 import com.apple.foundationdb.record.query.plan.cascades.values.QuantifiedObjectValue;
 import com.apple.foundationdb.record.query.plan.cascades.values.RecordTypeValue;
+import com.apple.foundationdb.record.query.plan.cascades.values.Value;
 import com.apple.foundationdb.record.query.plan.cascades.values.translation.TranslationMap;
 import com.apple.foundationdb.record.util.HashUtils;
 import com.google.auto.service.AutoService;
@@ -47,7 +48,9 @@ import javax.annotation.Nullable;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -179,6 +182,12 @@ public class RecordTypeKeyComparison implements ComponentWithComparison {
         @Override
         public void validate(@Nonnull Descriptors.FieldDescriptor descriptor, boolean fannedOut) {
             // Do not actually apply to any particular field.
+        }
+
+        @Nonnull
+        @Override
+        public Optional<Comparisons.Comparison> replaceValuesMaybe(@Nonnull final Function<Value, Optional<Value>> replacementFunction) {
+            return Optional.of(this);
         }
 
         @Nonnull

@@ -33,10 +33,8 @@ import com.apple.foundationdb.record.query.expressions.Comparisons;
 import com.apple.foundationdb.record.query.plan.QueryPlanConstraint;
 import com.apple.foundationdb.record.query.plan.cascades.AliasMap;
 import com.apple.foundationdb.record.query.plan.cascades.BooleanWithConstraint;
-import com.apple.foundationdb.record.query.plan.cascades.ComparisonRange;
 import com.apple.foundationdb.record.query.plan.cascades.CorrelationIdentifier;
 import com.apple.foundationdb.record.query.plan.cascades.LinkedIdentitySet;
-import com.apple.foundationdb.record.query.plan.cascades.PartialMatch;
 import com.apple.foundationdb.record.query.plan.cascades.PredicateMultiMap.PredicateCompensationFunction;
 import com.apple.foundationdb.record.query.plan.cascades.PredicateMultiMap.PredicateMapping;
 import com.apple.foundationdb.record.query.plan.cascades.ValueEquivalence;
@@ -56,7 +54,6 @@ import org.checkerframework.checker.nullness.qual.NonNull;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -334,7 +331,7 @@ public class PredicateWithValueAndRanges extends AbstractQueryPredicate implemen
                                         if (boundParameterPrefixMap.containsKey(alias)) {
                                             return PredicateCompensationFunction.noCompensationNeeded();
                                         }
-                                        return reapplyPredicateCompensationFunction(pullUp);
+                                        return computeCompensationFunctionForLeaf(pullUp);
                                     })
                                     .setParameterAlias(alias)
                                     .setConstraint(constraint);
@@ -365,7 +362,7 @@ public class PredicateWithValueAndRanges extends AbstractQueryPredicate implemen
                                         if (boundParameterPrefixMap.containsKey(alias)) {
                                             return PredicateCompensationFunction.noCompensationNeeded();
                                         }
-                                        return reapplyPredicateCompensationFunction(pullUp);
+                                        return computeCompensationFunctionForLeaf(pullUp);
                                     })
                                     .setConstraint(constraint.compose(captureConstraint(candidatePredicateWithValuesAndRanges)));
                     Verify.verify(isSargable() == compensatedQueryPredicate.isSargable());
@@ -396,7 +393,7 @@ public class PredicateWithValueAndRanges extends AbstractQueryPredicate implemen
                                                         .anyMatch(right -> left.semanticEquals(right, valueEquivalence).isTrue()))) {
                                             return PredicateCompensationFunction.noCompensationNeeded();
                                         }
-                                        return reapplyPredicateCompensationFunction(pullUp);
+                                        return computeCompensationFunctionForLeaf(pullUp);
                                     })
                                     .setConstraint(constraint.compose(captureConstraint(candidatePredicateWithValuesAndRanges)))
                                     .build());
@@ -407,7 +404,7 @@ public class PredicateWithValueAndRanges extends AbstractQueryPredicate implemen
         if (candidatePredicate.isTautology()) {
             return Optional.of(
                     PredicateMapping.regularMappingBuilder(originalQueryPredicate, this, candidatePredicate)
-                            .setPredicateCompensation((ignore, alsoIgnore, pullUp) -> reapplyPredicateCompensationFunction(pullUp))
+                            .setPredicateCompensation((ignore, alsoIgnore, pullUp) -> computeCompensationFunctionForLeaf(pullUp))
                             .build());
         }
 
@@ -430,19 +427,9 @@ public class PredicateWithValueAndRanges extends AbstractQueryPredicate implemen
     }
 
     @Nonnull
-    @Override
-    public PredicateCompensationFunction computeCompensationFunction(@Nonnull final PartialMatch partialMatch,
-                                                                     @Nonnull final QueryPredicate originalQueryPredicate,
-                                                                     @Nonnull final Map<CorrelationIdentifier, ComparisonRange> boundParameterPrefixMap,
-                                                                     @Nonnull final List<PredicateCompensationFunction> childrenResults,
-                                                                     @Nonnull final PullUp pullUp) {
-        Verify.verify(childrenResults.isEmpty());
-        return reapplyPredicateCompensationFunction(pullUp);
-    }
-
     private PredicateCompensationFunction reapplyPredicateCompensationFunction(@Nonnull final PullUp pullUp) {
         return toResidualPredicate()
-                .replaceValues(pullUp::pullUpMaybe)
+                .replaceValuesMaybe(pullUp::pullUpMaybe)
                 .map(queryPredicate ->
                         PredicateCompensationFunction.of(baseAlias ->
                                 LinkedIdentitySet.of(queryPredicate.translateCorrelations(
