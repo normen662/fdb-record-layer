@@ -45,6 +45,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * Represents a constant value that references a constant in __CONST__ binding of {@link EvaluationContext}.
@@ -169,13 +170,8 @@ public class ConstantObjectValue extends AbstractValue implements LeafValue, Val
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return toString();
-    }
-
-    @Override
-    public String toString() {
-        return "@" + constantId;
+    public ExplainInfo explain(@Nonnull final Formatter formatter, @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("@" + constantId);
     }
 
     @Nonnull

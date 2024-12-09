@@ -42,6 +42,7 @@ import com.apple.foundationdb.record.query.plan.cascades.NullableArrayTypeUtils;
 import com.apple.foundationdb.record.query.plan.cascades.SemanticException;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type.Record.Field;
+import com.apple.foundationdb.record.query.plan.cascades.values.Value.ExplainInfo.Precedence;
 import com.google.auto.service.AutoService;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
@@ -49,6 +50,7 @@ import com.google.common.base.Suppliers;
 import com.google.common.base.Verify;
 import com.google.common.collect.Comparators;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import com.google.common.primitives.ImmutableIntArray;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Message;
@@ -60,6 +62,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -194,20 +197,14 @@ public class FieldValue extends AbstractValue implements ValueWithChild {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH, fieldPath);
     }
 
-    @Override
-    public String toString() {
-        final var fieldPathString = fieldPath.toString();
-        if (childValue instanceof QuantifiedValue || childValue instanceof ObjectValue) {
-            return childValue + fieldPathString;
-        } else {
-            return "(" + childValue + ")" + fieldPathString;
-        }
-    }
-
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return childValue.explain(formatter) + fieldPath;
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        final var explainFunction = Iterables.getOnlyElement(explainFunctions);
+        final var childExplain =
+                Precedence.DOT.parenthesizeChild(explainFunction.apply(formatter), true);
+        return ExplainInfo.of(Precedence.DOT, childExplain + fieldPath);
     }
 
     @Override

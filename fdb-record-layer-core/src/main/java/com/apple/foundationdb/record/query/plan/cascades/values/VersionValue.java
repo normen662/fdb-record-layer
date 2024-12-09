@@ -45,6 +45,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * A value representing a version stamp derived from a quantifier.
@@ -95,14 +96,9 @@ public class VersionValue extends AbstractValue implements QuantifiedValue {
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return toString();
-    }
-
-    @Nonnull
-    @Override
-    public String toString() {
-        return "version(" + baseAlias + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("version(" + formatter.getQuantifierName(baseAlias) + ")");
     }
 
     @Nonnull

@@ -42,6 +42,7 @@ import com.google.protobuf.Message;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * A value that throws an exception if it gets executed.
@@ -90,15 +91,11 @@ public class ThrowsValue extends AbstractValue implements LeafValue {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH);
     }
 
-    @Override
-    public String toString() {
-        return "throws()";
-    }
-
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "throws()";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("throws()");
     }
 
     @Override

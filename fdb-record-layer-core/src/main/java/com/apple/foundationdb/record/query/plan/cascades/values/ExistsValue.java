@@ -49,6 +49,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * A {@link Value} that checks whether an item exists in its child quantifier expression or not.
@@ -89,13 +90,9 @@ public class ExistsValue extends AbstractValue implements BooleanValue, Quantifi
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "exists(" + alias + ")";
-    }
-
-    @Override
-    public String toString() {
-        return "exists(" + alias + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("exists(" + formatter.getQuantifierName(alias) + ")");
     }
 
     @Override

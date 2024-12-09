@@ -32,6 +32,7 @@ import com.apple.foundationdb.record.planprotos.PValue;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordStoreBase;
 import com.apple.foundationdb.record.query.plan.cascades.AliasMap;
 import com.apple.foundationdb.record.query.plan.cascades.BooleanWithConstraint;
+import com.apple.foundationdb.record.query.plan.cascades.Formatter;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.google.auto.service.AutoService;
 import com.google.common.base.Verify;
@@ -41,6 +42,7 @@ import com.google.protobuf.Message;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * A value that evaluates to empty.
@@ -104,9 +106,11 @@ public class NullValue extends AbstractValue implements LeafValue {
         }
     }
 
+    @Nonnull
     @Override
-    public String toString() {
-        return "null";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("null");
     }
 
     @Override

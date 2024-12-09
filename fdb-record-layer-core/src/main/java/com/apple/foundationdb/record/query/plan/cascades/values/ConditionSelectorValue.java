@@ -28,6 +28,7 @@ import com.apple.foundationdb.record.PlanSerializationContext;
 import com.apple.foundationdb.record.planprotos.PConditionSelectorValue;
 import com.apple.foundationdb.record.planprotos.PValue;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordStoreBase;
+import com.apple.foundationdb.record.query.plan.cascades.Formatter;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.google.auto.service.AutoService;
 import com.google.common.collect.ImmutableList;
@@ -36,6 +37,7 @@ import com.google.protobuf.Message;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
+import java.util.function.Function;
 
 /**
  * This returns the index of the first implication that is satisfied.
@@ -89,9 +91,12 @@ public class ConditionSelectorValue extends AbstractValue {
         return null;
     }
 
+    @Nonnull
     @Override
-    public String toString() {
-        return "ConditionSelector";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("ConditionSelector(" +
+                Value.explainFunctionArguments(formatter, explainFunctions) + ")");
     }
 
     @Override

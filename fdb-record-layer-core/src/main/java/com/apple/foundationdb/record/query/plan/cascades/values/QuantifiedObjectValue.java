@@ -49,6 +49,7 @@ import javax.annotation.Nullable;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * A value representing the quantifier as an object. For example, this is used to represent non-nested repeated fields.
@@ -138,12 +139,6 @@ public class QuantifiedObjectValue extends AbstractValue implements QuantifiedVa
         return super.pullUp(toBePulledUpValues, aliasMap, constantAliases, upperBaseAlias);
     }
 
-    @Nonnull
-    @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return formatter.getQuantifierName(alias);
-    }
-
     @Override
     public int hashCodeWithoutChildren() {
         return PlanHashable.objectPlanHash(PlanHashable.CURRENT_FOR_CONTINUATION, BASE_HASH);
@@ -154,9 +149,11 @@ public class QuantifiedObjectValue extends AbstractValue implements QuantifiedVa
         return PlanHashable.objectsPlanHash(mode, BASE_HASH);
     }
 
+    @Nonnull
     @Override
-    public String toString() {
-        return alias.equals(Quantifier.current()) ? "_" : "$" + alias;
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of(alias.equals(Quantifier.current()) ? "_" : formatter.getQuantifierName(alias));
     }
 
     @Override

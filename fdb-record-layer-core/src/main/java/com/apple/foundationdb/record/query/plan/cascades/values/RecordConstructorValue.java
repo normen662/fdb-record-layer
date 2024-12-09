@@ -59,8 +59,8 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
 /**
@@ -239,33 +239,22 @@ public class RecordConstructorValue extends AbstractValue implements AggregateVa
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "(" +
-               columns.stream()
-                       .map(column -> {
-                           final var field = column.getField();
-                           final var value = column.getValue();
-                           if (field.getFieldNameOptional().isPresent()) {
-                               return column.getValue().explain(formatter) + " as " + field.getFieldName();
-                           }
-                           return value.explain(formatter);
-                       })
-                       .collect(Collectors.joining(", ")) + ")";
-    }
-
-    @Override
-    public String toString() {
-        return "(" +
-               columns.stream()
-                       .map(column -> {
-                           final var field = column.getField();
-                           final var value = column.getValue();
-                           if (field.getFieldNameOptional().isPresent()) {
-                               return column.getValue() + " as " + field.getFieldName();
-                           }
-                           return value.toString();
-                       })
-                       .collect(Collectors.joining(", ")) + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        final var argumentsBuilder = ImmutableList.<String>builder();
+        int i = 0;
+        for (final var iterator = explainFunctions.iterator();
+                 iterator.hasNext(); i ++) {
+            final var child = iterator.next().apply(formatter);
+            final var column = columns.get(i);
+            final var field = column.getField();
+            if (field.getFieldNameOptional().isPresent()) {
+                argumentsBuilder.add(child.getExplainString() + " as " + field.getFieldName());
+            } else {
+                argumentsBuilder.add(child.getExplainString());
+            }
+        }
+        return ExplainInfo.of("(" + String.join(", ", argumentsBuilder.build()) + ")");
     }
 
     @SuppressWarnings("EqualsWhichDoesntCheckParameterClass")

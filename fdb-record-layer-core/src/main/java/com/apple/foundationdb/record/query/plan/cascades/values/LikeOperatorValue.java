@@ -42,6 +42,7 @@ import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type.TypeCode;
 import com.apple.foundationdb.record.query.plan.cascades.typing.TypeRepository;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Typed;
+import com.apple.foundationdb.record.query.plan.cascades.values.Value.ExplainInfo.Precedence;
 import com.google.auto.service.AutoService;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
@@ -53,6 +54,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 
 /**
@@ -95,12 +97,6 @@ public class LikeOperatorValue extends AbstractValue implements BooleanValue {
         return pattern.matcher(lhs).find();
     }
 
-    @Nonnull
-    @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return srcChild.explain(formatter) + " LIKE " + patternChild.explain(formatter);
-    }
-
     @Override
     public Optional<QueryPredicate> toQueryPredicate(@Nullable final TypeRepository typeRepository, @Nonnull final CorrelationIdentifier innermostAlias) {
         return Optional.of(new ValuePredicate(srcChild, new Comparisons.ValueComparison(Comparisons.Type.LIKE, patternChild)));
@@ -131,9 +127,14 @@ public class LikeOperatorValue extends AbstractValue implements BooleanValue {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH, srcChild, patternChild);
     }
 
+    @Nonnull
     @Override
-    public String toString() {
-        return srcChild + " LIKE " + patternChild;
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        final var src = Iterables.get(explainFunctions, 0).apply(formatter);
+        final var pattern = Iterables.get(explainFunctions, 1).apply(formatter);
+        return ExplainInfo.of(Precedence.BETWEEN, Precedence.BETWEEN.parenthesizeChild(src, true) +
+                " LIKE " + Precedence.BETWEEN.parenthesizeChild(pattern));
     }
 
     @Override

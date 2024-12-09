@@ -32,12 +32,14 @@ import com.apple.foundationdb.record.planprotos.PEmptyValue;
 import com.apple.foundationdb.record.planprotos.PValue;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordStoreBase;
 import com.apple.foundationdb.record.query.plan.cascades.AliasMap;
+import com.apple.foundationdb.record.query.plan.cascades.Formatter;
 import com.google.auto.service.AutoService;
 import com.google.common.collect.ImmutableList;
 import com.google.protobuf.Message;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import java.util.function.Function;
 
 /**
  * A value that evaluates to empty.
@@ -83,9 +85,11 @@ public class EmptyValue extends AbstractValue implements LeafValue {
         }
     }
 
+    @Nonnull
     @Override
-    public String toString() {
-        return "empty()";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("empty()");
     }
 
     @Override

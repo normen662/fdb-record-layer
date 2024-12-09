@@ -52,6 +52,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.function.BinaryOperator;
+import java.util.function.Function;
 import java.util.function.UnaryOperator;
 
 /**
@@ -90,9 +91,6 @@ public class CountValue extends AbstractValue implements AggregateValue, Streama
     }
 
     private static boolean isCountStar(@Nonnull Typed valueType) {
-        // todo: we should dispatch on the right function depending on whether the child
-        // value type is nullable or not. The '*' in count(*) must be guaranteed to be not-null
-        // during plan generation.
         return !valueType.getResultType().isPrimitive();
     }
 
@@ -120,12 +118,13 @@ public class CountValue extends AbstractValue implements AggregateValue, Streama
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        if (child != null) {
-            return operator.name().toLowerCase(Locale.ROOT) + "(" + child.explain(formatter) + ")";
-        } else {
-            return operator.name().toLowerCase(Locale.ROOT) + "()";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        if (operator == PhysicalOperator.COUNT_STAR) {
+            return ExplainInfo.of(PhysicalOperator.COUNT_STAR.name().toLowerCase(Locale.ROOT) + "(*)");
         }
+        return ExplainInfo.of(operator.name().toLowerCase(Locale.ROOT) + "(" +
+                Iterables.getOnlyElement(explainFunctions).apply(formatter).getExplainString() + ")");
     }
 
     @Nonnull
@@ -159,11 +158,6 @@ public class CountValue extends AbstractValue implements AggregateValue, Streama
     @Override
     public int planHash(@Nonnull final PlanHashMode mode) {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH, operator, child);
-    }
-
-    @Override
-    public String toString() {
-        return operator.name().toLowerCase(Locale.ROOT) + "(" + child + ")";
     }
 
     @Override
@@ -237,6 +231,7 @@ public class CountValue extends AbstractValue implements AggregateValue, Streama
      */
     public enum PhysicalOperator {
         COUNT(TypeCode.LONG, v -> v == null ? 0L : 1L, (s, v) -> Math.addExact((long)s, (long)v), UnaryOperator.identity()),
+        // TODO retire this operator -- COUNT will do the same if passed the right child
         COUNT_STAR(TypeCode.LONG, v -> 1L, (s, v) -> Math.addExact((long)s, (long)v), UnaryOperator.identity());
 
         @Nonnull

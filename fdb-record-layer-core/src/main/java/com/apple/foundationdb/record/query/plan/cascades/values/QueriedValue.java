@@ -39,6 +39,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * A value representing the source of a value derivation.
@@ -106,16 +107,12 @@ public class QueriedValue extends AbstractValue implements LeafValue, Value.NonE
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "base()";
-    }
-
-    @Override
-    public String toString() {
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
         if (recordTypeNames == null) {
-            return "base()";
+            return ExplainInfo.of("base()");
         }
-        return "base(" + String.join(",", recordTypeNames) + ")";
+        return ExplainInfo.of("base(" + String.join(",", recordTypeNames) + ")");
     }
 
     @Override

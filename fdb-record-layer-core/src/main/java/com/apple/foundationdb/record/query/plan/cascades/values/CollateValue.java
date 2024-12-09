@@ -55,6 +55,7 @@ import javax.annotation.Nullable;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * A {@link Value} that turns a string into a locale-specific sort key.
@@ -98,19 +99,24 @@ public class CollateValue extends AbstractValue {
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        StringBuilder str = new StringBuilder(stringChild.explain(formatter));
-        str.append(" COLLATE ");
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        StringBuilder str = new StringBuilder("collate(");
+        str.append(stringChild);
+        str.append(", ");
         if (localeChild != null) {
-            str.append(localeChild.explain(formatter));
+            str.append(localeChild);
         } else {
             str.append("DEFAULT");
         }
+        str.append(", ");
         if (strengthChild != null) {
-            str.append(" STRENGTH ");
-            str.append(strengthChild.explain(formatter));
+            str.append(strengthChild);
+        } else {
+            str.append("DEFAULT");
         }
-        return str.toString();
+        str.append(")");
+        return ExplainInfo.of(str.toString());
     }
 
     @Nonnull
@@ -173,26 +179,6 @@ public class CollateValue extends AbstractValue {
             CollateValue otherCollate = (CollateValue)other;
             return collatorRegistry.equals(otherCollate.collatorRegistry);
         });
-    }
-
-    @Override
-    public String toString() {
-        StringBuilder str = new StringBuilder("collate(");
-        str.append(stringChild);
-        str.append(", ");
-        if (localeChild != null) {
-            str.append(localeChild);
-        } else {
-            str.append("DEFAULT");
-        }
-        str.append(", ");
-        if (strengthChild != null) {
-            str.append(strengthChild);
-        } else {
-            str.append("DEFAULT");
-        }
-        str.append(")");
-        return str.toString();
     }
 
     @Override

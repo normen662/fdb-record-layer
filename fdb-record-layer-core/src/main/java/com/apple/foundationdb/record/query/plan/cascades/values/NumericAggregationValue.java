@@ -56,6 +56,7 @@ import com.google.common.base.Verify;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Iterables;
 import com.google.protobuf.Message;
 
 import javax.annotation.Nonnull;
@@ -69,6 +70,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.BinaryOperator;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
@@ -122,8 +124,10 @@ public abstract class NumericAggregationValue extends AbstractValue implements V
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return operator.name().toLowerCase(Locale.ROOT) + child.explain(formatter) + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of(operator.name().toLowerCase(Locale.ROOT) + "(" +
+                Iterables.getOnlyElement(explainFunctions).apply(formatter).getExplainString() + ")");
     }
 
     @Nonnull
@@ -152,11 +156,6 @@ public abstract class NumericAggregationValue extends AbstractValue implements V
     @Override
     public int planHash(@Nonnull final PlanHashMode mode) {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH, operator, child);
-    }
-
-    @Override
-    public String toString() {
-        return operator.name().toLowerCase(Locale.ROOT) + "(" + child + ")";
     }
 
     @Override

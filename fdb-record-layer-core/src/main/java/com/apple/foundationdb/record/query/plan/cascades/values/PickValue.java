@@ -31,6 +31,7 @@ import com.apple.foundationdb.record.planprotos.PPickValue;
 import com.apple.foundationdb.record.planprotos.PValue;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordStoreBase;
 import com.apple.foundationdb.record.query.plan.cascades.AliasMap;
+import com.apple.foundationdb.record.query.plan.cascades.Formatter;
 import com.apple.foundationdb.record.query.plan.cascades.SemanticException;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.google.auto.service.AutoService;
@@ -43,6 +44,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * A value representing multiple "alternative" values.
@@ -134,9 +136,11 @@ public class PickValue extends AbstractValue {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH, getChildren());
     }
 
+    @Nonnull
     @Override
-    public String toString() {
-        return "PickValue";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("pick(" + Value.explainFunctionArguments(formatter, explainFunctions) + ")");
     }
 
     @Override

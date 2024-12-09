@@ -42,6 +42,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -121,16 +122,12 @@ public class FirstOrDefaultValue extends AbstractValue {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH, childValue, onEmptyResultValue);
     }
 
-    @Override
-    public String toString() {
-        return "firstOrDefault(" + childValue + ", " + onEmptyResultValue + ")";
-    }
-
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "firstOrDefault(" + childValue.explain(formatter) + ", " +
-                onEmptyResultValue.explain(formatter) + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("firstOrDefault(" +
+                Value.explainFunctionArguments(formatter, explainFunctions) + ")");
     }
 
     @Override

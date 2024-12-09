@@ -47,6 +47,7 @@ import com.apple.foundationdb.record.query.plan.cascades.predicates.ValuePredica
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.apple.foundationdb.record.query.plan.cascades.typing.TypeRepository;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Typed;
+import com.apple.foundationdb.record.query.plan.cascades.values.Value.ExplainInfo.Precedence;
 import com.apple.foundationdb.record.query.plan.serialization.PlanSerialization;
 import com.google.auto.service.AutoService;
 import com.google.common.base.Suppliers;
@@ -67,6 +68,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BinaryOperator;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
@@ -863,16 +865,13 @@ public abstract class RelOpValue extends AbstractValue implements BooleanValue {
 
         @Nonnull
         @Override
-        public String explain(@Nonnull final Formatter formatter) {
-            final var childrenIterator = getChildren().iterator();
-            return "(" + childrenIterator.next().explain(formatter) + " " + getFunctionName() + " " + childrenIterator.next().explain(formatter) + ")";
-        }
-
-        @Nonnull
-        @Override
-        public String toString() {
-            final var childrenIterator = getChildren().iterator();
-            return "(" + childrenIterator.next() + " " + getFunctionName() + " " + childrenIterator.next() + ")";
+        public ExplainInfo explain(@Nonnull final Formatter formatter,
+                                   @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+            final var left = Iterables.get(explainFunctions, 0).apply(formatter);
+            final var right = Iterables.get(explainFunctions, 1).apply(formatter);
+            return ExplainInfo.of(Precedence.COMPARISONS,
+                    Precedence.COMPARISONS.parenthesizeChild(left) + " " + getFunctionName() + " " +
+                            Precedence.COMPARISONS.parenthesizeChild(right));
         }
 
         @Nonnull
@@ -973,16 +972,11 @@ public abstract class RelOpValue extends AbstractValue implements BooleanValue {
 
         @Nonnull
         @Override
-        public String explain(@Nonnull final Formatter formatter) {
-            final var onlyChild = Iterables.getOnlyElement(getChildren());
-            return "(" + getFunctionName() + onlyChild.explain(formatter) + ")";
-        }
-
-        @Nonnull
-        @Override
-        public String toString() {
-            final var onlyChild = Iterables.getOnlyElement(getChildren());
-            return "(" + getFunctionName() + onlyChild + ")";
+        public ExplainInfo explain(@Nonnull final Formatter formatter,
+                                   @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+            final var onlyChild = Iterables.getOnlyElement(explainFunctions).apply(formatter);
+            return ExplainInfo.of(Precedence.UNARY_MINUS_BITWISE_NOT,
+                    getFunctionName() + Precedence.UNARY_MINUS_BITWISE_NOT.parenthesizeChild(onlyChild));
         }
 
         @Nonnull

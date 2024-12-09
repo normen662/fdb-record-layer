@@ -85,6 +85,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -143,8 +145,20 @@ public interface Value extends Correlated<Value>, TreeLike<Value>, UsesValueEqui
      * @return a human-friendly textual representation of this {@link Value}.
      */
     @Nonnull
-    default String explain(@Nonnull final Formatter formatter) {
-        throw new UnsupportedOperationException("object of class " + this.getClass().getSimpleName() + " does not override explain");
+    default ExplainInfo explain(@Nonnull final Formatter formatter) {
+        final var explainFunctions =
+                Streams.stream(getChildren())
+                        .map(child -> (Function<Formatter, ExplainInfo>)child::explain)
+                        .collect(ImmutableList.toImmutableList());
+        return explain(formatter, explainFunctions);
+    }
+
+    @Nonnull
+    @SuppressWarnings("unused")
+    default ExplainInfo explain(@Nonnull final Formatter formatter,
+                                @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        throw new UnsupportedOperationException("object of class " + this.getClass().getSimpleName() +
+                " does not override explain");
     }
 
     /**
@@ -434,91 +448,6 @@ public interface Value extends Correlated<Value>, TreeLike<Value>, UsesValueEqui
         return Optional.empty();
     }
 
-    @Nonnull
-    PValue toValueProto(@Nonnull PlanSerializationContext serializationContext);
-
-    @Nonnull
-    static Value fromValueProto(@Nonnull final PlanSerializationContext serializationContext,
-                                @Nonnull final PValue valueProto) {
-        return (Value)PlanSerialization.dispatchFromProtoContainer(serializationContext, valueProto);
-    }
-
-    static List<Value> fromKeyExpressions(@Nonnull final Collection<? extends KeyExpression> expressions, @Nonnull final Quantifier quantifier) {
-        return fromKeyExpressions(expressions, quantifier.getAlias(), quantifier.getFlowedObjectType());
-    }
-
-    static List<Value> fromKeyExpressions(@Nonnull final Collection<? extends KeyExpression> expressions, @Nonnull final CorrelationIdentifier alias, @Nonnull final Type inputType) {
-        return expressions
-                .stream()
-                .map(keyExpression -> new ScalarTranslationVisitor(keyExpression).toResultValue(alias, inputType))
-                .collect(ImmutableList.toImmutableList());
-    }
-
-    /**
-     * A scalar {@link Value} that cannot be evaluated.
-     */
-    @API(API.Status.EXPERIMENTAL)
-    interface NonEvaluableValue extends Value {
-        @Nullable
-        @Override
-        default <M extends Message> Object eval(@Nullable final FDBRecordStoreBase<M> store,
-                                                @Nonnull final EvaluationContext context) {
-            throw new RecordCoreException("value cannot be evaluated");
-        }
-    }
-
-    /**
-     * A scalar {@link Value} that can be inverted, i.e. {@code inverse_f(f(x)) = x} for all {@code x}. {@link Value}s
-     * that implement this interface merely declare that an inverse exists. If an implementation of an inverse
-     * {@link Value} is available, it provides a way to inject an instance of the inverse on top of a given, compatible
-     * child value.
-     * @param <V> type parameter of the kind of inverse value of this value.
-     */
-    @API(API.Status.EXPERIMENTAL)
-    interface InvertableValue<V extends Value> extends Value {
-        /**
-         * Create the inverse value of this value if it can be constructed. An inverse can be known to exist, i.e.
-         * by knowing that a function is bijective and surjective, but it might also be hard to efficiently compute it.
-         * Also, there might just be no implementation for it. In these cases, this method is allowed to return
-         * {@code Optional.empty()}.
-         * @param newChildValue the child value to compute the inverse over
-         * @return an optional containing the inverse value over the child value handed in, empty, if it cannot be
-         *         constructed.
-         */
-        Optional<V> createInverseValueMaybe(@Nonnull Value newChildValue);
-    }
-
-    /**
-     * A marker interface for {@link Value}s that can be used in the context of range construction, it must be evaluable
-     * without being bound to an {@link FDBRecordStoreBase}.
-     * See {@link com.apple.foundationdb.record.query.plan.cascades.predicates.RangeConstraints}.
-     */
-    @API(API.Status.EXPERIMENTAL)
-    interface RangeMatchableValue extends Value {
-    }
-
-    /**
-     * A scalar value type that can only fetched from an index, that is the value cannot be fetched from the base record
-     * nor can it be computed "on-the-fly".
-     */
-    @API(API.Status.EXPERIMENTAL)
-    interface IndexOnlyValue extends Value {
-        @Nullable
-        @Override
-        default <M extends Message> Object eval(@Nullable final FDBRecordStoreBase<M> store,
-                                                @Nonnull final EvaluationContext context) {
-            throw new RecordCoreException("value is index-only and cannot be evaluated");
-        }
-    }
-
-    /**
-     * Tag interface for marking a {@link Value} that is non-deterministic, i.e. each time we call
-     * {@link Value#eval(FDBRecordStoreBase, EvaluationContext)} it might produce a different
-     * result.
-     */
-    @API(API.Status.EXPERIMENTAL)
-    interface NondeterministicValue extends Value {}
-
     /**
      * Method to simplify this value using a rule set passed in.
      * @param ruleSet a rule set
@@ -771,5 +700,190 @@ public interface Value extends Correlated<Value>, TreeLike<Value>, UsesValueEqui
                             }
                             return null;
                         }));
+    }
+
+    @Nonnull
+    PValue toValueProto(@Nonnull PlanSerializationContext serializationContext);
+
+    @Nonnull
+    static Value fromValueProto(@Nonnull final PlanSerializationContext serializationContext,
+                                @Nonnull final PValue valueProto) {
+        return (Value)PlanSerialization.dispatchFromProtoContainer(serializationContext, valueProto);
+    }
+
+    static List<Value> fromKeyExpressions(@Nonnull final Collection<? extends KeyExpression> expressions, @Nonnull final Quantifier quantifier) {
+        return fromKeyExpressions(expressions, quantifier.getAlias(), quantifier.getFlowedObjectType());
+    }
+
+    static List<Value> fromKeyExpressions(@Nonnull final Collection<? extends KeyExpression> expressions, @Nonnull final CorrelationIdentifier alias, @Nonnull final Type inputType) {
+        return expressions
+                .stream()
+                .map(keyExpression -> new ScalarTranslationVisitor(keyExpression).toResultValue(alias, inputType))
+                .collect(ImmutableList.toImmutableList());
+    }
+
+    static String explainFunctionArguments(@Nonnull final Formatter formatter,
+                                           @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return Streams.stream(explainFunctions)
+                .map(explainFunction -> explainFunction.apply(formatter))
+                .map(ExplainInfo::getExplainString)
+                .collect(Collectors.joining(", "));
+    }
+
+    /**
+     * A scalar {@link Value} that cannot be evaluated.
+     */
+    @API(API.Status.EXPERIMENTAL)
+    interface NonEvaluableValue extends Value {
+        @Nullable
+        @Override
+        default <M extends Message> Object eval(@Nullable final FDBRecordStoreBase<M> store,
+                                                @Nonnull final EvaluationContext context) {
+            throw new RecordCoreException("value cannot be evaluated");
+        }
+    }
+
+    /**
+     * A scalar {@link Value} that can be inverted, i.e. {@code inverse_f(f(x)) = x} for all {@code x}. {@link Value}s
+     * that implement this interface merely declare that an inverse exists. If an implementation of an inverse
+     * {@link Value} is available, it provides a way to inject an instance of the inverse on top of a given, compatible
+     * child value.
+     * @param <V> type parameter of the kind of inverse value of this value.
+     */
+    @API(API.Status.EXPERIMENTAL)
+    interface InvertableValue<V extends Value> extends Value {
+        /**
+         * Create the inverse value of this value if it can be constructed. An inverse can be known to exist, i.e.
+         * by knowing that a function is bijective and surjective, but it might also be hard to efficiently compute it.
+         * Also, there might just be no implementation for it. In these cases, this method is allowed to return
+         * {@code Optional.empty()}.
+         * @param newChildValue the child value to compute the inverse over
+         * @return an optional containing the inverse value over the child value handed in, empty, if it cannot be
+         *         constructed.
+         */
+        Optional<V> createInverseValueMaybe(@Nonnull Value newChildValue);
+    }
+
+    /**
+     * A marker interface for {@link Value}s that can be used in the context of range construction, it must be evaluable
+     * without being bound to an {@link FDBRecordStoreBase}.
+     * See {@link com.apple.foundationdb.record.query.plan.cascades.predicates.RangeConstraints}.
+     */
+    @API(API.Status.EXPERIMENTAL)
+    interface RangeMatchableValue extends Value {
+    }
+
+    /**
+     * A scalar value type that can only fetched from an index, that is the value cannot be fetched from the base record
+     * nor can it be computed "on-the-fly".
+     */
+    @API(API.Status.EXPERIMENTAL)
+    interface IndexOnlyValue extends Value {
+        @Nullable
+        @Override
+        default <M extends Message> Object eval(@Nullable final FDBRecordStoreBase<M> store,
+                                                @Nonnull final EvaluationContext context) {
+            throw new RecordCoreException("value is index-only and cannot be evaluated");
+        }
+    }
+
+    /**
+     * Tag interface for marking a {@link Value} that is non-deterministic, i.e. each time we call
+     * {@link Value#eval(FDBRecordStoreBase, EvaluationContext)} it might produce a different
+     * result.
+     */
+    @API(API.Status.EXPERIMENTAL)
+    interface NondeterministicValue extends Value {}
+
+
+    /**
+     * Holder class for the result of a call to {@link #explain(Formatter)} and derivatives.
+     */
+    class ExplainInfo {
+        /**
+         * Precedence which informs the explain code path whether to put parentheses around explain terms or not.
+         */
+        public enum Precedence {
+            NEVER_PARENS(-2),
+            ALWAYS_PARENS(-1),
+            DOT(0),
+            UNARY_MINUS_BITWISE_NOT(1),
+            BITWISE_XOR(2),
+            MULTIPLICATIVE(3),
+            ADDITIVE(4),
+            SHIFT(5),
+            BITWISE_AND(6),
+            BITWISE_OR(7),
+            COMPARISONS(8),
+            BETWEEN(9),
+            NOT(10),
+            AND(11),
+            XOR(12),
+            OR(13),
+            ASSIGNMENT(13);
+
+            private final int precedenceOrdinal;
+
+            Precedence(final int precedenceOrdinal) {
+                this.precedenceOrdinal = precedenceOrdinal;
+            }
+
+            public int getPrecedenceOrdinal() {
+                return precedenceOrdinal;
+            }
+
+            @Nonnull
+            public String parenthesizeChild(@Nonnull final ExplainInfo childExplainInfo) {
+                return parenthesizeChild(childExplainInfo, false);
+            }
+
+            @Nonnull
+            public String parenthesizeChild(@Nonnull final ExplainInfo childExplainInfo, final boolean isStrict) {
+                return parenthesizeChild(childExplainInfo.getPrecedence(), childExplainInfo.getExplainString(),
+                        isStrict);
+            }
+
+            @Nonnull
+            public String parenthesizeChild(@Nonnull final Precedence childPrecedence,
+                                            @Nonnull final String childExplainString, final boolean isStrict) {
+                if (childPrecedence == ALWAYS_PARENS ||
+                        (isStrict && childPrecedence.getPrecedenceOrdinal() == getPrecedenceOrdinal()) ||
+                        childPrecedence.getPrecedenceOrdinal() > getPrecedenceOrdinal()) {
+                    return "(" + childExplainString + ")";
+                }
+                return childExplainString;
+            }
+        }
+
+        @Nonnull
+        private final Precedence precedence;
+
+        @Nonnull
+        private final String explainString;
+
+        private ExplainInfo(@Nonnull final Precedence precedence, @Nonnull final String explainString) {
+            this.precedence = precedence;
+            this.explainString = explainString;
+        }
+
+        @Nonnull
+        public Precedence getPrecedence() {
+            return precedence;
+        }
+
+        @Nonnull
+        public String getExplainString() {
+            return explainString;
+        }
+
+        @Nonnull
+        public static ExplainInfo of(@Nonnull final String explainString) {
+            return new ExplainInfo(Precedence.NEVER_PARENS, explainString);
+        }
+
+        @Nonnull
+        public static ExplainInfo of(@Nonnull final Precedence precedence, @Nonnull final String explainString) {
+            return new ExplainInfo(precedence, explainString);
+        }
     }
 }

@@ -37,12 +37,14 @@ import com.apple.foundationdb.record.query.plan.cascades.Formatter;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.google.auto.service.AutoService;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import com.google.protobuf.Message;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * A wrapper around a constant.
@@ -122,15 +124,12 @@ public class ConstantValue extends AbstractValue implements LeafValue {
         }
     }
 
-    @Override
-    public String toString() {
-        return "const(" + value + ")";
-    }
-
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "const(" + value + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("const(" +
+                Iterables.getOnlyElement(explainFunctions).apply(formatter).getExplainString() + ")");
     }
 
     @Override

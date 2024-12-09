@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2015-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2015-2024 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,49 +21,20 @@
 package com.apple.foundationdb.record.query.plan.cascades;
 
 import com.apple.foundationdb.annotation.SpotBugsSuppressWarnings;
-import com.apple.foundationdb.record.query.plan.cascades.values.Value;
-import com.google.common.collect.BiMap;
-import com.google.common.collect.HashBiMap;
-import com.google.common.collect.Maps;
 
 import javax.annotation.Nonnull;
-import java.util.Map;
-import java.util.Objects;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Formatting for {@link Value#explain}.
+ * Interface for all kinds of explain formatters.
  */
-public class Formatter {
-    @Nonnull private final AtomicInteger quantifierNumber;
-    @Nonnull private final BiMap<CorrelationIdentifier, String> aliasToFormattingNameMap;
-    @Nonnull private final Map<CorrelationIdentifier, Quantifier> aliasToQuantifierMap;
+public interface Formatter {
+    void registerForFormatting(@Nonnull Quantifier quantifier);
 
-    public Formatter() {
-        this.quantifierNumber = new AtomicInteger(0);
-        this.aliasToFormattingNameMap = HashBiMap.create();
-        this.aliasToQuantifierMap = Maps.newHashMap();
-    }
-
-    public void registerForFormatting(@Nonnull final Quantifier quantifier) {
-        aliasToFormattingNameMap.put(quantifier.getAlias(), "q" + quantifierNumber.getAndIncrement());
-        aliasToQuantifierMap.put(quantifier.getAlias(), quantifier);
-    }
-
-    public void registerForFormatting(@Nonnull final CorrelationIdentifier alias) {
-        aliasToFormattingNameMap.putIfAbsent(alias, "q" + quantifierNumber.getAndIncrement());
-    }
-
-    @SpotBugsSuppressWarnings(value = "NP_NULL_ON_SOME_PATH_FROM_RETURN_VALUE",
-            justification = "If we get a NP from the map because the key does not exist, a NPE" +
-                            " will be thrown because of Objects.requireNonNull")
-    @Nonnull
-    public String getQuantifierName(@Nonnull final CorrelationIdentifier alias) {
-        return Objects.requireNonNull(aliasToFormattingNameMap.get(alias));
-    }
+    void registerForFormatting(@Nonnull CorrelationIdentifier alias);
 
     @Nonnull
-    public Quantifier getQuantifier(@Nonnull final CorrelationIdentifier alias) {
-        return Objects.requireNonNull(aliasToQuantifierMap.get(alias));
-    }
+    String getQuantifierName(@Nonnull CorrelationIdentifier alias);
+
+    @Nonnull
+    Quantifier getQuantifier(@Nonnull CorrelationIdentifier alias);
 }

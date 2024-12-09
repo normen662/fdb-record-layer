@@ -47,6 +47,7 @@ import com.google.common.base.Verify;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Iterables;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.Message;
 
@@ -56,6 +57,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -260,13 +262,10 @@ public class PromoteValue extends AbstractValue implements ValueWithChild, Value
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "promote(" + inValue.explain(formatter) + " as " + promoteToType + ")";
-    }
-
-    @Override
-    public String toString() {
-        return "promote(" + inValue + " as " + promoteToType + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        final var in = Iterables.getOnlyElement(explainFunctions).apply(formatter);
+        return ExplainInfo.of("promote(" + in.getExplainString() + " as " + promoteToType + ")");
     }
 
     @Override

@@ -38,7 +38,7 @@ import com.google.common.collect.Iterators;
 import javax.annotation.Nonnull;
 import java.util.Iterator;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.function.Function;
 
 /**
  * A value merges the input messages given to it into an output message.
@@ -130,19 +130,21 @@ public abstract class WindowedValue extends AbstractValue {
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return getName() + "(" +
-               argumentValues.stream().map(a -> a.explain(formatter)).collect(Collectors.joining(", ")) + " PARTITION BY [" +
-               partitioningValues.stream().map(a -> a.explain(formatter)).collect(Collectors.joining(", ")) +
-               "])";
-    }
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        int i = 0;
+        final var argumentsBuilder = ImmutableList.<String>builder();
+        final var iterator = explainFunctions.iterator();
+        for (; i < argumentValues.size(); i ++) {
+            argumentsBuilder.add(iterator.next().apply(formatter).getExplainString());
+        }
+        final var partitioningBuilder = ImmutableList.<String>builder();
+        for (; iterator.hasNext(); i ++) {
+            partitioningBuilder.add(iterator.next().apply(formatter).getExplainString());
+        }
 
-    @Override
-    public String toString() {
-        return getName() + "(" +
-               argumentValues.stream().map(Value::toString).collect(Collectors.joining(", ")) + " PARTITION BY [" +
-               partitioningValues.stream().map(Value::toString).collect(Collectors.joining(", ")) +
-               "])";
+        return ExplainInfo.of(getName() + "(" + String.join(", ", argumentsBuilder.build()) +
+                " PARTITION BY " + String.join(", ", partitioningBuilder.build()) + ")");
     }
 
     @Override

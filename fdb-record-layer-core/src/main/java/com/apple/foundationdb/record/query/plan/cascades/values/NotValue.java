@@ -43,6 +43,7 @@ import com.apple.foundationdb.record.query.plan.cascades.typing.Typed;
 import com.google.auto.service.AutoService;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import com.google.protobuf.Message;
 
 import javax.annotation.Nonnull;
@@ -50,6 +51,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * A value that flips the output of its boolean child.
@@ -137,13 +139,11 @@ public class NotValue extends AbstractValue implements BooleanValue, ValueWithCh
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "not(" + child.explain(formatter) + ")";
-    }
-
-    @Override
-    public String toString() {
-        return "not(" + child + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        final var childExplainInfo = Iterables.getOnlyElement(explainFunctions).apply(formatter);
+        return ExplainInfo.of(ExplainInfo.Precedence.NOT,
+                "not " + ExplainInfo.Precedence.NOT.parenthesizeChild(childExplainInfo));
     }
 
     @Override

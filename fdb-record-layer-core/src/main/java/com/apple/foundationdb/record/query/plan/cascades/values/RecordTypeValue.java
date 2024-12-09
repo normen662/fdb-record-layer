@@ -42,6 +42,7 @@ import com.google.protobuf.Message;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * A value which is unique for each record type produced by its quantifier.
@@ -112,13 +113,10 @@ public class RecordTypeValue extends AbstractValue {
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return toString();
-    }
-
-    @Override
-    public String toString() {
-        return "recordType(" + in + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("recordType(" +
+                Value.explainFunctionArguments(formatter, explainFunctions) + ")");
     }
 
     @Nonnull

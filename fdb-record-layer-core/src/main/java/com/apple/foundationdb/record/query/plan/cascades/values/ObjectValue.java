@@ -45,6 +45,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * A {@link Value} representing any object.
@@ -106,12 +107,6 @@ public class ObjectValue extends AbstractValue implements LeafValue {
         return alias;
     }
 
-    @Nonnull
-    @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return formatter.getQuantifierName(alias);
-    }
-
     @Override
     public int hashCodeWithoutChildren() {
         return PlanHashable.objectPlanHash(PlanHashable.CURRENT_FOR_CONTINUATION, BASE_HASH);
@@ -122,9 +117,11 @@ public class ObjectValue extends AbstractValue implements LeafValue {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH);
     }
 
+    @Nonnull
     @Override
-    public String toString() {
-        return alias.toString();
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of(formatter.getQuantifierName(alias));
     }
 
     @Override

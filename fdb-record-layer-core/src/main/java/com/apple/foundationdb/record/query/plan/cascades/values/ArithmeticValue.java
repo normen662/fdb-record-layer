@@ -39,6 +39,7 @@ import com.apple.foundationdb.record.query.plan.cascades.SemanticException;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type.TypeCode;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Typed;
+import com.apple.foundationdb.record.query.plan.cascades.values.Value.ExplainInfo.Precedence;
 import com.apple.foundationdb.record.query.plan.serialization.PlanSerialization;
 import com.google.auto.service.AutoService;
 import com.google.common.annotations.VisibleForTesting;
@@ -59,6 +60,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.BinaryOperator;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -108,8 +110,14 @@ public class ArithmeticValue extends AbstractValue {
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "(" + leftChild.explain(formatter) + " " + operator.getLogicalOperator().getInfixNotation() + " " + rightChild.explain(formatter) + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter, @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        final var left = Iterables.get(explainFunctions, 0).apply(formatter);
+        final var right = Iterables.get(explainFunctions, 1).apply(formatter);
+        final var logicalOperator = getLogicalOperator();
+        final var precedence = logicalOperator.getPrecedence();
+        return ExplainInfo.of(precedence,
+                precedence.parenthesizeChild(left) + " " + logicalOperator.getInfixNotation() + " " +
+                        precedence.parenthesizeChild(right));
     }
 
     @Nonnull
@@ -150,11 +158,6 @@ public class ArithmeticValue extends AbstractValue {
             ArithmeticValue otherArithmetic = (ArithmeticValue)other;
             return operator.equals(otherArithmetic.operator);
         });
-    }
-
-    @Override
-    public String toString() {
-        return operator.name().toLowerCase(Locale.ROOT) + "(" + leftChild + ", " + rightChild + ")";
     }
 
     @Override
@@ -359,29 +362,37 @@ public class ArithmeticValue extends AbstractValue {
      * Logical operator.
      */
     public enum LogicalOperator {
-        ADD("+"),
-        SUB("-"),
-        MUL("*"),
-        DIV("/"),
-        MOD("%"),
-        BITOR("|"),
-        BITAND("&"),
-        BITXOR("^"),
-        BITMAP_BUCKET_NUMBER("bitmap_bucket_number"),
-        BITMAP_BUCKET_OFFSET("bitmap_bucket_offset"),
-        BITMAP_BIT_POSITION("bitmap_bit_position")
+        ADD("+", Precedence.ADDITIVE),
+        SUB("-", Precedence.ADDITIVE),
+        MUL("*", Precedence.MULTIPLICATIVE),
+        DIV("/", Precedence.MULTIPLICATIVE),
+        MOD("%", Precedence.MULTIPLICATIVE),
+        BITOR("|", Precedence.BITWISE_OR),
+        BITAND("&", Precedence.BITWISE_AND),
+        BITXOR("^", Precedence.BITWISE_XOR),
+        BITMAP_BUCKET_NUMBER("bitmap_bucket_number", Precedence.NEVER_PARENS),
+        BITMAP_BUCKET_OFFSET("bitmap_bucket_offset", Precedence.NEVER_PARENS),
+        BITMAP_BIT_POSITION("bitmap_bit_position", Precedence.NEVER_PARENS)
         ;
 
         @Nonnull
         private final String infixNotation;
+        @Nonnull
+        private final Precedence precedence;
 
-        LogicalOperator(@Nonnull final String infixNotation) {
+        LogicalOperator(@Nonnull final String infixNotation, Precedence precedence) {
             this.infixNotation = infixNotation;
+            this.precedence = precedence;
         }
 
         @Nonnull
         public String getInfixNotation() {
             return infixNotation;
+        }
+
+        @Nonnull
+        public Precedence getPrecedence() {
+            return precedence;
         }
     }
 

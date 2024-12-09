@@ -51,6 +51,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * A value that produces a binary encoding that is comparable according to certain modes gives by
@@ -150,13 +151,10 @@ public class ToOrderedBytesValue extends AbstractValue implements ValueWithChild
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "to_ordered_bytes(" + child.explain(formatter) + ", " + getDirection() + ")";
-    }
-
-    @Override
-    public String toString() {
-        return "to_ordered_bytes(" + child + ", " + getDirection() + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("to_ordered_bytes(" +
+                Value.explainFunctionArguments(formatter, explainFunctions) + ", " + getDirection() + ")");
     }
 
     @Override

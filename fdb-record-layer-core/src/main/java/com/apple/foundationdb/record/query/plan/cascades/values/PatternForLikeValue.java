@@ -37,6 +37,7 @@ import com.apple.foundationdb.record.query.plan.cascades.SemanticException;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type.TypeCode;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Typed;
+import com.apple.foundationdb.record.query.plan.cascades.values.Value.ExplainInfo.Precedence;
 import com.apple.foundationdb.util.StringUtils;
 import com.google.auto.service.AutoService;
 import com.google.common.base.Verify;
@@ -50,6 +51,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * A {@link Value} that applies a like operator on its child expressions.
@@ -116,12 +118,6 @@ public class PatternForLikeValue extends AbstractValue {
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return patternChild.explain(formatter) + " ESCAPE " + escapeChild.explain(formatter);
-    }
-
-    @Nonnull
-    @Override
     protected Iterable<? extends Value> computeChildren() {
         return  ImmutableList.of(patternChild, escapeChild);
     }
@@ -145,9 +141,15 @@ public class PatternForLikeValue extends AbstractValue {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH, patternChild, escapeChild);
     }
 
+    @Nonnull
     @Override
-    public String toString() {
-        return patternChild + " ESCAPE " + escapeChild;
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        final var pattern = Iterables.get(explainFunctions, 0).apply(formatter);
+        final var escape = Iterables.get(explainFunctions, 1).apply(formatter);
+
+        return ExplainInfo.of(Precedence.BETWEEN.parenthesizeChild(pattern) + " ESCAPE " +
+                Precedence.BETWEEN.parenthesizeChild(escape));
     }
 
     @Override

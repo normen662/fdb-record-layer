@@ -47,6 +47,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * A wrapper around a literal of the given type.
@@ -156,28 +157,11 @@ public class LiteralValue<T> extends AbstractValue implements LeafValue, Value.R
                 (T)PlanSerialization.protoToValueObject(literalValueProto.getValue()));
     }
 
-    @Override
-    public String toString() {
-        if (value == null) {
-            return "null";
-        }
-
-        switch (resultType.getTypeCode()) {
-            case INT:
-            case LONG:
-            case FLOAT:
-            case DOUBLE:
-                return value.toString();
-            default:
-                return "'" + value + "'";
-        }
-
-    }
-
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return formatLiteral(resultType, Comparisons.toPrintable(value));
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of(formatLiteral(resultType, Comparisons.toPrintable(value)));
     }
 
     @Override

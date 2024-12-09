@@ -96,12 +96,6 @@ public class VariadicFunctionValue extends AbstractValue {
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return operator.name().toLowerCase(Locale.ROOT) + "(" + children.stream().map(c -> c.explain(formatter)).collect(Collectors.joining(",")) + ")";
-    }
-
-    @Nonnull
-    @Override
     public Type getResultType() {
         return children.get(0).getResultType();
     }
@@ -129,9 +123,12 @@ public class VariadicFunctionValue extends AbstractValue {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH, operator, children);
     }
 
+    @Nonnull
     @Override
-    public String toString() {
-        return operator.name().toLowerCase(Locale.ROOT) + "(" + children.stream().map(Object::toString).collect(Collectors.joining(",")) + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of(operator.name().toLowerCase(Locale.ROOT) + "(" +
+                Value.explainFunctionArguments(formatter, explainFunctions) + ")");
     }
 
     @Override

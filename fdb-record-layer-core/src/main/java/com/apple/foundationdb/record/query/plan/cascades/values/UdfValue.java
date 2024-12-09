@@ -23,12 +23,14 @@ package com.apple.foundationdb.record.query.plan.cascades.values;
 import com.apple.foundationdb.record.EvaluationContext;
 import com.apple.foundationdb.record.PlanHashable;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordStoreBase;
+import com.apple.foundationdb.record.query.plan.cascades.Formatter;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.google.protobuf.Message;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -84,6 +86,14 @@ public abstract class UdfValue extends AbstractValue {
     @Nonnull
     @Override
     public abstract Value withChildren(Iterable<? extends Value> newChildren);
+
+    @Nonnull
+    @Override
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of(getClass().getSimpleName() + "(" +
+                Value.explainFunctionArguments(formatter, explainFunctions) + ")");
+    }
 
     @Nullable
     public abstract Object call(@Nonnull List<Object> arguments);

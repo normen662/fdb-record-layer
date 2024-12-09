@@ -50,6 +50,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 
 import static com.apple.foundationdb.record.query.plan.IndexKeyValueToPartialRecord.getForOrdinalPath;
 
@@ -155,13 +156,9 @@ public class IndexEntryObjectValue extends AbstractValue implements LeafValue, V
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return toString();
-    }
-
-    @Override
-    public String toString() {
-        return "%" + source + ":" + ordinalPath;
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("%" + source + ":" + ordinalPath);
     }
 
     @Nonnull

@@ -43,6 +43,7 @@ import com.apple.foundationdb.record.query.plan.cascades.predicates.QueryPredica
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.apple.foundationdb.record.query.plan.cascades.typing.TypeRepository;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Typed;
+import com.apple.foundationdb.record.query.plan.cascades.values.Value.ExplainInfo.Precedence;
 import com.google.auto.service.AutoService;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
@@ -54,6 +55,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * A {@link Value} that applies conjunction/disjunction on its boolean children, and if possible, simplifies its boolean children.
@@ -71,19 +73,27 @@ public class AndOrValue extends AbstractValue implements BooleanValue {
     private final Operator operator;
 
     private enum Operator {
-        AND("AND"),
-        OR("OR");
+        AND("AND", Precedence.AND),
+        OR("OR", Precedence.OR);
 
         @Nonnull
         private final String infixRepresentation;
+        @Nonnull
+        private final Precedence precedence;
 
-        Operator(@Nonnull final String infixRepresentation) {
+        Operator(@Nonnull final String infixRepresentation, @Nonnull final Precedence precedence) {
             this.infixRepresentation = infixRepresentation;
+            this.precedence = precedence;
         }
 
         @Nonnull
         private String getInfixRepresentation() {
             return infixRepresentation;
+        }
+
+        @Nonnull
+        public Precedence getPrecedence() {
+            return precedence;
         }
 
         @Nonnull
@@ -134,8 +144,14 @@ public class AndOrValue extends AbstractValue implements BooleanValue {
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "(" + leftChild.explain(formatter) + " " + operator.getInfixRepresentation() + " " + rightChild.explain(formatter) + ")";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        final var left = Iterables.get(explainFunctions, 0).apply(formatter);
+        final var right = Iterables.get(explainFunctions, 1).apply(formatter);
+        final var precedence = operator.getPrecedence();
+        return ExplainInfo.of(precedence,
+                precedence.parenthesizeChild(left) + " " + operator.getInfixRepresentation() + " " +
+                        precedence.parenthesizeChild(right));
     }
 
     @Nonnull
@@ -152,11 +168,6 @@ public class AndOrValue extends AbstractValue implements BooleanValue {
     @Override
     public int planHash(@Nonnull final PlanHashMode mode) {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH, functionName, leftChild, rightChild);
-    }
-
-    @Override
-    public String toString() {
-        return functionName + "(" + leftChild + ", " + rightChild + ")";
     }
 
     @Override

@@ -42,6 +42,7 @@ import com.apple.foundationdb.record.query.plan.cascades.predicates.ValuePredica
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.apple.foundationdb.record.query.plan.cascades.typing.TypeRepository;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Typed;
+import com.apple.foundationdb.record.query.plan.cascades.values.Value.ExplainInfo.Precedence;
 import com.google.auto.service.AutoService;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Verify;
@@ -54,6 +55,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * A {@link Value} that checks if the left child is in the list of values.
@@ -155,15 +157,15 @@ public class InOpValue extends AbstractValue implements BooleanValue {
 
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "(" + probeValue.explain(formatter) + " IN " + inArrayValue.explain(formatter) + ")";
-    }
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        final var probe = Iterables.get(explainFunctions, 0).apply(formatter);
+        final var inArray = Iterables.get(explainFunctions, 1).apply(formatter);
 
-    @Override
-    public String toString() {
-        return "(" + probeValue + " IN " + inArrayValue + ")";
+        return ExplainInfo.of(Precedence.BETWEEN,
+                Precedence.BETWEEN.parenthesizeChild(probe, true) +
+                        " IN " + Precedence.BETWEEN.parenthesizeChild(inArray, true));
     }
-
 
     @Override
     public int hashCode() {

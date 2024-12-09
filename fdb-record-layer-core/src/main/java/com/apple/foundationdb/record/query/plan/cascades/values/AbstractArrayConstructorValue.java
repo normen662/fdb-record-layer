@@ -48,6 +48,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -96,10 +97,15 @@ public abstract class AbstractArrayConstructorValue extends AbstractValue implem
         return children;
     }
 
+
     @Nonnull
     @Override
-    public String explain(@Nonnull final Formatter formatter) {
-        return "[" + children.stream().map(child -> child.explain(formatter)).collect(Collectors.joining(", ")) + "]";
+    public ExplainInfo explain(@Nonnull final Formatter formatter,
+                               @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
+        return ExplainInfo.of("array(" +
+                Streams.stream(explainFunctions)
+                        .map(explainFunction -> explainFunction.apply(formatter).getExplainString())
+                        .collect(Collectors.joining(", ")) + ")");
     }
 
     @Override
@@ -110,11 +116,6 @@ public abstract class AbstractArrayConstructorValue extends AbstractValue implem
     @Override
     public int planHash(@Nonnull final PlanHashMode mode) {
         return PlanHashable.objectsPlanHash(mode, BASE_HASH, children);
-    }
-
-    @Override
-    public String toString() {
-        return "array(" + children.stream().map(Object::toString).collect(Collectors.joining(", ")) + ")";
     }
 
     @Override
