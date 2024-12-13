@@ -28,7 +28,7 @@ import com.apple.foundationdb.record.ObjectPlanHash;
 import com.apple.foundationdb.record.PlanDeserializer;
 import com.apple.foundationdb.record.PlanHashable;
 import com.apple.foundationdb.record.PlanSerializationContext;
-import com.apple.foundationdb.record.planprotos.PQuantifiedObjectValue;
+import com.apple.foundationdb.record.planprotos.PQuantifiedRecordValue;
 import com.apple.foundationdb.record.planprotos.PValue;
 import com.apple.foundationdb.record.provider.foundationdb.FDBRecordStoreBase;
 import com.apple.foundationdb.record.query.plan.cascades.AliasMap;
@@ -51,15 +51,15 @@ import java.util.function.Function;
  * A value representing the quantifier as an object. For example, this is used to represent non-nested repeated fields.
  */
 @API(API.Status.EXPERIMENTAL)
-public class QuantifiedObjectValue extends AbstractValue implements QuantifiedValue {
-    private static final ObjectPlanHash BASE_HASH = new ObjectPlanHash("Quantified-Object-Value");
+public class QuantifiedRecordValue extends AbstractValue implements QuantifiedValue {
+    private static final ObjectPlanHash BASE_HASH = new ObjectPlanHash("Quantified-Record-Value");
 
     @Nonnull
     private final CorrelationIdentifier alias;
     @Nonnull
     private final Type resultType;
 
-    private QuantifiedObjectValue(@Nonnull final CorrelationIdentifier alias, @Nonnull final Type resultType) {
+    private QuantifiedRecordValue(@Nonnull final CorrelationIdentifier alias, @Nonnull final Type resultType) {
         this.alias = alias;
         this.resultType = resultType;
     }
@@ -73,7 +73,7 @@ public class QuantifiedObjectValue extends AbstractValue implements QuantifiedVa
     @Nonnull
     @Override
     public Value rebaseLeaf(@Nonnull final CorrelationIdentifier targetAlias) {
-        return QuantifiedObjectValue.of(targetAlias, resultType);
+        return QuantifiedRecordValue.of(targetAlias, resultType);
     }
 
     @Nonnull
@@ -86,11 +86,7 @@ public class QuantifiedObjectValue extends AbstractValue implements QuantifiedVa
     @Override
     public <M extends Message> Object eval(@Nullable final FDBRecordStoreBase<M> store, @Nonnull final EvaluationContext context) {
         final var binding = (QueryResult)context.getBinding(Bindings.Internal.CORRELATION, alias);
-        if (resultType.isRecord()) {
-            return binding.getDatum() == null ? null : binding.getMessage();
-        } else {
-            return binding.getDatum();
-        }
+        return binding.getDatum();
     }
 
     @Nonnull
@@ -125,7 +121,8 @@ public class QuantifiedObjectValue extends AbstractValue implements QuantifiedVa
     @Override
     public ExplainInfo explain(@Nonnull final Formatter formatter,
                                @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
-        return ExplainInfo.of(alias.equals(Quantifier.current()) ? "_" : formatter.getQuantifierName(alias));
+        return ExplainInfo.of("[" +
+                (alias.equals(Quantifier.current()) ? "_" : formatter.getQuantifierName(alias)) + "]");
     }
 
     @Override
@@ -142,8 +139,8 @@ public class QuantifiedObjectValue extends AbstractValue implements QuantifiedVa
 
     @Override
     public boolean isFunctionallyDependentOn(@Nonnull final Value otherValue) {
-        if (otherValue instanceof QuantifiedObjectValue) {
-            return getAlias().equals(((QuantifiedObjectValue)otherValue).getAlias());
+        if (otherValue instanceof QuantifiedRecordValue) {
+            return getAlias().equals(((QuantifiedRecordValue)otherValue).getAlias());
         }
         return false;
     }
@@ -151,13 +148,13 @@ public class QuantifiedObjectValue extends AbstractValue implements QuantifiedVa
     @Nonnull
     @Override
     public Value with(@Nonnull final Type type) {
-        return QuantifiedObjectValue.of(getAlias(), type);
+        return QuantifiedRecordValue.of(getAlias(), type);
     }
 
     @Nonnull
     @Override
-    public PQuantifiedObjectValue toProto(@Nonnull final PlanSerializationContext serializationContext) {
-        PQuantifiedObjectValue.Builder builder = PQuantifiedObjectValue.newBuilder();
+    public PQuantifiedRecordValue toProto(@Nonnull final PlanSerializationContext serializationContext) {
+        PQuantifiedRecordValue.Builder builder = PQuantifiedRecordValue.newBuilder();
         builder.setAlias(alias.getId());
         builder.setResultType(resultType.toTypeProto(serializationContext));
         return builder.build();
@@ -167,42 +164,42 @@ public class QuantifiedObjectValue extends AbstractValue implements QuantifiedVa
     @Override
     public PValue toValueProto(@Nonnull final PlanSerializationContext serializationContext) {
         final var specificValueProto = toProto(serializationContext);
-        return PValue.newBuilder().setQuantifiedObjectValue(specificValueProto).build();
+        return PValue.newBuilder().setQuantifiedRecordValue(specificValueProto).build();
     }
 
     @Nonnull
-    public static QuantifiedObjectValue fromProto(@Nonnull final PlanSerializationContext serializationContext,
-                                                  @Nonnull final PQuantifiedObjectValue quantifiedObjectValue) {
-        return new QuantifiedObjectValue(CorrelationIdentifier.of(Objects.requireNonNull(quantifiedObjectValue.getAlias())),
+    public static QuantifiedRecordValue fromProto(@Nonnull final PlanSerializationContext serializationContext,
+                                                  @Nonnull final PQuantifiedRecordValue quantifiedObjectValue) {
+        return new QuantifiedRecordValue(CorrelationIdentifier.of(Objects.requireNonNull(quantifiedObjectValue.getAlias())),
                 Type.fromTypeProto(serializationContext, Objects.requireNonNull(quantifiedObjectValue.getResultType())));
     }
 
     @Nonnull
-    public static QuantifiedObjectValue of(@Nonnull final Quantifier quantifier) {
-        return new QuantifiedObjectValue(quantifier.getAlias(), quantifier.getFlowedObjectType());
+    public static QuantifiedRecordValue of(@Nonnull final Quantifier quantifier) {
+        return new QuantifiedRecordValue(quantifier.getAlias(), quantifier.getFlowedObjectType());
     }
 
     @Nonnull
-    public static QuantifiedObjectValue of(@Nonnull final CorrelationIdentifier alias, @Nonnull final Type resultType) {
-        return new QuantifiedObjectValue(alias, resultType);
+    public static QuantifiedRecordValue of(@Nonnull final CorrelationIdentifier alias, @Nonnull final Type resultType) {
+        return new QuantifiedRecordValue(alias, resultType);
     }
 
     /**
      * Deserializer.
      */
     @AutoService(PlanDeserializer.class)
-    public static class Deserializer implements PlanDeserializer<PQuantifiedObjectValue, QuantifiedObjectValue> {
+    public static class Deserializer implements PlanDeserializer<PQuantifiedRecordValue, QuantifiedRecordValue> {
         @Nonnull
         @Override
-        public Class<PQuantifiedObjectValue> getProtoMessageClass() {
-            return PQuantifiedObjectValue.class;
+        public Class<PQuantifiedRecordValue> getProtoMessageClass() {
+            return PQuantifiedRecordValue.class;
         }
 
         @Nonnull
         @Override
-        public QuantifiedObjectValue fromProto(@Nonnull final PlanSerializationContext serializationContext,
-                                               @Nonnull final PQuantifiedObjectValue quantifiedObjectValueProto) {
-            return QuantifiedObjectValue.fromProto(serializationContext, quantifiedObjectValueProto);
+        public QuantifiedRecordValue fromProto(@Nonnull final PlanSerializationContext serializationContext,
+                                               @Nonnull final PQuantifiedRecordValue quantifiedObjectValueProto) {
+            return QuantifiedRecordValue.fromProto(serializationContext, quantifiedObjectValueProto);
         }
     }
 }

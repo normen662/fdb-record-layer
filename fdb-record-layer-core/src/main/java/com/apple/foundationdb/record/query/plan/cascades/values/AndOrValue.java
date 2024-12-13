@@ -306,7 +306,6 @@ public class AndOrValue extends AbstractValue implements BooleanValue {
         }
     }
 
-
     /**
      * The {@code or} function.
      */
