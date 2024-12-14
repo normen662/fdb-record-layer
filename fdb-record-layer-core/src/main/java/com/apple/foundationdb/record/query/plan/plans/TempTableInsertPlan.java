@@ -43,8 +43,8 @@ import com.apple.foundationdb.record.query.plan.cascades.explain.NodeInfo;
 import com.apple.foundationdb.record.query.plan.cascades.explain.PlannerGraph;
 import com.apple.foundationdb.record.query.plan.cascades.explain.PlannerGraphRewritable;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalExpression;
-import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalExpression;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
+import com.apple.foundationdb.record.query.plan.cascades.values.QueriedValue;
 import com.apple.foundationdb.record.query.plan.cascades.values.Value;
 import com.apple.foundationdb.record.query.plan.cascades.values.translation.TranslationMap;
 import com.google.auto.service.AutoService;
@@ -163,7 +163,8 @@ public class TempTableInsertPlan implements RecordQueryPlanWithChild, PlannerGra
     @Nonnull
     @Override
     public Value getResultValue() {
-        return tempTableReferenceValue;
+        return new QueriedValue(Objects.requireNonNull(
+                ((Type.Relation)tempTableReferenceValue.getResultType()).getInnerType()));
     }
 
     @Nonnull

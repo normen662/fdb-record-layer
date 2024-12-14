@@ -44,6 +44,7 @@ import com.apple.foundationdb.record.query.plan.cascades.explain.NodeInfo;
 import com.apple.foundationdb.record.query.plan.cascades.explain.PlannerGraph;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalExpression;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
+import com.apple.foundationdb.record.query.plan.cascades.values.QueriedValue;
 import com.apple.foundationdb.record.query.plan.cascades.values.Value;
 import com.apple.foundationdb.record.query.plan.cascades.values.translation.TranslationMap;
 import com.google.auto.service.AutoService;
@@ -140,15 +141,9 @@ public class TempTableScanPlan implements RecordQueryPlanWithNoChildren {
     @Nonnull
     @Override
     public Value getResultValue() {
-        return tempTableReferenceValue;
+        return new QueriedValue(Objects.requireNonNull(
+                ((Type.Relation)tempTableReferenceValue.getResultType()).getInnerType()));
     }
-
-    @Nonnull
-    @Override
-    public Set<Type> getDynamicTypes() {
-        return ImmutableSet.of(tempTableReferenceValue.getResultType());
-    }
-
 
     @Nonnull
     @Override
@@ -183,7 +178,7 @@ public class TempTableScanPlan implements RecordQueryPlanWithNoChildren {
 
     @Override
     public int hashCodeWithoutChildren() {
-        return Objects.hash(getResultValue());
+        return Objects.hash(tempTableReferenceValue);
     }
 
     @Override
@@ -201,7 +196,7 @@ public class TempTableScanPlan implements RecordQueryPlanWithNoChildren {
         switch (mode.getKind()) {
             case LEGACY:
             case FOR_CONTINUATION:
-                return PlanHashable.objectsPlanHash(mode, BASE_HASH, getResultValue());
+                return PlanHashable.objectsPlanHash(mode, BASE_HASH, tempTableReferenceValue);
             default:
                 throw new UnsupportedOperationException("Hash kind " + mode.getKind() + " is not supported");
         }
