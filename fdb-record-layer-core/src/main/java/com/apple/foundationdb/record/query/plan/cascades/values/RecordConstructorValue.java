@@ -77,7 +77,8 @@ public class RecordConstructorValue extends AbstractValue implements AggregateVa
     @Nonnull
     private final Supplier<Integer> hashCodeWithoutChildrenSupplier;
 
-    private RecordConstructorValue(@Nonnull Collection<Column<? extends Value>> columns, @Nonnull final Type.Record resultType) {
+    private RecordConstructorValue(@Nonnull final Collection<Column<? extends Value>> columns,
+                                   @Nonnull final Type.Record resultType) {
         this.resultType = resultType;
         this.columns = ImmutableList.copyOf(columns);
         this.hashCodeWithoutChildrenSupplier = Suppliers.memoize(this::computeHashCodeWithoutChildren);
@@ -239,6 +240,7 @@ public class RecordConstructorValue extends AbstractValue implements AggregateVa
 
     @Nonnull
     @Override
+    @SuppressWarnings("PMD.ForLoopCanBeForeach")
     public ExplainInfo explain(@Nonnull final Formatter formatter,
                                @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
         final var argumentsBuilder = ImmutableList.<String>builder();

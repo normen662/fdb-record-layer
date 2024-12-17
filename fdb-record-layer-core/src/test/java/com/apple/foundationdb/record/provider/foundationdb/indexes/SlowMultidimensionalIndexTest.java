@@ -49,7 +49,6 @@ import static com.apple.foundationdb.async.rtree.RTree.Storage.BY_SLOT;
 /**
  * Additional tests for Multidimensional Index around concurrency and large data-sets.
  */
-@Disabled
 @Tag(Tags.Slow)
 class SlowMultidimensionalIndexTest extends MultidimensionalIndexTestBase {
 

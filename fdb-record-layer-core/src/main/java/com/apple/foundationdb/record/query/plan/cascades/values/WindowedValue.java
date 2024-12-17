@@ -130,6 +130,7 @@ public abstract class WindowedValue extends AbstractValue {
 
     @Nonnull
     @Override
+    @SuppressWarnings("PMD.ForLoopCanBeForeach")
     public ExplainInfo explain(@Nonnull final Formatter formatter,
                                @Nonnull final Iterable<Function<Formatter, ExplainInfo>> explainFunctions) {
         int i = 0;
@@ -139,7 +140,7 @@ public abstract class WindowedValue extends AbstractValue {
             argumentsBuilder.add(iterator.next().apply(formatter).getExplainString());
         }
         final var partitioningBuilder = ImmutableList.<String>builder();
-        for (; iterator.hasNext(); i ++) {
+        while (iterator.hasNext()) {
             partitioningBuilder.add(iterator.next().apply(formatter).getExplainString());
         }
 

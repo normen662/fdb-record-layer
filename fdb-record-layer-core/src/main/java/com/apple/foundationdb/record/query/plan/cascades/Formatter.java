@@ -20,8 +20,6 @@
 
 package com.apple.foundationdb.record.query.plan.cascades;
 
-import com.apple.foundationdb.annotation.SpotBugsSuppressWarnings;
-
 import javax.annotation.Nonnull;
 
 /**
