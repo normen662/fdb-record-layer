@@ -292,8 +292,7 @@ public class YamlIntegrationTests {
     }
 
     @TestTemplate
-    @ExcludeYamlTestConfig(value = YamlTestConfigFilters.DO_NOT_FORCE_CONTINUATIONS,
-            reason = "maxRows ignored (https://github.com/FoundationDB/fdb-record-layer/issues/3100)")
+    @MaintainYamlTestConfig(value = YamlTestConfigFilters.CORRECT_EXPLAIN_AND_METRICS)
     public void recursiveCte(YamlTest.Runner runner) throws Exception {
         runner.runYamsql("recursive-cte.yamsql");
     }
