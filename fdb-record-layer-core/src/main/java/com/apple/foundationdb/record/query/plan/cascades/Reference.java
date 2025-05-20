@@ -693,15 +693,6 @@ public class Reference implements Correlated<Reference>, Typed {
         return PlannerGraphVisitor.show(renderSingleGroups, this);
     }
 
-    public static boolean isMemoizedExpression(@Nonnull final RelationalExpression expression,
-                                               @Nonnull final RelationalExpression otherExpression) {
-        if (!expression.getCorrelatedTo().equals(otherExpression.getCorrelatedTo())) {
-            return false;
-        }
-
-        return isMemoizedExpression(expression, otherExpression, AliasMap.emptyMap());
-    }
-
     @SuppressWarnings("PMD.CompareObjectsWithEquals")
     private static boolean isMemoizedExpression(@Nonnull final RelationalExpression member,
                                                 @Nonnull final RelationalExpression otherExpression,
@@ -725,6 +716,17 @@ public class Reference implements Correlated<Reference>, Typed {
 
         // We know member and otherMember are of the same class. canCorrelate() needs to match as well.
         Verify.verify(member.canCorrelate() == otherExpression.canCorrelate());
+
+        final var mappedCorrelatedTo =
+                equivalenceMap.definesOnlyIdentities()
+                ? member.getCorrelatedTo()
+                : member.getCorrelatedTo()
+                        .stream()
+                        .map(alias -> equivalenceMap.getTargetOrDefault(alias, alias))
+                        .collect(ImmutableSet.toImmutableSet());
+        if (!mappedCorrelatedTo.equals(otherExpression.getCorrelatedTo())) {
+            return false;
+        }
 
         // Bind all unbound correlated aliases in this member and otherMember that refer to the same
         // quantifier by alias.

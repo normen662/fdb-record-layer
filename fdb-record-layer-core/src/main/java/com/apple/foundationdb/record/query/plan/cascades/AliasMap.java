@@ -347,7 +347,8 @@ public class AliasMap {
      *         from {@code source} in this alias map
      */
     @Nonnull
-    public CorrelationIdentifier getTargetOrDefault(@Nullable final CorrelationIdentifier source, @Nonnull final CorrelationIdentifier defaultValue) {
+    public CorrelationIdentifier getTargetOrDefault(@Nullable final CorrelationIdentifier source,
+                                                    @Nonnull final CorrelationIdentifier defaultValue) {
         @Nullable final CorrelationIdentifier target = getTarget(source);
         if (target == null) {
             return defaultValue;

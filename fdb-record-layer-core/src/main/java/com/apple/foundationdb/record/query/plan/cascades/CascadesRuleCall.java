@@ -41,7 +41,6 @@ import javax.annotation.Nonnull;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
-import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
@@ -205,12 +204,14 @@ public class CascadesRuleCall implements ExplorationCascadesRuleCall, Implementa
 
     @Override
     public void yieldUnknownExpression(@Nonnull final RelationalExpression expression) {
+        final var correlatedSet = root.getCorrelatedTo();
         Verify.verify(getPlannerPhase() == PlannerPhase.PLANNING);
         if (expression instanceof RecordQueryPlan) {
             yieldPlan((RecordQueryPlan)expression);
         } else {
             yieldExploratoryExpression(expression);
         }
+        Verify.verify(correlatedSet.equals(root.getCorrelatedTo()));
     }
 
     private void yieldExpression(@Nonnull final RelationalExpression expression, final boolean isFinal) {
@@ -351,7 +352,7 @@ public class CascadesRuleCall implements ExplorationCascadesRuleCall, Implementa
                     });
 
             // From the traversal, get the sets of expressions that point to each child
-            final List<Set<RelationalExpression>> referencingExpressions = referencePathsList.stream()
+            final var referencingExpressions = referencePathsList.stream()
                     .map(referencePaths ->
                             referencePaths.stream()
                                     .map(Traversal.ReferencePath::getExpression)
@@ -367,7 +368,7 @@ public class CascadesRuleCall implements ExplorationCascadesRuleCall, Implementa
 
             // For each reference that has the right topology (that is, it points to all the children),
             // limit the candidates to those that actually contain all the variations in its memo
-            final List<Reference> existingRefs = commonReferencingExpressions.stream()
+            final var existingRefs = commonReferencingExpressions.stream()
                     .map(expressionToReferenceMap::get)
                     .filter(ref -> {
                         // Validate the reference is correlated to the same set of quantifiers as the
@@ -375,9 +376,7 @@ public class CascadesRuleCall implements ExplorationCascadesRuleCall, Implementa
                         // this reference
                         // Note: the correlated-to check is already done in some Reference.containsInMemo variants
                         // but not others. Should this get pushed down to containsAllInMemo??
-                        var refCorrelatedTo = ref.getCorrelatedTo();
-                        return expressions.stream().allMatch(expr -> refCorrelatedTo.equals(expr.getCorrelatedTo()))
-                                && ref.containsAllInMemo(expressions, AliasMap.emptyMap(), false);
+                        return ref.containsAllInMemo(expressions, AliasMap.emptyMap(), false);
                     })
                     .collect(ImmutableList.toImmutableList());
 
