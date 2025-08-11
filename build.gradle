@@ -50,6 +50,7 @@ defaultTasks 'build'
 apply from: 'gradle/root.gradle'
 
 def isReleaseBuild = Boolean.parseBoolean(getProperty('releaseBuild'))
+def incubatorModule = 'jdk.incubator.vector'
 
 allprojects {
     apply plugin: 'base'
@@ -63,11 +64,13 @@ allprojects {
     // Configure all source files to be read using UTF-8
     project.tasks.withType(JavaCompile) {
         options.encoding = "utf-8"
+        options.compilerArgs += ['--add-modules', incubatorModule]
     }
     project.tasks.withType(Javadoc) {
         options.encoding = "utf-8"
     }
     project.tasks.withType(Test) {
+        jvmArgs += ['--add-modules', incubatorModule]
         systemProperty "file.encoding", "utf-8"
         if (project.hasProperty("apiVersion")) {
             systemProperty "com.apple.foundationdb.apiVersion", project.getProperty("apiVersion")
@@ -186,8 +189,8 @@ subprojects {
     apply from: rootProject.file('gradle/testing.gradle')
 
     java {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     def publishBuild = Boolean.parseBoolean(findProperty('publishBuild') ?: 'false')
@@ -228,7 +231,7 @@ subprojects {
 		// It would be good to have more coverage, but this allows us to move forward with incomplete docs
                 options.addBooleanOption('Xdoclint:none', true)
 
-                options.addStringOption('source', '11')
+                options.addStringOption('source', '21')
                 options.with {
                     overview "src/main/javadoc/overview.html"
 
@@ -253,7 +256,7 @@ subprojects {
                 options.incremental = true
 
                 //target byte-code compatibility with Java 11 (regardless of build JDK)
-                options.release = 11
+                options.release = 21
             }
         }
     }

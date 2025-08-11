@@ -32,6 +32,9 @@ import com.apple.test.Tags;
 import com.christianheina.langx.half4j.Half;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
+import jdk.incubator.vector.FloatVector;
+import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorSpecies;
 import org.assertj.core.util.Lists;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -243,13 +246,14 @@ public class HNSWModificationTest {
     @Test
     @Timeout(value = 150, unit = TimeUnit.MINUTES)
     public void testSIFTInsert10k() throws Exception {
-        final Metric metric = Metric.EUCLIDEAN_METRIC;
+        final Metric metric = Metric.EUCLIDEAN_SQUARE_METRIC;
         final int k = 10;
         final AtomicLong nextNodeIdAtomic = new AtomicLong(0L);
 
         final TestOnReadListener onReadListener = new TestOnReadListener();
 
         final HNSW hnsw = new HNSW(rtSubspace.getSubspace(), TestExecutors.defaultThreadPool(),
+                // HNSW.DEFAULT_CONFIG.toBuilder().setMetric(metric).setM(16).setMMax(16).setMMax0(32).setEfSearch(32).setEfConstruction(32).build(),
                 HNSW.DEFAULT_CONFIG.toBuilder().setMetric(metric).setM(32).setMMax(32).setMMax0(64).build(),
                 OnWriteListener.NOOP, onReadListener);
 
@@ -261,7 +265,7 @@ public class HNSWModificationTest {
                 Comparator.comparing(NodeReferenceWithDistance::getDistance));
 
         try (BufferedReader br = new BufferedReader(new FileReader(tsvFile))) {
-            for (int i = 0; i < 10000;) {
+            for (int i = 0; i < 10_000;) {
                 i += basicInsertBatch(hnsw, 100, nextNodeIdAtomic, onReadListener,
                         tr -> {
                             final String line;
@@ -346,7 +350,7 @@ public class HNSWModificationTest {
                 Comparator.comparing(NodeReferenceWithDistance::getDistance));
 
         try (BufferedReader br = new BufferedReader(new FileReader(tsvFile))) {
-            for (int i = 0; i < 10000;) {
+            for (int i = 0; i < 100_000;) {
                 i += insertBatch(hnsw, 100, nextNodeIdAtomic, onReadListener,
                         tr -> {
                             final String line;
@@ -445,57 +449,6 @@ public class HNSWModificationTest {
         }
     }
 
-    @Test
-    @Timeout(value = 150, unit = TimeUnit.MINUTES)
-    public void testSIFTVectors() throws Exception {
-        final AtomicLong nextNodeIdAtomic = new AtomicLong(0L);
-
-        final TestOnReadListener onReadListener = new TestOnReadListener();
-
-        final HNSW hnsw = new HNSW(rtSubspace.getSubspace(), TestExecutors.defaultThreadPool(),
-                HNSW.DEFAULT_CONFIG.toBuilder().setMetric(Metric.EUCLIDEAN_METRIC).setM(32).setMMax(32).setMMax0(64).build(),
-                OnWriteListener.NOOP, onReadListener);
-
-
-        final String tsvFile = "/Users/nseemann/Downloads/train-100k.tsv";
-        final int dimensions = 128;
-        final var referenceVector = createRandomVector(new Random(0), dimensions);
-        long count = 0L;
-        double mean = 0.0d;
-        double mean2 = 0.0d;
-
-        try (BufferedReader br = new BufferedReader(new FileReader(tsvFile))) {
-            for (int i = 0; i < 100_000; i ++) {
-                final String line;
-                try {
-                    line = br.readLine();
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
-
-                final String[] values = Objects.requireNonNull(line).split("\t");
-                Assertions.assertEquals(dimensions, values.length);
-                final Half[] halfs = new Half[dimensions];
-                for (int c = 0; c < values.length; c++) {
-                    final String value = values[c];
-                    halfs[c] = HNSWHelpers.halfValueOf(Double.parseDouble(value));
-                }
-                final HalfVector newVector = new HalfVector(halfs);
-                final double distance = Vector.comparativeDistance(Metric.EUCLIDEAN_METRIC, referenceVector, newVector);
-                count++;
-                final double delta = distance - mean;
-                mean += delta / count;
-                final double delta2 = distance - mean;
-                mean2 += delta * delta2;
-            }
-        }
-        final double sampleVariance = mean2 / (count - 1);
-        final double standardDeviation = Math.sqrt(sampleVariance);
-        logger.info("mean={}, sample_variance={}, stddeviation={}, cv={}", mean, sampleVariance, standardDeviation,
-                standardDeviation / mean);
-    }
-
-
     @ParameterizedTest
     @ValueSource(ints = {2, 3, 10, 100, 768})
     public void testManyVectorsStandardDeviation(final int dimensionality) {
@@ -518,6 +471,67 @@ public class HNSWModificationTest {
         final double standardDeviation = Math.sqrt(sampleVariance);
         logger.info("mean={}, sample_variance={}, stddeviation={}, cv={}", mean, sampleVariance, standardDeviation,
                 standardDeviation / mean);
+    }
+
+    @Test
+    void testSIMD() {
+        final Random random = new Random();
+
+        VectorSpecies<Float> species = FloatVector.SPECIES_PREFERRED;
+        System.out.println("Preferred species length: " + species.length());
+        System.out.println("Supported: " + species.vectorShape());
+
+        // Define two vectors
+        VectorSpecies<Float> SPECIES = FloatVector.SPECIES_128;
+
+        float[] v1Floats = new float[4];
+        float[] v2Floats = new float[4];
+        float sum = 0;
+        for (long i = 0; i < 3_000_000_000L; i ++) {
+            for (int j = 0; j < 4; j ++) {
+                v1Floats[j] = i; // random.nextFloat();
+                v2Floats[j] = i + 1; // random.nextFloat();
+            }
+
+            FloatVector vector1 = FloatVector.fromArray(SPECIES, v1Floats, 0);
+            FloatVector vector2 = FloatVector.fromArray(SPECIES, v2Floats, 0);
+
+            // Compute the difference of the two vectors
+            FloatVector diff = vector1.sub(vector2);
+
+            // Compute the squared sum of the differences
+            FloatVector squaredDiff = diff.mul(diff);
+
+            // Calculate the sum of the squared differences
+            sum += squaredDiff.reduceLanes(VectorOperators.ADD);
+        }
+        System.out.println(sum);
+    }
+
+    @Test
+    void testNoSIMD() {
+        final Random random = new Random();
+
+        float[] v1Floats = new float[4];
+        float[] v2Floats = new float[4];
+        float sum = 0;
+        for (long i = 0; i < 3_000_000_000L; i ++) {
+
+            for (int j = 0; j < 4; j ++) {
+                v1Floats[j] = i; //random.nextFloat();
+                v2Floats[j] = i + 1; //random.nextFloat();
+            }
+
+            float[] diffs = new float[4];
+            float[] squaredDiffs = new float[4];
+
+            for (int j = 0; j < 4; j ++) {
+                diffs[j] = v2Floats[j] - v1Floats[j];
+                squaredDiffs[j] = diffs[j] * diffs[j];
+                sum += squaredDiffs[j];
+            }
+        }
+        System.out.println(sum);
     }
 
     private boolean dumpLayer(final HNSW hnsw, final int layer) throws IOException {

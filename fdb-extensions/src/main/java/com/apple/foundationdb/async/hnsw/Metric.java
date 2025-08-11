@@ -20,6 +20,11 @@
 
 package com.apple.foundationdb.async.hnsw;
 
+import jdk.incubator.vector.DoubleVector;
+import jdk.incubator.vector.FloatVector;
+import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorSpecies;
+
 import javax.annotation.Nonnull;
 
 public interface Metric {
@@ -29,9 +34,9 @@ public interface Metric {
     CosineMetric COSINE_METRIC = new CosineMetric();
     DotProductMetric DOT_PRODUCT_METRIC = new DotProductMetric();
 
-    double distance(Double[] vector1, Double[] vector2);
+    double distance(double[] vector1, double[] vector2);
 
-    default double comparativeDistance(Double[] vector1, Double[] vector2) {
+    default double comparativeDistance(double[] vector1, double[] vector2) {
         return distance(vector1, vector2);
     }
 
@@ -40,7 +45,7 @@ public interface Metric {
      * @param vector1 The first vector.
      * @param vector2 The second vector.
      */
-    private static void validate(Double[] vector1, Double[] vector2) {
+    private static void validate(double[] vector1, double[] vector2) {
         if (vector1 == null || vector2 == null) {
             throw new IllegalArgumentException("Vectors cannot be null");
         }
@@ -81,7 +86,7 @@ public interface Metric {
 
     class ManhattanMetric implements Metric {
         @Override
-        public double distance(final Double[] vector1, final Double[] vector2) {
+        public double distance(final double[] vector1, final double[] vector2) {
             Metric.validate(vector1, vector2);
 
             double sumOfAbsDiffs = 0.0;
@@ -100,7 +105,7 @@ public interface Metric {
 
     class EuclideanMetric implements Metric {
         @Override
-        public double distance(final Double[] vector1, final Double[] vector2) {
+        public double distance(final double[] vector1, final double[] vector2) {
             Metric.validate(vector1, vector2);
 
             return Math.sqrt(EuclideanSquareMetric.distanceInternal(vector1, vector2));
@@ -115,18 +120,47 @@ public interface Metric {
 
     class EuclideanSquareMetric implements Metric {
         @Override
-        public double distance(final Double[] vector1, final Double[] vector2) {
+        public double distance(final double[] vector1, final double[] vector2) {
             Metric.validate(vector1, vector2);
             return distanceInternal(vector1, vector2);
         }
 
-        private static double distanceInternal(final Double[] vector1, final Double[] vector2) {
-            double sumOfSquares = 0.0d;
-            for (int i = 0; i < vector1.length; i++) {
-                double diff = vector1[i] - vector2[i];
-                sumOfSquares += diff * diff;
+        private static final VectorSpecies<Double> dSpecies = DoubleVector.SPECIES_PREFERRED;
+        private static final VectorSpecies<Float> fSpecies = dSpecies.withLanes(float.class);
+
+        private static double distanceInternal(final double[] vector1, final double[] vector2) {
+//            double sumOfSquares = 0.0d;
+//            for (int i = 0; i < vector1.length; i++) {
+//                double diff = vector1[i] - vector2[i];
+//                sumOfSquares += diff * diff;
+//            }
+//            return sumOfSquares;
+            int len = vector1.length;
+            int i = 0;
+            FloatVector acc = FloatVector.zero(fSpecies);
+
+            int ub = dSpecies.loopBound(len);
+            for (; i < ub; i += dSpecies.length()) {
+                // Load doubles
+                DoubleVector da = DoubleVector.fromArray(dSpecies, vector1, i);
+                DoubleVector db = DoubleVector.fromArray(dSpecies, vector2, i);
+
+                // Convert to float vectors (same SHAPE, more lanes because floats are smaller)
+                FloatVector fa = (FloatVector) da.convertShape(VectorOperators.D2F, fSpecies, 0);
+                FloatVector fb = (FloatVector) db.convertShape(VectorOperators.D2F, fSpecies, 0);
+
+                FloatVector diff = fa.sub(fb);
+                acc = diff.fma(diff, acc); // acc += diff * diff
             }
-            return sumOfSquares;
+
+            double sum = acc.reduceLanes(VectorOperators.ADD);
+
+            // Scalar tail
+            for (; i < len; i++) {
+                float d = (float) vector1[i] - (float) vector2[i];
+                sum += (double) d * d;
+            }
+            return sum;
         }
 
         @Override
@@ -138,7 +172,7 @@ public interface Metric {
 
     class CosineMetric implements Metric {
         @Override
-        public double distance(final Double[] vector1, final Double[] vector2) {
+        public double distance(final double[] vector1, final double[] vector2) {
             Metric.validate(vector1, vector2);
 
             double dotProduct = 0.0;
@@ -168,12 +202,12 @@ public interface Metric {
 
     class DotProductMetric implements Metric {
         @Override
-        public double distance(final Double[] vector1, final Double[] vector2) {
+        public double distance(final double[] vector1, final double[] vector2) {
             throw new UnsupportedOperationException("dot product metric is not a true metric and can only be used for ranking");
         }
 
         @Override
-        public double comparativeDistance(final Double[] vector1, final Double[] vector2) {
+        public double comparativeDistance(final double[] vector1, final double[] vector2) {
             Metric.validate(vector1, vector2);
 
             double product = 0.0d;

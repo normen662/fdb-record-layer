@@ -122,7 +122,7 @@ public abstract class Vector<R extends Number> {
 
         @Nonnull
         public DoubleVector computeDoubleVector() {
-            Double[] result = new Double[data.length];
+            double[] result = new double[data.length];
             for (int i = 0; i < data.length; i ++) {
                 result[i] = data[i].doubleValue();
             }
@@ -133,10 +133,12 @@ public abstract class Vector<R extends Number> {
     public static class DoubleVector extends Vector<Double> {
         @Nonnull
         private final Supplier<HalfVector> toHalfVectorSupplier;
+        private final double[] primitiveData;
 
-        public DoubleVector(@Nonnull final Double[] data) {
-            super(data);
+        public DoubleVector(@Nonnull final double[] primitiveData) {
+            super(toBoxed(primitiveData));
             this.toHalfVectorSupplier = Suppliers.memoize(this::computeHalfVector);
+            this.primitiveData = primitiveData;
         }
 
         @Nonnull
@@ -159,17 +161,31 @@ public abstract class Vector<R extends Number> {
         public DoubleVector toDoubleVector() {
             return this;
         }
+
+        @Nonnull
+        public double[] getPrimitiveData() {
+            return primitiveData;
+        }
+
+        @Nonnull
+        private static Double[] toBoxed(double[] primitiveData) {
+            Double[] out = new Double[primitiveData.length];
+            for (int i = 0; i < primitiveData.length; i++) {
+                out[i] = primitiveData[i]; // auto-boxing
+            }
+            return out;
+        }
     }
 
     static <R extends Number> double distance(@Nonnull Metric metric,
                                               @Nonnull final Vector<R> vector1,
                                               @Nonnull final Vector<R> vector2) {
-        return metric.distance(vector1.toDoubleVector().getData(), vector2.toDoubleVector().getData());
+        return metric.distance(vector1.toDoubleVector().getPrimitiveData(), vector2.toDoubleVector().getPrimitiveData());
     }
 
     static <R extends Number> double comparativeDistance(@Nonnull Metric metric,
                                                          @Nonnull final Vector<R> vector1,
                                                          @Nonnull final Vector<R> vector2) {
-        return metric.comparativeDistance(vector1.toDoubleVector().getData(), vector2.toDoubleVector().getData());
+        return metric.comparativeDistance(vector1.toDoubleVector().getPrimitiveData(), vector2.toDoubleVector().getPrimitiveData());
     }
 }
