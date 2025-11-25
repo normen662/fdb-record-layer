@@ -23,10 +23,19 @@ package com.apple.foundationdb.record.query.plan.cascades.costing;
 import com.apple.foundationdb.annotation.API;
 import com.apple.foundationdb.annotation.SpotBugsSuppressWarnings;
 import com.apple.foundationdb.record.query.plan.RecordQueryPlannerConfiguration;
+import com.apple.foundationdb.record.query.plan.cascades.FindExpressionVisitor;
 import com.apple.foundationdb.record.query.plan.cascades.PlannerPhase;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalExpression;
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
+import com.google.common.collect.ImmutableSet;
 
 import javax.annotation.Nonnull;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Consumer;
 
 import static com.apple.foundationdb.record.query.plan.cascades.properties.ExpressionCountProperty.selectCount;
 import static com.apple.foundationdb.record.query.plan.cascades.properties.ExpressionCountProperty.tableFunctionCount;
@@ -40,6 +49,11 @@ import static com.apple.foundationdb.record.query.plan.cascades.properties.Predi
 @SpotBugsSuppressWarnings("SE_COMPARATOR_SHOULD_BE_SERIALIZABLE")
 public class RewritingCostModel implements CascadesCostModel<RelationalExpression> {
     @Nonnull
+    private static final Set<Class<? extends RelationalExpression>> interestingExpressionClasses =
+            ImmutableSet.of();
+
+
+    @Nonnull
     private final RecordQueryPlannerConfiguration configuration;
 
     public RewritingCostModel(@Nonnull final RecordQueryPlannerConfiguration configuration) {
@@ -52,56 +66,159 @@ public class RewritingCostModel implements CascadesCostModel<RelationalExpressio
         return configuration;
     }
 
+    @Nonnull
     @Override
-    public int compare(final RelationalExpression a, final RelationalExpression b) {
-        //
-        // Choose the expression with the fewest select boxes
-        //
-        final int aSelects = selectCount().evaluate(a);
-        final int bSelects = selectCount().evaluate(b);
-        if (aSelects != bSelects) {
+    public Optional<RelationalExpression> getBestExpression(@Nonnull final Set<? extends RelationalExpression> plans,
+                                                            @Nonnull final Consumer<RelationalExpression> onRemoveConsumer) {
+        return costExpressions(plans, onRemoveConsumer).getOnlyExpressionMaybe();
+    }
+
+    @Nonnull
+    @Override
+    public Set<RelationalExpression> getBestExpressions(@Nonnull final Set<? extends RelationalExpression> plans,
+                                                        @Nonnull final Consumer<RelationalExpression> onRemoveConsumer) {
+        return costExpressions(plans, onRemoveConsumer).getBestExpressions();
+    }
+
+    @Nonnull
+    private TiebreakerResult<RelationalExpression> costExpressions(@Nonnull final Set<? extends RelationalExpression> expressions,
+                                                                   @Nonnull final Consumer<RelationalExpression> onRemoveConsumer) {
+        final LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>> opsCache =
+                createOpsCache();
+
+        return Tiebreaker.ofContext(getConfiguration(), opsCache, expressions, RelationalExpression.class, onRemoveConsumer)
+                .thenApply(lowestNumSelectExpressionsTiebreaker())
+                .thenApply(lowestNumTableFunctionsTiebreaker())
+                .thenApply(deepestPredicateTiebreaker())
+                .thenApply(simplestPredicateTiebreaker())
+                .thenApply(semanticHashTiebreaker())
+                .thenApply(pickLeftTieBreaker());
+    }
+
+    @Nonnull
+    private static LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>>
+                createOpsCache() {
+        return CacheBuilder.newBuilder()
+                .build(new CacheLoader<>() {
+                    @Override
+                    @Nonnull
+                    public Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>
+                            load(@Nonnull final RelationalExpression key) {
+                        return FindExpressionVisitor.evaluate(interestingExpressionClasses, key);
+                    }
+                });
+    }
+
+    @Nonnull
+    static LowestNumSelectExpressionsTiebreaker lowestNumSelectExpressionsTiebreaker() {
+        return LowestNumSelectExpressionsTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static LowestNumTableFunctionsTiebreaker lowestNumTableFunctionsTiebreaker() {
+        return LowestNumTableFunctionsTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static DeepestPredicateTiebreaker deepestPredicateTiebreaker() {
+        return DeepestPredicateTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static SimplestPredicateTiebreaker simplestPredicateTiebreaker() {
+        return SimplestPredicateTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static SemanticHashTiebreaker semanticHashTiebreaker() {
+        return SemanticHashTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static PickLeftTieBreaker<RelationalExpression> pickLeftTieBreaker() {
+        return PickLeftTieBreaker.INSTANCE_EXPRESSION;
+    }
+
+    static class LowestNumSelectExpressionsTiebreaker implements Tiebreaker<RelationalExpression> {
+        private static final LowestNumSelectExpressionsTiebreaker INSTANCE = new LowestNumSelectExpressionsTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RelationalExpression a, @Nonnull final RelationalExpression b) {
+            //
+            // Choose the expression with the fewest select boxes
+            //
+            final int aSelects = selectCount().evaluate(a);
+            final int bSelects = selectCount().evaluate(b);
             return Integer.compare(aSelects, bSelects);
         }
+    }
 
-        //
-        // Choose the expression with the fewest TableFunction expressions
-        //
-        final int aTableFunctions = tableFunctionCount().evaluate(a);
-        final int bTableFunctions = tableFunctionCount().evaluate(b);
-        if (aTableFunctions != bTableFunctions) {
+    static class LowestNumTableFunctionsTiebreaker implements Tiebreaker<RelationalExpression> {
+        private static final LowestNumTableFunctionsTiebreaker INSTANCE = new LowestNumTableFunctionsTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RelationalExpression a, @Nonnull final RelationalExpression b) {
+            //
+            // Choose the expression with the fewest TableFunction expressions
+            //
+            final int aTableFunctions = tableFunctionCount().evaluate(a);
+            final int bTableFunctions = tableFunctionCount().evaluate(b);
             return Integer.compare(aTableFunctions, bTableFunctions);
         }
+    }
 
-        //
-        // Pick the expression where predicates have been pushed down as far as they can go
-        //
-        final int aPredicateHeight = predicateHeight().evaluate(a);
-        final int bPredicateHeight = predicateHeight().evaluate(b);
-        if (aPredicateHeight != bPredicateHeight) {
+    static class DeepestPredicateTiebreaker implements Tiebreaker<RelationalExpression> {
+        private static final DeepestPredicateTiebreaker INSTANCE = new DeepestPredicateTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RelationalExpression a, @Nonnull final RelationalExpression b) {
+            //
+            // Pick the expression where predicates have been pushed down as far as they can go
+            //
+            final int aPredicateHeight = predicateHeight().evaluate(a);
+            final int bPredicateHeight = predicateHeight().evaluate(b);
             return Integer.compare(aPredicateHeight, bPredicateHeight);
         }
+    }
 
-        //
-        // Choose the expression with the simplest predicate.
-        //
-        final int aPredicateComplexity = predicateComplexity().evaluate(a);
-        final int bPredicateComplexity = predicateComplexity().evaluate(b);
-        if (aPredicateComplexity != bPredicateComplexity) {
+    static class SimplestPredicateTiebreaker implements Tiebreaker<RelationalExpression> {
+        private static final SimplestPredicateTiebreaker INSTANCE = new SimplestPredicateTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RelationalExpression a, @Nonnull final RelationalExpression b) {
+            //
+            // Choose the expression with the simplest predicate.
+            //
+            final int aPredicateComplexity = predicateComplexity().evaluate(a);
+            final int bPredicateComplexity = predicateComplexity().evaluate(b);
             return Integer.compare(aPredicateComplexity, bPredicateComplexity);
-        }
 
-        //
-        // If expressions are indistinguishable from a cost perspective, select one by its semanticHash.
-        //
-        final int aSemanticHash = a.semanticHashCode();
-        final int bSemanticHash = b.semanticHashCode();
-        if (aSemanticHash != bSemanticHash) {
+        }
+    }
+
+    static class SemanticHashTiebreaker implements Tiebreaker<RelationalExpression> {
+        private static final SemanticHashTiebreaker INSTANCE = new SemanticHashTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RelationalExpression a, @Nonnull final RelationalExpression b) {
+            final int aSemanticHash = a.semanticHashCode();
+            final int bSemanticHash = b.semanticHashCode();
             return Integer.compare(aSemanticHash, bSemanticHash);
         }
-
-        //
-        // There can be duplicates. We must be sure to tie-break them as well.
-        //
-        return -1;
     }
 }

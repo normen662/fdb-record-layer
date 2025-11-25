@@ -28,7 +28,7 @@ import java.util.Set;
 
 interface TiebreakerResult<T extends RelationalExpression> {
     @Nonnull
-    TiebreakerResult<T> breakIfTied(@Nonnull final Tiebreaker<T> nextTiebreaker);
+    TiebreakerResult<T> thenApply(@Nonnull final Tiebreaker<T> nextTiebreaker);
 
     @Nonnull
     Set<T> getBestExpressions();

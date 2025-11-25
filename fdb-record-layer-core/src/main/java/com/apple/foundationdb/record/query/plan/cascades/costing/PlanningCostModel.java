@@ -112,26 +112,27 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
         return costPlans(plans, onRemoveConsumer).getBestExpressions();
     }
 
+    @Nonnull
     private TiebreakerResult<RecordQueryPlan> costPlans(@Nonnull final Set<? extends RelationalExpression> expressions,
                                                         @Nonnull final Consumer<RecordQueryPlan> onRemoveConsumer) {
         final LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>> opsCache =
                 createOpsCache();
 
         return Tiebreaker.ofContext(getConfiguration(), opsCache, expressions, RecordQueryPlan.class, onRemoveConsumer)
-                .breakIfTied(cardinalityOfDataAccessesTiebreaker())
-                .breakIfTied(numUnsatisfiedFiltersTiebreaker())
-                .breakIfTied(numDataAccessesTiebreaker())
-                .breakIfTied(inOperatorTiebreaker())
-                .breakIfTied(primaryScanVsIndexScanTiebreaker())
-                .breakIfTied(typeFilterCountTiebreaker())
-                .breakIfTied(typeFilterPositionTiebreaker())
-                .breakIfTied(indexScanVsIndexScanTiebreaker())
-                .breakIfTied(distinctDepthTiebreaker())
-                .breakIfTied(unmatchedFieldsCountTiebreaker())
-                .breakIfTied(numSourcesInJoinTiebreaker())
-                .breakIfTied(numSimpleOperationsTiebreaker())
-                .breakIfTied(planHashTieBreaker())
-                .breakIfTied(pickLeftTieBreaker());
+                .thenApply(smallestCardinalityOfDataAccessesTiebreaker())
+                .thenApply(lowestNumUnsatisfiedFiltersTiebreaker())
+                .thenApply(lowestNumDataAccessesTiebreaker())
+                .thenApply(inOperatorTiebreaker())
+                .thenApply(primaryScanVsIndexScanTiebreaker())
+                .thenApply(lowestNumTypeFilterTiebreaker())
+                .thenApply(deepestTypeFilterPositionTiebreaker())
+                .thenApply(betterIndexScanTiebreaker())
+                .thenApply(deepestDistinctTiebreaker())
+                .thenApply(lowestNumUnmatchedFieldsTiebreaker())
+                .thenApply(highestNumInJoinTiebreaker())
+                .thenApply(lowestNumSimpleOperationsTiebreaker())
+                .thenApply(planHashTieBreaker())
+                .thenApply(pickLeftTieBreaker());
     }
 
     @Nonnull
@@ -321,18 +322,18 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
     }
 
     @Nonnull
-    static CardinalityOfDataAccessesTiebreaker cardinalityOfDataAccessesTiebreaker() {
-        return CardinalityOfDataAccessesTiebreaker.INSTANCE;
+    static SmallestCardinalityOfDataAccessesTiebreaker smallestCardinalityOfDataAccessesTiebreaker() {
+        return SmallestCardinalityOfDataAccessesTiebreaker.INSTANCE;
     }
 
     @Nonnull
-    static NumUnsatisfiedFiltersTiebreaker numUnsatisfiedFiltersTiebreaker() {
-        return NumUnsatisfiedFiltersTiebreaker.INSTANCE;
+    static LowestNumUnsatisfiedFiltersTiebreaker lowestNumUnsatisfiedFiltersTiebreaker() {
+        return LowestNumUnsatisfiedFiltersTiebreaker.INSTANCE;
     }
 
     @Nonnull
-    static NumDataAccessesTiebreaker numDataAccessesTiebreaker() {
-        return NumDataAccessesTiebreaker.INSTANCE;
+    static LowestNumDataAccessesTiebreaker lowestNumDataAccessesTiebreaker() {
+        return LowestNumDataAccessesTiebreaker.INSTANCE;
     }
 
     @Nonnull
@@ -346,38 +347,38 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
     }
 
     @Nonnull
-    static TypeFilterCountTiebreaker typeFilterCountTiebreaker() {
-        return TypeFilterCountTiebreaker.INSTANCE;
+    static LowestNumTypeFilterTiebreaker lowestNumTypeFilterTiebreaker() {
+        return LowestNumTypeFilterTiebreaker.INSTANCE;
     }
 
     @Nonnull
-    static TypeFilterPositionTiebreaker typeFilterPositionTiebreaker() {
-        return TypeFilterPositionTiebreaker.INSTANCE;
+    static DeepestTypeFilterPositionTiebreaker deepestTypeFilterPositionTiebreaker() {
+        return DeepestTypeFilterPositionTiebreaker.INSTANCE;
     }
 
     @Nonnull
-    static IndexScanVsIndexScanTiebreaker indexScanVsIndexScanTiebreaker() {
-        return IndexScanVsIndexScanTiebreaker.INSTANCE;
+    static BetterIndexScanTiebreaker betterIndexScanTiebreaker() {
+        return BetterIndexScanTiebreaker.INSTANCE;
     }
 
     @Nonnull
-    static DistinctDepthTiebreaker distinctDepthTiebreaker() {
-        return DistinctDepthTiebreaker.INSTANCE;
+    static DeepestDistinctTiebreaker deepestDistinctTiebreaker() {
+        return DeepestDistinctTiebreaker.INSTANCE;
     }
 
     @Nonnull
-    static UnmatchedFieldsCountTiebreaker unmatchedFieldsCountTiebreaker() {
-        return UnmatchedFieldsCountTiebreaker.INSTANCE;
+    static LowestNumUnmatchedFieldsTiebreaker lowestNumUnmatchedFieldsTiebreaker() {
+        return LowestNumUnmatchedFieldsTiebreaker.INSTANCE;
     }
 
     @Nonnull
-    static NumSourcesInJoinTiebreaker numSourcesInJoinTiebreaker() {
-        return NumSourcesInJoinTiebreaker.INSTANCE;
+    static HighestNumInJoinTiebreaker highestNumInJoinTiebreaker() {
+        return HighestNumInJoinTiebreaker.INSTANCE;
     }
 
     @Nonnull
-    static NumSimpleOperationsTiebreaker numSimpleOperationsTiebreaker() {
-        return NumSimpleOperationsTiebreaker.INSTANCE;
+    static LowestNumSimpleOperationsTiebreaker lowestNumSimpleOperationsTiebreaker() {
+        return LowestNumSimpleOperationsTiebreaker.INSTANCE;
     }
 
     @Nonnull
@@ -386,12 +387,12 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
     }
 
     @Nonnull
-    static PickLeftTieBreaker pickLeftTieBreaker() {
-        return PickLeftTieBreaker.INSTANCE;
+    static PickLeftTieBreaker<RecordQueryPlan> pickLeftTieBreaker() {
+        return PickLeftTieBreaker.INSTANCE_PLAN;
     }
 
-    static class CardinalityOfDataAccessesTiebreaker implements Tiebreaker<RecordQueryPlan> {
-        private static final CardinalityOfDataAccessesTiebreaker INSTANCE = new CardinalityOfDataAccessesTiebreaker();
+    static class SmallestCardinalityOfDataAccessesTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final SmallestCardinalityOfDataAccessesTiebreaker INSTANCE = new SmallestCardinalityOfDataAccessesTiebreaker();
 
         @Override
         public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
@@ -426,8 +427,8 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
         }
     }
 
-    static class NumUnsatisfiedFiltersTiebreaker implements Tiebreaker<RecordQueryPlan> {
-        private static final NumUnsatisfiedFiltersTiebreaker INSTANCE = new NumUnsatisfiedFiltersTiebreaker();
+    static class LowestNumUnsatisfiedFiltersTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final LowestNumUnsatisfiedFiltersTiebreaker INSTANCE = new LowestNumUnsatisfiedFiltersTiebreaker();
 
         @Override
         public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
@@ -439,8 +440,8 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
         }
     }
 
-    static class NumDataAccessesTiebreaker implements Tiebreaker<RecordQueryPlan> {
-        private static final NumDataAccessesTiebreaker INSTANCE = new NumDataAccessesTiebreaker();
+    static class LowestNumDataAccessesTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final LowestNumDataAccessesTiebreaker INSTANCE = new LowestNumDataAccessesTiebreaker();
 
         @Override
         public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
@@ -506,8 +507,8 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
         }
     }
 
-    static class TypeFilterCountTiebreaker implements Tiebreaker<RecordQueryPlan> {
-        private static final TypeFilterCountTiebreaker INSTANCE = new TypeFilterCountTiebreaker();
+    static class LowestNumTypeFilterTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final LowestNumTypeFilterTiebreaker INSTANCE = new LowestNumTypeFilterTiebreaker();
 
         @Override
         public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
@@ -519,8 +520,8 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
         }
     }
 
-    static class TypeFilterPositionTiebreaker implements Tiebreaker<RecordQueryPlan> {
-        private static final TypeFilterPositionTiebreaker INSTANCE = new TypeFilterPositionTiebreaker();
+    static class DeepestTypeFilterPositionTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final DeepestTypeFilterPositionTiebreaker INSTANCE = new DeepestTypeFilterPositionTiebreaker();
 
         @Override
         public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
@@ -532,8 +533,8 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
         }
     }
 
-    static class IndexScanVsIndexScanTiebreaker implements Tiebreaker<RecordQueryPlan> {
-        private static final IndexScanVsIndexScanTiebreaker INSTANCE = new IndexScanVsIndexScanTiebreaker();
+    static class BetterIndexScanTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final BetterIndexScanTiebreaker INSTANCE = new BetterIndexScanTiebreaker();
 
         @Override
         public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
@@ -563,19 +564,15 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
                 // All things being equal for index vs covering index -- there are plans competing of the following shape
                 // FETCH(COVERING(INDEX_SCAN())) vs INDEX_SCAN() that count identically up to here. Let the plan win that
                 // has fewer actual FETCH() operators.
-                int numFetchOperatorsCompare =
-                        Integer.compare(count(opsMapA, RecordQueryFetchFromPartialRecordPlan.class),
-                                count(opsMapB, RecordQueryFetchFromPartialRecordPlan.class));
-                if (numFetchOperatorsCompare != 0) {
-                    return numFetchOperatorsCompare;
-                }
+                return Integer.compare(count(opsMapA, RecordQueryFetchFromPartialRecordPlan.class),
+                        count(opsMapB, RecordQueryFetchFromPartialRecordPlan.class));
             }
             return 0;
         }
     }
 
-    static class DistinctDepthTiebreaker implements Tiebreaker<RecordQueryPlan> {
-        private static final DistinctDepthTiebreaker INSTANCE = new DistinctDepthTiebreaker();
+    static class DeepestDistinctTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final DeepestDistinctTiebreaker INSTANCE = new DeepestDistinctTiebreaker();
 
         @Override
         public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
@@ -587,8 +584,8 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
         }
     }
 
-    static class UnmatchedFieldsCountTiebreaker implements Tiebreaker<RecordQueryPlan> {
-        private static final UnmatchedFieldsCountTiebreaker INSTANCE = new UnmatchedFieldsCountTiebreaker();
+    static class LowestNumUnmatchedFieldsTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final LowestNumUnmatchedFieldsTiebreaker INSTANCE = new LowestNumUnmatchedFieldsTiebreaker();
 
         @Override
         public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
@@ -599,8 +596,8 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
         }
     }
 
-    static class NumSourcesInJoinTiebreaker implements Tiebreaker<RecordQueryPlan> {
-        private static final NumSourcesInJoinTiebreaker INSTANCE = new NumSourcesInJoinTiebreaker();
+    static class HighestNumInJoinTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final HighestNumInJoinTiebreaker INSTANCE = new HighestNumInJoinTiebreaker();
 
         @Override
         public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
@@ -615,8 +612,8 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
         }
     }
 
-    static class NumSimpleOperationsTiebreaker implements Tiebreaker<RecordQueryPlan> {
-        private static final NumSimpleOperationsTiebreaker INSTANCE = new NumSimpleOperationsTiebreaker();
+    static class LowestNumSimpleOperationsTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final LowestNumSimpleOperationsTiebreaker INSTANCE = new LowestNumSimpleOperationsTiebreaker();
 
         @Override
         public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
@@ -653,15 +650,4 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
         }
     }
 
-    static class PickLeftTieBreaker implements Tiebreaker<RecordQueryPlan> {
-        private static final PickLeftTieBreaker INSTANCE = new PickLeftTieBreaker();
-
-        @Override
-        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
-                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
-                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
-                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
-            return -1;
-        }
-    }
 }
