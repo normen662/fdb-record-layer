@@ -114,6 +114,10 @@ public class FindExpressionVisitor implements SimpleExpressionVisitor<Map<Class<
     @Nonnull
     @SafeVarargs
     public static Set<? extends RelationalExpression> slice(@Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> inMap, @Nonnull final Class<? extends RelationalExpression>... expressionClasses) {
+        if (expressionClasses.length == 1) {
+            return inMap.getOrDefault(expressionClasses[0], ImmutableSet.of());
+        }
+
         final Set<RelationalExpression> accumulated = new LinkedIdentitySet<>();
         for (final Class<? extends RelationalExpression> expressionClass : expressionClasses) {
             final Set<RelationalExpression> childResultForClass = inMap.get(expressionClass);

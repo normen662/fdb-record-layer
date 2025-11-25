@@ -1,5 +1,5 @@
 /*
- * TerminalTiebreaker.java
+ * TerminalTiebreakerResult.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -29,11 +29,11 @@ import javax.annotation.Nullable;
 import java.util.Optional;
 import java.util.Set;
 
-class TerminalTiebreaker<T extends RelationalExpression> implements TiebreakerResult<T> {
+class TerminalTiebreakerResult<T extends RelationalExpression> implements TiebreakerResult<T> {
     @Nullable
     private final T bestExpression;
 
-    public TerminalTiebreaker(@Nonnull final Set<T> bestExpressions) {
+    public TerminalTiebreakerResult(@Nonnull final Set<T> bestExpressions) {
         this.bestExpression = Iterables.getOnlyElement(bestExpressions, null);
     }
 

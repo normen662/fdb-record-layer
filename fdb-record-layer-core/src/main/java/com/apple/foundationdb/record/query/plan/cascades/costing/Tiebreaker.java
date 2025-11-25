@@ -20,9 +20,11 @@
 
 package com.apple.foundationdb.record.query.plan.cascades.costing;
 
+import com.apple.foundationdb.record.RecordCoreException;
 import com.apple.foundationdb.record.query.plan.RecordQueryPlannerConfiguration;
 import com.apple.foundationdb.record.query.plan.cascades.LinkedIdentitySet;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalExpression;
+import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 
@@ -30,6 +32,7 @@ import javax.annotation.Nonnull;
 import java.util.EnumSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.function.BiConsumer;
 import java.util.function.BinaryOperator;
 import java.util.function.Consumer;
@@ -45,33 +48,33 @@ interface Tiebreaker<T extends RelationalExpression> {
 
     @Nonnull
     static <T extends RelationalExpression> TiebreakerResult<T>
-            breakIfTied(@Nonnull final RecordQueryPlannerConfiguration plannerConfiguration,
-                        @Nonnull final Tiebreaker<T> tieBreaker,
-                        @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
-                        @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
-                        @Nonnull final Set<T> expressions,
-                        @Nonnull final Consumer<T> onRemoveConsumer) {
-        if (expressions.size() <= 1) {
-            return new TerminalTiebreaker<>(expressions);
-        }
-        final var bestExpressions =
+            ofContext(@Nonnull final RecordQueryPlannerConfiguration plannerConfiguration,
+                      @Nonnull final LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>> opsCache,
+                      @Nonnull final Set<? extends RelationalExpression> expressions,
+                      @Nonnull final Class<T> specificClazz,
+                      @Nonnull final Consumer<T> onRemoveConsumer) {
+        final var filteredExpressions =
                 expressions.stream()
-                        .collect(toBestExpressions(plannerConfiguration, tieBreaker, opsMapA, opsMapB, onRemoveConsumer));
+                        .map(specificClazz::cast)
+                        .collect(LinkedIdentitySet.toLinkedIdentitySet());
 
-        return new TiebreakerResultWithNext<>(plannerConfiguration, opsMapA, opsMapB, bestExpressions, onRemoveConsumer);
+        if (expressions.size() <= 1) {
+            return new TerminalTiebreakerResult<>(filteredExpressions);
+        }
+
+        return new TiebreakerResultWithNext<>(plannerConfiguration, opsCache, filteredExpressions, onRemoveConsumer);
     }
 
     @Nonnull
     static <T extends RelationalExpression> Collector<T, LinkedIdentitySet<T>, Set<T>>
              toBestExpressions(@Nonnull final RecordQueryPlannerConfiguration plannerConfiguration,
                                @Nonnull final Tiebreaker<T> tieBreaker,
-                               @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
-                               @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                               @Nonnull final LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>> opsCache,
                                @Nonnull final Consumer<T> onRemoveConsumer) {
         return new BestExpressionsCollector<>(
                 ImmutableSet.copyOf(EnumSet.of(Collector.Characteristics.UNORDERED,
                         Collector.Characteristics.IDENTITY_FINISH)),
-                plannerConfiguration, tieBreaker, opsMapA, opsMapB, onRemoveConsumer);
+                plannerConfiguration, tieBreaker, opsCache, onRemoveConsumer);
     }
 
     /**
@@ -87,23 +90,19 @@ interface Tiebreaker<T extends RelationalExpression> {
         @Nonnull
         private final Tiebreaker<T> tieBreaker;
         @Nonnull
-        private final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA;
-        @Nonnull
-        private final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB;
+        private final LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>> opsCache;
         @Nonnull
         private final Consumer<T> onRemoveConsumer;
 
         private BestExpressionsCollector(@Nonnull final Set<Characteristics> characteristics,
                                          @Nonnull final RecordQueryPlannerConfiguration plannerConfiguration,
                                          @Nonnull final Tiebreaker<T> tieBreaker,
-                                         @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
-                                         @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                                         @Nonnull final LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>> opsCache,
                                          @Nonnull final Consumer<T> onRemoveConsumer) {
             this.characteristics = characteristics;
             this.plannerConfiguration = plannerConfiguration;
             this.tieBreaker = tieBreaker;
-            this.opsMapA = opsMapA;
-            this.opsMapB = opsMapB;
+            this.opsCache = opsCache;
             this.onRemoveConsumer = onRemoveConsumer;
         }
 
@@ -112,11 +111,24 @@ interface Tiebreaker<T extends RelationalExpression> {
             return (bestExpressions, newExpression) -> {
                 // pick a representative from the best expressions set and cost that against the new expression
                 final var aBestExpression = Iterables.getFirst(bestExpressions, null);
-                final var compare =
-                        aBestExpression == null
-                        ? -1
-                        : tieBreaker.compare(plannerConfiguration, opsMapA, opsMapB,
-                                newExpression, aBestExpression);
+                final int compare;
+                if (aBestExpression == null) {
+                    compare = -1;
+                } else {
+                    final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA;
+                    final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB;
+                    try {
+                        opsMapA = opsCache.get(newExpression);
+                        opsMapB = opsCache.get(newExpression);
+                    } catch (ExecutionException eE) {
+                        throw new RecordCoreException(eE);
+                    }
+
+                    compare =
+                            tieBreaker.compare(plannerConfiguration, opsMapA, opsMapB,
+                                    newExpression, aBestExpression);
+                }
+
                 if (compare < 0) {
                     bestExpressions.clear();
                     bestExpressions.add(newExpression);
@@ -146,8 +158,18 @@ interface Tiebreaker<T extends RelationalExpression> {
                 if (aRightBestExpression == null) {
                     return left;
                 }
-                final var compare = tieBreaker.compare(plannerConfiguration, opsMapA, opsMapB,
-                        aLeftBestExpression, aRightBestExpression);
+
+                final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> leftMap;
+                final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> rightMap;
+                try {
+                    leftMap = opsCache.get(aLeftBestExpression);
+                    rightMap = opsCache.get(aRightBestExpression);
+                } catch (ExecutionException eE) {
+                    throw new RecordCoreException(eE);
+                }
+                final int compare =
+                        tieBreaker.compare(plannerConfiguration, leftMap, rightMap,
+                                aLeftBestExpression, aRightBestExpression);
                 if (compare < 0) {
                     right.forEach(onRemoveConsumer);
                     return left;

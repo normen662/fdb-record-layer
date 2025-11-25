@@ -613,7 +613,7 @@ public class CascadesPlanner implements QueryPlanner {
         @Override
         public void execute() {
             RelationalExpression bestFinalExpression = null;
-            final var costModel = plannerPhase.createCostModel(configuration);
+            final CascadesCostModel<? extends RelationalExpression> costModel = plannerPhase.createCostModel(configuration);
             for (final var finalExpression : group.getFinalExpressions()) {
                 if (bestFinalExpression == null || costModel.compare(finalExpression, bestFinalExpression) < 0) {
                     if (bestFinalExpression != null) {
@@ -627,14 +627,12 @@ public class CascadesPlanner implements QueryPlanner {
                 }
             }
 
-            final var bestExpressions =
-                    group.getFinalExpressions()
-                            .stream()
-                            .collect(CascadesCostModel.toBestExpressions(costModel,
-                                    expression -> { } /*traversal.removeExpression(group, expression)*/));
-            Verify.verify(bestExpressions.size() <= 1);
-            if (bestExpressions.size() == 1) {
-                Verify.verify(Iterables.getFirst(bestExpressions, null).equals(bestFinalExpression));
+            final var bestExpressionOptional =
+                    costModel.getBestExpression(group.getFinalExpressions(),
+                            removedPlan -> traversal.removeExpression(group, removedPlan));
+
+            if (bestExpressionOptional.isPresent()) {
+                Verify.verify(bestExpressionOptional.get().equals(bestFinalExpression));
             }
 
             //

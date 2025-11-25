@@ -23,6 +23,7 @@ package com.apple.foundationdb.record.query.plan.cascades.costing;
 import com.apple.foundationdb.record.query.plan.RecordQueryPlannerConfiguration;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalExpression;
 import com.google.common.base.Verify;
+import com.google.common.cache.LoadingCache;
 import com.google.common.collect.Iterables;
 
 import javax.annotation.Nonnull;
@@ -35,22 +36,18 @@ class TiebreakerResultWithNext<T extends RelationalExpression> implements Tiebre
     @Nonnull
     private final RecordQueryPlannerConfiguration plannerConfiguration;
     @Nonnull
-    private final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA;
-    @Nonnull
-    private final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB;
+    private final LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>> opsCache;
     @Nonnull
     private final Set<T> expressions;
     @Nonnull
     private final Consumer<T> onRemoveConsumer;
 
     TiebreakerResultWithNext(@Nonnull final RecordQueryPlannerConfiguration plannerConfiguration,
-                             @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
-                             @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                             @Nonnull final LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>> opsCache,
                              @Nonnull final Set<T> expressions,
                              @Nonnull final Consumer<T> onRemoveConsumer) {
         this.plannerConfiguration = plannerConfiguration;
-        this.opsMapB = opsMapB;
-        this.opsMapA = opsMapA;
+        this.opsCache = opsCache;
         this.expressions = expressions;
         this.onRemoveConsumer = onRemoveConsumer;
     }
@@ -59,14 +56,14 @@ class TiebreakerResultWithNext<T extends RelationalExpression> implements Tiebre
     @Override
     public TiebreakerResult<T> breakIfTied(@Nonnull final Tiebreaker<T> nextTiebreaker) {
         if (expressions.size() <= 1) {
-            return new TerminalTiebreaker<>(expressions);
+            return new TerminalTiebreakerResult<>(expressions);
         }
         final var bestExpressions =
                 expressions.stream()
                         .collect(Tiebreaker.toBestExpressions(plannerConfiguration, nextTiebreaker,
-                                opsMapA, opsMapB, onRemoveConsumer));
+                                opsCache, onRemoveConsumer));
 
-        return new TiebreakerResultWithNext<>(plannerConfiguration, opsMapA, opsMapB, bestExpressions, onRemoveConsumer);
+        return new TiebreakerResultWithNext<>(plannerConfiguration, opsCache, bestExpressions, onRemoveConsumer);
     }
 
     @Nonnull

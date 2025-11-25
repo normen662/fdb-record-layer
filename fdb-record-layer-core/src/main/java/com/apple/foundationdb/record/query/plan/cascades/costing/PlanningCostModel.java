@@ -44,14 +44,19 @@ import com.apple.foundationdb.record.query.plan.plans.RecordQueryPlan;
 import com.apple.foundationdb.record.query.plan.plans.RecordQueryPlanWithIndex;
 import com.apple.foundationdb.record.query.plan.plans.RecordQueryPredicatesFilterPlan;
 import com.apple.foundationdb.record.query.plan.plans.RecordQueryScanPlan;
-import com.google.common.base.Verify;
+import com.apple.foundationdb.record.query.plan.plans.RecordQueryTypeFilterPlan;
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 
 import javax.annotation.Nonnull;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static com.apple.foundationdb.record.Bindings.Internal.CORRELATION;
@@ -59,7 +64,6 @@ import static com.apple.foundationdb.record.query.plan.cascades.properties.Cardi
 import static com.apple.foundationdb.record.query.plan.cascades.properties.ComparisonsProperty.comparisons;
 import static com.apple.foundationdb.record.query.plan.cascades.properties.ExpressionDepthProperty.fetchDepth;
 import static com.apple.foundationdb.record.query.plan.cascades.properties.ExpressionDepthProperty.typeFilterDepth;
-import static com.apple.foundationdb.record.query.plan.cascades.properties.TypeFilterCountProperty.typeFilterCount;
 import static com.apple.foundationdb.record.query.plan.cascades.properties.UnmatchedFieldsCountProperty.unmatchedFieldsCount;
 
 /**
@@ -69,7 +73,7 @@ import static com.apple.foundationdb.record.query.plan.cascades.properties.Unmat
 @API(API.Status.EXPERIMENTAL)
 @SuppressWarnings("PMD.TooManyStaticImports")
 @SpotBugsSuppressWarnings("SE_COMPARATOR_SHOULD_BE_SERIALIZABLE")
-public class PlanningCostModel implements CascadesCostModel {
+public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
     @Nonnull
     private static final Set<Class<? extends RelationalExpression>> interestingPlanClasses =
             ImmutableSet.of(
@@ -94,199 +98,58 @@ public class PlanningCostModel implements CascadesCostModel {
         return configuration;
     }
 
+    @Nonnull
     @Override
-    public int compare(@Nonnull final RelationalExpression a, @Nonnull final RelationalExpression b) {
-        if (a instanceof RecordQueryPlan && !(b instanceof RecordQueryPlan)) {
-            return -1;
-        }
-        if (!(a instanceof RecordQueryPlan) && b instanceof RecordQueryPlan) {
-            return 1;
-        }
-
-        Verify.verify(a instanceof RecordQueryPlan);
-        final RecordQueryPlan aPlan = (RecordQueryPlan)a;
-        final RecordQueryPlan bPlan = (RecordQueryPlan)b;
-
-        final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> planOpsMapA =
-                FindExpressionVisitor.evaluate(interestingPlanClasses, aPlan);
-
-        final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> planOpsMapB =
-                FindExpressionVisitor.evaluate(interestingPlanClasses, bPlan);
-
-        final Cardinalities cardinalitiesA = cardinalities().evaluate(aPlan);
-        final Cardinalities cardinalitiesB = cardinalities().evaluate(bPlan);
-
-        //
-        // Technically, both cardinalities at runtime must be the same. The question is if we can actually
-        // statically prove that there is a max cardinality other than the unknown cardinality.
-        //
-        if (!cardinalitiesA.getMaxCardinality().isUnknown() || !cardinalitiesB.getMaxCardinality().isUnknown()) {
-            final Cardinality maxOfMaxCardinalityOfAllDataAccessesA = maxOfMaxCardinalitiesOfAllDataAccesses(planOpsMapA);
-            final Cardinality maxOfMaxCardinalityOfAllDataAccessesB = maxOfMaxCardinalitiesOfAllDataAccesses(planOpsMapB);
-
-            if (!maxOfMaxCardinalityOfAllDataAccessesA.isUnknown() || !maxOfMaxCardinalityOfAllDataAccessesB.isUnknown()) {
-                // at least one of them is not just unknown
-                if (maxOfMaxCardinalityOfAllDataAccessesA.isUnknown()) {
-                    return 1;
-                }
-                if (maxOfMaxCardinalityOfAllDataAccessesB.isUnknown()) {
-                    return -1;
-                }
-                int maxOfMaxCardinalityCompare =
-                        Long.compare(maxOfMaxCardinalityOfAllDataAccessesA.getCardinality(),
-                                maxOfMaxCardinalityOfAllDataAccessesB.getCardinality());
-                if (maxOfMaxCardinalityCompare != 0) {
-                    return maxOfMaxCardinalityCompare;
-                }
-            }
-        }
-
-        int unsatisfiedFilterCompare = Long.compare(NormalizedResidualPredicateProperty.countNormalizedConjuncts(aPlan),
-                NormalizedResidualPredicateProperty.countNormalizedConjuncts(bPlan));
-        if (unsatisfiedFilterCompare != 0) {
-            return unsatisfiedFilterCompare;
-        }
-
-        final int numDataAccessA =
-                count(planOpsMapA,
-                        RecordQueryScanPlan.class,
-                        RecordQueryPlanWithIndex.class,
-                        RecordQueryCoveringIndexPlan.class);
-
-
-        final int numDataAccessB =
-                count(planOpsMapB,
-                        RecordQueryScanPlan.class,
-                        RecordQueryPlanWithIndex.class,
-                        RecordQueryCoveringIndexPlan.class);
-
-        int countDataAccessesCompare =
-                Integer.compare(numDataAccessA, numDataAccessB);
-        if (countDataAccessesCompare != 0) {
-            return countDataAccessesCompare;
-        }
-
-        // special case
-        // if one plan is a inUnion plan
-        final OptionalInt inPlanVsOtherOptional =
-                flipFlop(() -> compareInOperator(aPlan, bPlan), () -> compareInOperator(bPlan, aPlan));
-        if (inPlanVsOtherOptional.isPresent() && inPlanVsOtherOptional.getAsInt() != 0) {
-            return inPlanVsOtherOptional.getAsInt();
-        }
-
-        final int typeFilterCountA = typeFilterCount().evaluate(aPlan);
-        final int typeFilterCountB = typeFilterCount().evaluate(bPlan);
-
-        // special case
-        // if one plan is a primary scan with a type filter and the other one is an index scan with the same number of
-        // unsatisfied filters (i.e. both plans use the same number of filters as search arguments), we break the tie
-        // by using a planning flag
-        final OptionalInt primaryScanVsIndexScanCompareOptional =
-                flipFlop(() -> comparePrimaryScanToIndexScan(aPlan, bPlan, planOpsMapA, planOpsMapB, typeFilterCountA, typeFilterCountB),
-                        () -> comparePrimaryScanToIndexScan(bPlan, aPlan, planOpsMapB, planOpsMapA, typeFilterCountB, typeFilterCountA));
-        if (primaryScanVsIndexScanCompareOptional.isPresent() && primaryScanVsIndexScanCompareOptional.getAsInt() != 0) {
-            return primaryScanVsIndexScanCompareOptional.getAsInt();
-        }
-
-        int typeFilterCountCompare = Integer.compare(typeFilterCountA, typeFilterCountB);
-        if (typeFilterCountCompare != 0) {
-            return typeFilterCountCompare;
-        }
-
-        // prefer the one with a deeper type filter
-        int typeFilterPositionCompare = Integer.compare(typeFilterDepth().evaluate(bPlan), typeFilterDepth().evaluate(aPlan));
-        if (typeFilterPositionCompare != 0) {
-            return typeFilterPositionCompare;
-        }
-
-        if (count(planOpsMapA, RecordQueryPlanWithIndex.class, RecordQueryCoveringIndexPlan.class) > 0 &&
-                count(planOpsMapB, RecordQueryPlanWithIndex.class, RecordQueryCoveringIndexPlan.class) > 0) {
-            // both plans are index scans
-
-            // how many fetches are there, regular index scans fetch when they scan
-            int numFetchesA = count(planOpsMapA, RecordQueryPlanWithIndex.class, RecordQueryFetchFromPartialRecordPlan.class);
-            int numFetchesB = count(planOpsMapB, RecordQueryPlanWithIndex.class, RecordQueryFetchFromPartialRecordPlan.class);
-
-            final int numFetchesCompare = Integer.compare(numFetchesA, numFetchesB);
-            if (numFetchesCompare != 0) {
-                return numFetchesCompare;
-            }
-
-            final int fetchDepthB = fetchDepth().evaluate(bPlan);
-            final int fetchDepthA = fetchDepth().evaluate(aPlan);
-            int fetchPositionCompare = Integer.compare(fetchDepthA, fetchDepthB);
-            if (fetchPositionCompare != 0) {
-                return fetchPositionCompare;
-            }
-
-            // All things being equal for index vs covering index -- there are plans competing of the following shape
-            // FETCH(COVERING(INDEX_SCAN())) vs INDEX_SCAN() that count identically up to here. Let the plan win that
-            // has fewer actual FETCH() operators.
-            int numFetchOperatorsCompare =
-                    Integer.compare(count(planOpsMapA, RecordQueryFetchFromPartialRecordPlan.class),
-                            count(planOpsMapB, RecordQueryFetchFromPartialRecordPlan.class));
-            if (numFetchOperatorsCompare != 0) {
-                return numFetchOperatorsCompare;
-            }
-        }
-
-        int distinctFilterPositionCompare = Integer.compare(ExpressionDepthProperty.distinctDepth().evaluate(bPlan),
-                ExpressionDepthProperty.distinctDepth().evaluate(aPlan));
-        if (distinctFilterPositionCompare != 0) {
-            return distinctFilterPositionCompare;
-        }
-
-        int ufpA = unmatchedFieldsCount().evaluate(aPlan);
-        int ufpB = unmatchedFieldsCount().evaluate(bPlan);
-        if (ufpA != ufpB) {
-            return Integer.compare(ufpA, ufpB);
-        }
-
-        //
-        //  If a plan has more in-join sources, it is preferable.
-        //
-        final int numSourcesInJoinA = count(planOpsMapA, RecordQueryInJoinPlan.class);
-        final int numSourcesInJoinB = count(planOpsMapB, RecordQueryInJoinPlan.class);
-
-        int numSourcesInJoinCompare =
-                Integer.compare(numSourcesInJoinB, numSourcesInJoinA);
-        if (numSourcesInJoinCompare != 0) {
-            // bigger one wins
-            return numSourcesInJoinCompare;
-        }
-
-        //
-        //  If a plan has fewer MAP/FILTERS operations, it is preferable.
-        //
-        final int numSimpleOperationsA = count(planOpsMapA, RecordQueryMapPlan.class) +
-                count(planOpsMapA, RecordQueryPredicatesFilterPlan.class);
-        final int numSimpleOperationsB = count(planOpsMapB, RecordQueryMapPlan.class) +
-                count(planOpsMapB, RecordQueryPredicatesFilterPlan.class);
-
-        int numSimpleOperationsCompare =
-                Integer.compare(numSimpleOperationsA, numSimpleOperationsB);
-        if (numSimpleOperationsCompare != 0) {
-            // smaller one wins
-            return numSimpleOperationsCompare;
-        }
-
-        //
-        // If expressions are indistinguishable from a cost perspective, select one by its semanticHash.
-        //
-        final int aPlanHash = aPlan.planHash(PlanHashable.CURRENT_FOR_CONTINUATION);
-        final int bPlanHash = bPlan.planHash(PlanHashable.CURRENT_FOR_CONTINUATION);
-        if (aPlanHash != bPlanHash) {
-            return Integer.compare(aPlanHash, bPlanHash);
-        }
-
-        //
-        // There can be plan duplicates. We must be sure to tie-break them as well.
-        //
-        return -1;
+    public Optional<RecordQueryPlan> getBestExpression(@Nonnull final Set<? extends RelationalExpression> plans,
+                                                       @Nonnull final Consumer<RecordQueryPlan> onRemoveConsumer) {
+        return costPlans(plans, onRemoveConsumer).getOnlyExpressionMaybe();
     }
 
     @Nonnull
-    private Cardinality maxOfMaxCardinalitiesOfAllDataAccesses(@Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> planOpsMap) {
+    @Override
+    public Set<RecordQueryPlan> getBestExpressions(@Nonnull final Set<? extends RelationalExpression> plans,
+                                                   @Nonnull final Consumer<RecordQueryPlan> onRemoveConsumer) {
+        return costPlans(plans, onRemoveConsumer).getBestExpressions();
+    }
+
+    private TiebreakerResult<RecordQueryPlan> costPlans(@Nonnull final Set<? extends RelationalExpression> expressions,
+                                                        @Nonnull final Consumer<RecordQueryPlan> onRemoveConsumer) {
+        final LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>> opsCache =
+                createOpsCache();
+
+        return Tiebreaker.ofContext(getConfiguration(), opsCache, expressions, RecordQueryPlan.class, onRemoveConsumer)
+                .breakIfTied(cardinalityOfDataAccessesTiebreaker())
+                .breakIfTied(numUnsatisfiedFiltersTiebreaker())
+                .breakIfTied(numDataAccessesTiebreaker())
+                .breakIfTied(inOperatorTiebreaker())
+                .breakIfTied(primaryScanVsIndexScanTiebreaker())
+                .breakIfTied(typeFilterCountTiebreaker())
+                .breakIfTied(typeFilterPositionTiebreaker())
+                .breakIfTied(indexScanVsIndexScanTiebreaker())
+                .breakIfTied(distinctDepthTiebreaker())
+                .breakIfTied(unmatchedFieldsCountTiebreaker())
+                .breakIfTied(numSourcesInJoinTiebreaker())
+                .breakIfTied(numSimpleOperationsTiebreaker())
+                .breakIfTied(planHashTieBreaker())
+                .breakIfTied(pickLeftTieBreaker());
+    }
+
+    @Nonnull
+    private static LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>>
+            createOpsCache() {
+        return CacheBuilder.newBuilder()
+                .build(new CacheLoader<>() {
+                    @Override
+                    @Nonnull
+                    public Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>
+                             load(@Nonnull final RelationalExpression key) {
+                        return FindExpressionVisitor.evaluate(interestingPlanClasses, key);
+                    }
+                });
+    }
+
+    @Nonnull
+    private static Cardinality maxOfMaxCardinalitiesOfAllDataAccesses(@Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> planOpsMap) {
         return FindExpressionVisitor.slice(planOpsMap, RecordQueryScanPlan.class, RecordQueryPlanWithIndex.class, RecordQueryCoveringIndexPlan.class)
                 .stream()
                 .map(plan -> cardinalities().evaluate(plan).getMaxCardinality())
@@ -317,22 +180,26 @@ public class PlanningCostModel implements CascadesCostModel {
      * {@code OptionalInt.empty()} if it does not hold true. This method is meant to be called using
      * {@link #flipFlop(Supplier, Supplier)} meaning that we will discover if the opposite holds true.
      *
+     * @param plannerConfiguration the current planner configuration
+     * @param primaryScan the {@link RecordQueryPlan} that is the primary scan
+     * @param indexScan the {@link RecordQueryPlan} that is the index scan
      * @param planOpsMapPrimaryScan map to hold counts for the primary scan plan
      * @param planOpsMapIndexScan map to hold counts for the index scan plan
-     * @param typeFilterCountPrimaryScan number of type filters on the primary scan plan
      * @return an {@link OptionalInt} that is the result of the comparison between a primary scan plan and an index
      *         scan plan, or {@code OptionalInt.empty()}.
      */
-    private OptionalInt comparePrimaryScanToIndexScan(@Nonnull RelationalExpression primaryScan,
-                                                      @Nonnull RelationalExpression indexScan,
-                                                      @Nonnull Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> planOpsMapPrimaryScan,
-                                                      @Nonnull Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> planOpsMapIndexScan,
-                                                      final int typeFilterCountPrimaryScan,
-                                                      final int typeFilterCountIndexScan) {
+    private static OptionalInt comparePrimaryScanToIndexScan(@Nonnull final RecordQueryPlannerConfiguration plannerConfiguration,
+                                                             @Nonnull RelationalExpression primaryScan,
+                                                             @Nonnull RelationalExpression indexScan,
+                                                             @Nonnull Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> planOpsMapPrimaryScan,
+                                                             @Nonnull Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> planOpsMapIndexScan) {
         if (count(planOpsMapPrimaryScan, RecordQueryScanPlan.class) == 1 &&
                 count(planOpsMapPrimaryScan, RecordQueryPlanWithIndex.class) == 0 &&
                 count(planOpsMapIndexScan, RecordQueryScanPlan.class) == 0 &&
                 isSingularIndexScanWithFetch(planOpsMapIndexScan)) {
+
+            final int typeFilterCountPrimaryScan = count(planOpsMapPrimaryScan, RecordQueryTypeFilterPlan.class);
+            final int typeFilterCountIndexScan = count(planOpsMapIndexScan, RecordQueryTypeFilterPlan.class);
 
             if (typeFilterCountPrimaryScan > 0 && typeFilterCountIndexScan == 0) {
                 final var primaryScanComparisons = comparisons().evaluate(primaryScan);
@@ -361,7 +228,7 @@ public class PlanningCostModel implements CascadesCostModel {
                 }
             }
 
-            if (configuration.getIndexScanPreference() == IndexScanPreference.PREFER_SCAN) {
+            if (plannerConfiguration.getIndexScanPreference() == IndexScanPreference.PREFER_SCAN) {
                 return OptionalInt.of(-1);
             } else {
                 return OptionalInt.of(1);
@@ -451,5 +318,350 @@ public class PlanningCostModel implements CascadesCostModel {
     @SafeVarargs
     private static int count(@Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> expressionsMap, @Nonnull final Class<? extends RelationalExpression>... interestingClasses) {
         return FindExpressionVisitor.slice(expressionsMap, interestingClasses).size();
+    }
+
+    @Nonnull
+    static CardinalityOfDataAccessesTiebreaker cardinalityOfDataAccessesTiebreaker() {
+        return CardinalityOfDataAccessesTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static NumUnsatisfiedFiltersTiebreaker numUnsatisfiedFiltersTiebreaker() {
+        return NumUnsatisfiedFiltersTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static NumDataAccessesTiebreaker numDataAccessesTiebreaker() {
+        return NumDataAccessesTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static InOperatorTiebreaker inOperatorTiebreaker() {
+        return InOperatorTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static PrimaryScanVsIndexScanTiebreaker primaryScanVsIndexScanTiebreaker() {
+        return PrimaryScanVsIndexScanTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static TypeFilterCountTiebreaker typeFilterCountTiebreaker() {
+        return TypeFilterCountTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static TypeFilterPositionTiebreaker typeFilterPositionTiebreaker() {
+        return TypeFilterPositionTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static IndexScanVsIndexScanTiebreaker indexScanVsIndexScanTiebreaker() {
+        return IndexScanVsIndexScanTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static DistinctDepthTiebreaker distinctDepthTiebreaker() {
+        return DistinctDepthTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static UnmatchedFieldsCountTiebreaker unmatchedFieldsCountTiebreaker() {
+        return UnmatchedFieldsCountTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static NumSourcesInJoinTiebreaker numSourcesInJoinTiebreaker() {
+        return NumSourcesInJoinTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static NumSimpleOperationsTiebreaker numSimpleOperationsTiebreaker() {
+        return NumSimpleOperationsTiebreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static PlanHashTieBreaker planHashTieBreaker() {
+        return PlanHashTieBreaker.INSTANCE;
+    }
+
+    @Nonnull
+    static PickLeftTieBreaker pickLeftTieBreaker() {
+        return PickLeftTieBreaker.INSTANCE;
+    }
+
+    static class CardinalityOfDataAccessesTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final CardinalityOfDataAccessesTiebreaker INSTANCE = new CardinalityOfDataAccessesTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            final Cardinalities cardinalitiesA = cardinalities().evaluate(a);
+            final Cardinalities cardinalitiesB = cardinalities().evaluate(b);
+
+            //
+            // Technically, both cardinalities at runtime must be the same. The question is if we can actually
+            // statically prove that there is a max cardinality other than the unknown cardinality.
+            //
+            if (!cardinalitiesA.getMaxCardinality().isUnknown() || !cardinalitiesB.getMaxCardinality().isUnknown()) {
+                final Cardinality maxOfMaxCardinalityOfAllDataAccessesA = maxOfMaxCardinalitiesOfAllDataAccesses(opsMapA);
+                final Cardinality maxOfMaxCardinalityOfAllDataAccessesB = maxOfMaxCardinalitiesOfAllDataAccesses(opsMapB);
+
+                if (!maxOfMaxCardinalityOfAllDataAccessesA.isUnknown() || !maxOfMaxCardinalityOfAllDataAccessesB.isUnknown()) {
+                    // at least one of them is not just unknown
+                    if (maxOfMaxCardinalityOfAllDataAccessesA.isUnknown()) {
+                        return 1;
+                    }
+                    if (maxOfMaxCardinalityOfAllDataAccessesB.isUnknown()) {
+                        return -1;
+                    }
+                    return Long.compare(maxOfMaxCardinalityOfAllDataAccessesA.getCardinality(),
+                            maxOfMaxCardinalityOfAllDataAccessesB.getCardinality());
+                }
+            }
+
+            return 0;
+        }
+    }
+
+    static class NumUnsatisfiedFiltersTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final NumUnsatisfiedFiltersTiebreaker INSTANCE = new NumUnsatisfiedFiltersTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            return Long.compare(NormalizedResidualPredicateProperty.countNormalizedConjuncts(a),
+                    NormalizedResidualPredicateProperty.countNormalizedConjuncts(b));
+        }
+    }
+
+    static class NumDataAccessesTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final NumDataAccessesTiebreaker INSTANCE = new NumDataAccessesTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            final int numDataAccessA =
+                    count(opsMapA,
+                            RecordQueryScanPlan.class,
+                            RecordQueryPlanWithIndex.class,
+                            RecordQueryCoveringIndexPlan.class);
+
+
+            final int numDataAccessB =
+                    count(opsMapB,
+                            RecordQueryScanPlan.class,
+                            RecordQueryPlanWithIndex.class,
+                            RecordQueryCoveringIndexPlan.class);
+
+            return Integer.compare(numDataAccessA, numDataAccessB);
+        }
+    }
+
+    static class InOperatorTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final InOperatorTiebreaker INSTANCE = new InOperatorTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            // special case
+            // if one plan is a inUnion plan
+            final OptionalInt inPlanVsOtherOptional =
+                    flipFlop(() -> compareInOperator(a, b), () -> compareInOperator(b, a));
+            if (inPlanVsOtherOptional.isPresent() && inPlanVsOtherOptional.getAsInt() != 0) {
+                return inPlanVsOtherOptional.getAsInt();
+            }
+
+            return 0;
+        }
+    }
+
+    static class PrimaryScanVsIndexScanTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final PrimaryScanVsIndexScanTiebreaker INSTANCE = new PrimaryScanVsIndexScanTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            // special case
+            // if one plan is a primary scan with a type filter and the other one is an index scan with the same number of
+            // unsatisfied filters (i.e. both plans use the same number of filters as search arguments), we break the tie
+            // by using a planning flag
+            final OptionalInt primaryScanVsIndexScanCompareOptional =
+                    flipFlop(() -> comparePrimaryScanToIndexScan(configuration, a, b, opsMapA, opsMapB),
+                            () -> comparePrimaryScanToIndexScan(configuration, b, a, opsMapB, opsMapA));
+            if (primaryScanVsIndexScanCompareOptional.isPresent() && primaryScanVsIndexScanCompareOptional.getAsInt() != 0) {
+                return primaryScanVsIndexScanCompareOptional.getAsInt();
+            }
+            return 0;
+        }
+    }
+
+    static class TypeFilterCountTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final TypeFilterCountTiebreaker INSTANCE = new TypeFilterCountTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            return Integer.compare(count(opsMapA, RecordQueryTypeFilterPlan.class),
+                    count(opsMapB, RecordQueryTypeFilterPlan.class));
+        }
+    }
+
+    static class TypeFilterPositionTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final TypeFilterPositionTiebreaker INSTANCE = new TypeFilterPositionTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            // prefer the one with a deeper type filter
+            return Integer.compare(typeFilterDepth().evaluate(b), typeFilterDepth().evaluate(a));
+        }
+    }
+
+    static class IndexScanVsIndexScanTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final IndexScanVsIndexScanTiebreaker INSTANCE = new IndexScanVsIndexScanTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            if (count(opsMapA, RecordQueryPlanWithIndex.class, RecordQueryCoveringIndexPlan.class) > 0 &&
+                    count(opsMapB, RecordQueryPlanWithIndex.class, RecordQueryCoveringIndexPlan.class) > 0) {
+                // both plans are index scans
+
+                // how many fetches are there, regular index scans fetch when they scan
+                int numFetchesA = count(opsMapA, RecordQueryPlanWithIndex.class, RecordQueryFetchFromPartialRecordPlan.class);
+                int numFetchesB = count(opsMapB, RecordQueryPlanWithIndex.class, RecordQueryFetchFromPartialRecordPlan.class);
+
+                final int numFetchesCompare = Integer.compare(numFetchesA, numFetchesB);
+                if (numFetchesCompare != 0) {
+                    return numFetchesCompare;
+                }
+
+                final int fetchDepthA = fetchDepth().evaluate(a);
+                final int fetchDepthB = fetchDepth().evaluate(b);
+                int fetchPositionCompare = Integer.compare(fetchDepthA, fetchDepthB);
+                if (fetchPositionCompare != 0) {
+                    return fetchPositionCompare;
+                }
+
+                // All things being equal for index vs covering index -- there are plans competing of the following shape
+                // FETCH(COVERING(INDEX_SCAN())) vs INDEX_SCAN() that count identically up to here. Let the plan win that
+                // has fewer actual FETCH() operators.
+                int numFetchOperatorsCompare =
+                        Integer.compare(count(opsMapA, RecordQueryFetchFromPartialRecordPlan.class),
+                                count(opsMapB, RecordQueryFetchFromPartialRecordPlan.class));
+                if (numFetchOperatorsCompare != 0) {
+                    return numFetchOperatorsCompare;
+                }
+            }
+            return 0;
+        }
+    }
+
+    static class DistinctDepthTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final DistinctDepthTiebreaker INSTANCE = new DistinctDepthTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            return Integer.compare(ExpressionDepthProperty.distinctDepth().evaluate(b),
+                    ExpressionDepthProperty.distinctDepth().evaluate(a));
+        }
+    }
+
+    static class UnmatchedFieldsCountTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final UnmatchedFieldsCountTiebreaker INSTANCE = new UnmatchedFieldsCountTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            return Integer.compare(unmatchedFieldsCount().evaluate(a), unmatchedFieldsCount().evaluate(b));
+        }
+    }
+
+    static class NumSourcesInJoinTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final NumSourcesInJoinTiebreaker INSTANCE = new NumSourcesInJoinTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            //
+            //  If a plan has more in-join sources, it is preferable.
+            //
+            return Integer.compare(count(opsMapB, RecordQueryInJoinPlan.class),
+                    count(opsMapA, RecordQueryInJoinPlan.class));
+        }
+    }
+
+    static class NumSimpleOperationsTiebreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final NumSimpleOperationsTiebreaker INSTANCE = new NumSimpleOperationsTiebreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            //
+            //  If a plan has fewer MAP/FILTERS operations, it is preferable.
+            //
+            final int numSimpleOperationsA = count(opsMapA, RecordQueryMapPlan.class) +
+                    count(opsMapA, RecordQueryPredicatesFilterPlan.class);
+            final int numSimpleOperationsB = count(opsMapB, RecordQueryMapPlan.class) +
+                    count(opsMapB, RecordQueryPredicatesFilterPlan.class);
+
+            // smaller one wins
+            return Integer.compare(numSimpleOperationsA, numSimpleOperationsB);
+        }
+    }
+
+    static class PlanHashTieBreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final PlanHashTieBreaker INSTANCE = new PlanHashTieBreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            //
+            // If expressions are indistinguishable from a cost perspective, select one by its semanticHash.
+            //
+            final int aPlanHash = a.planHash(PlanHashable.CURRENT_FOR_CONTINUATION);
+            final int bPlanHash = b.planHash(PlanHashable.CURRENT_FOR_CONTINUATION);
+            return Integer.compare(aPlanHash, bPlanHash);
+        }
+    }
+
+    static class PickLeftTieBreaker implements Tiebreaker<RecordQueryPlan> {
+        private static final PickLeftTieBreaker INSTANCE = new PickLeftTieBreaker();
+
+        @Override
+        public int compare(@Nonnull final RecordQueryPlannerConfiguration configuration,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA,
+                           @Nonnull final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB,
+                           @Nonnull final RecordQueryPlan a, @Nonnull final RecordQueryPlan b) {
+            return -1;
+        }
     }
 }

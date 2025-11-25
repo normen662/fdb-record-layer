@@ -38,7 +38,7 @@ import static com.apple.foundationdb.record.query.plan.cascades.properties.Predi
  */
 @API(API.Status.EXPERIMENTAL)
 @SpotBugsSuppressWarnings("SE_COMPARATOR_SHOULD_BE_SERIALIZABLE")
-public class RewritingCostModel implements CascadesCostModel {
+public class RewritingCostModel implements CascadesCostModel<RelationalExpression> {
     @Nonnull
     private final RecordQueryPlannerConfiguration configuration;
 

@@ -35,7 +35,7 @@ import javax.annotation.Nonnull;
  */
 @API(API.Status.EXPERIMENTAL)
 @SpotBugsSuppressWarnings("SE_COMPARATOR_SHOULD_BE_SERIALIZABLE")
-public class StableSelectorCostModel implements CascadesCostModel {
+public class StableSelectorCostModel implements CascadesCostModel<RelationalExpression> {
     @Nonnull
     @Override
     public RecordQueryPlannerConfiguration getConfiguration() {
