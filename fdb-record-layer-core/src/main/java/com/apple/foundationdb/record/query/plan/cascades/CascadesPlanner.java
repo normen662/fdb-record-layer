@@ -39,6 +39,7 @@ import com.apple.foundationdb.record.query.plan.QueryPlanner;
 import com.apple.foundationdb.record.query.plan.RecordQueryPlanComplexityException;
 import com.apple.foundationdb.record.query.plan.RecordQueryPlannerConfiguration;
 import com.apple.foundationdb.record.query.plan.cascades.PlannerRule.PreOrderRule;
+import com.apple.foundationdb.record.query.plan.cascades.costing.CascadesCostModel;
 import com.apple.foundationdb.record.query.plan.cascades.debug.Debugger;
 import com.apple.foundationdb.record.query.plan.cascades.debug.Debugger.Location;
 import com.apple.foundationdb.record.query.plan.cascades.debug.RestartException;
@@ -624,6 +625,16 @@ public class CascadesPlanner implements QueryPlanner {
                     // member is being pruned
                     traversal.removeExpression(group, finalExpression);
                 }
+            }
+
+            final var bestExpressions =
+                    group.getFinalExpressions()
+                            .stream()
+                            .collect(CascadesCostModel.toBestExpressions(costModel,
+                                    expression -> { } /*traversal.removeExpression(group, expression)*/));
+            Verify.verify(bestExpressions.size() <= 1);
+            if (bestExpressions.size() == 1) {
+                Verify.verify(Iterables.getFirst(bestExpressions, null).equals(bestFinalExpression));
             }
 
             //

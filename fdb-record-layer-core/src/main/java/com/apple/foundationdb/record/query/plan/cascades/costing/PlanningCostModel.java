@@ -18,7 +18,7 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.query.plan.cascades;
+package com.apple.foundationdb.record.query.plan.cascades.costing;
 
 import com.apple.foundationdb.annotation.API;
 import com.apple.foundationdb.annotation.SpotBugsSuppressWarnings;
@@ -26,6 +26,10 @@ import com.apple.foundationdb.record.PlanHashable;
 import com.apple.foundationdb.record.query.expressions.Comparisons;
 import com.apple.foundationdb.record.query.plan.QueryPlanner.IndexScanPreference;
 import com.apple.foundationdb.record.query.plan.RecordQueryPlannerConfiguration;
+import com.apple.foundationdb.record.query.plan.cascades.CascadesPlanner;
+import com.apple.foundationdb.record.query.plan.cascades.CorrelationIdentifier;
+import com.apple.foundationdb.record.query.plan.cascades.FindExpressionVisitor;
+import com.apple.foundationdb.record.query.plan.cascades.PlannerPhase;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalExpression;
 import com.apple.foundationdb.record.query.plan.cascades.properties.CardinalitiesProperty.Cardinalities;
 import com.apple.foundationdb.record.query.plan.cascades.properties.CardinalitiesProperty.Cardinality;
@@ -40,6 +44,7 @@ import com.apple.foundationdb.record.query.plan.plans.RecordQueryPlan;
 import com.apple.foundationdb.record.query.plan.plans.RecordQueryPlanWithIndex;
 import com.apple.foundationdb.record.query.plan.plans.RecordQueryPredicatesFilterPlan;
 import com.apple.foundationdb.record.query.plan.plans.RecordQueryScanPlan;
+import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 
@@ -98,14 +103,18 @@ public class PlanningCostModel implements CascadesCostModel {
             return 1;
         }
 
+        Verify.verify(a instanceof RecordQueryPlan);
+        final RecordQueryPlan aPlan = (RecordQueryPlan)a;
+        final RecordQueryPlan bPlan = (RecordQueryPlan)b;
+
         final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> planOpsMapA =
-                FindExpressionVisitor.evaluate(interestingPlanClasses, a);
+                FindExpressionVisitor.evaluate(interestingPlanClasses, aPlan);
 
         final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> planOpsMapB =
-                FindExpressionVisitor.evaluate(interestingPlanClasses, b);
+                FindExpressionVisitor.evaluate(interestingPlanClasses, bPlan);
 
-        final Cardinalities cardinalitiesA = cardinalities().evaluate(a);
-        final Cardinalities cardinalitiesB = cardinalities().evaluate(b);
+        final Cardinalities cardinalitiesA = cardinalities().evaluate(aPlan);
+        final Cardinalities cardinalitiesB = cardinalities().evaluate(bPlan);
 
         //
         // Technically, both cardinalities at runtime must be the same. The question is if we can actually
@@ -132,8 +141,8 @@ public class PlanningCostModel implements CascadesCostModel {
             }
         }
 
-        int unsatisfiedFilterCompare = Long.compare(NormalizedResidualPredicateProperty.countNormalizedConjuncts(a),
-                NormalizedResidualPredicateProperty.countNormalizedConjuncts(b));
+        int unsatisfiedFilterCompare = Long.compare(NormalizedResidualPredicateProperty.countNormalizedConjuncts(aPlan),
+                NormalizedResidualPredicateProperty.countNormalizedConjuncts(bPlan));
         if (unsatisfiedFilterCompare != 0) {
             return unsatisfiedFilterCompare;
         }
@@ -160,21 +169,21 @@ public class PlanningCostModel implements CascadesCostModel {
         // special case
         // if one plan is a inUnion plan
         final OptionalInt inPlanVsOtherOptional =
-                flipFlop(() -> compareInOperator(a, b), () -> compareInOperator(b, a));
+                flipFlop(() -> compareInOperator(aPlan, bPlan), () -> compareInOperator(bPlan, aPlan));
         if (inPlanVsOtherOptional.isPresent() && inPlanVsOtherOptional.getAsInt() != 0) {
             return inPlanVsOtherOptional.getAsInt();
         }
 
-        final int typeFilterCountA = typeFilterCount().evaluate(a);
-        final int typeFilterCountB = typeFilterCount().evaluate(b);
+        final int typeFilterCountA = typeFilterCount().evaluate(aPlan);
+        final int typeFilterCountB = typeFilterCount().evaluate(bPlan);
 
         // special case
         // if one plan is a primary scan with a type filter and the other one is an index scan with the same number of
         // unsatisfied filters (i.e. both plans use the same number of filters as search arguments), we break the tie
         // by using a planning flag
         final OptionalInt primaryScanVsIndexScanCompareOptional =
-                flipFlop(() -> comparePrimaryScanToIndexScan(a, b, planOpsMapA, planOpsMapB, typeFilterCountA, typeFilterCountB),
-                        () -> comparePrimaryScanToIndexScan(b, a, planOpsMapB, planOpsMapA, typeFilterCountB, typeFilterCountA));
+                flipFlop(() -> comparePrimaryScanToIndexScan(aPlan, bPlan, planOpsMapA, planOpsMapB, typeFilterCountA, typeFilterCountB),
+                        () -> comparePrimaryScanToIndexScan(bPlan, aPlan, planOpsMapB, planOpsMapA, typeFilterCountB, typeFilterCountA));
         if (primaryScanVsIndexScanCompareOptional.isPresent() && primaryScanVsIndexScanCompareOptional.getAsInt() != 0) {
             return primaryScanVsIndexScanCompareOptional.getAsInt();
         }
@@ -185,7 +194,7 @@ public class PlanningCostModel implements CascadesCostModel {
         }
 
         // prefer the one with a deeper type filter
-        int typeFilterPositionCompare = Integer.compare(typeFilterDepth().evaluate(b), typeFilterDepth().evaluate(a));
+        int typeFilterPositionCompare = Integer.compare(typeFilterDepth().evaluate(bPlan), typeFilterDepth().evaluate(aPlan));
         if (typeFilterPositionCompare != 0) {
             return typeFilterPositionCompare;
         }
@@ -203,8 +212,8 @@ public class PlanningCostModel implements CascadesCostModel {
                 return numFetchesCompare;
             }
 
-            final int fetchDepthB = fetchDepth().evaluate(b);
-            final int fetchDepthA = fetchDepth().evaluate(a);
+            final int fetchDepthB = fetchDepth().evaluate(bPlan);
+            final int fetchDepthA = fetchDepth().evaluate(aPlan);
             int fetchPositionCompare = Integer.compare(fetchDepthA, fetchDepthB);
             if (fetchPositionCompare != 0) {
                 return fetchPositionCompare;
@@ -221,14 +230,14 @@ public class PlanningCostModel implements CascadesCostModel {
             }
         }
 
-        int distinctFilterPositionCompare = Integer.compare(ExpressionDepthProperty.distinctDepth().evaluate(b),
-                ExpressionDepthProperty.distinctDepth().evaluate(a));
+        int distinctFilterPositionCompare = Integer.compare(ExpressionDepthProperty.distinctDepth().evaluate(bPlan),
+                ExpressionDepthProperty.distinctDepth().evaluate(aPlan));
         if (distinctFilterPositionCompare != 0) {
             return distinctFilterPositionCompare;
         }
 
-        int ufpA = unmatchedFieldsCount().evaluate(a);
-        int ufpB = unmatchedFieldsCount().evaluate(b);
+        int ufpA = unmatchedFieldsCount().evaluate(aPlan);
+        int ufpB = unmatchedFieldsCount().evaluate(bPlan);
         if (ufpA != ufpB) {
             return Integer.compare(ufpA, ufpB);
         }
@@ -260,18 +269,20 @@ public class PlanningCostModel implements CascadesCostModel {
             // smaller one wins
             return numSimpleOperationsCompare;
         }
-        
+
         //
-        // If plans are indistinguishable from a cost perspective, select one by planHash. This makes the cost model
-        // stable (select the same plan on subsequent plannings).
+        // If expressions are indistinguishable from a cost perspective, select one by its semanticHash.
         //
-        if ((a instanceof PlanHashable) && (b instanceof PlanHashable)) {
-            int hA = ((PlanHashable)a).planHash(PlanHashable.CURRENT_FOR_CONTINUATION);
-            int hB = ((PlanHashable)b).planHash(PlanHashable.CURRENT_FOR_CONTINUATION);
-            return Integer.compare(hA, hB);
+        final int aPlanHash = aPlan.planHash(PlanHashable.CURRENT_FOR_CONTINUATION);
+        final int bPlanHash = bPlan.planHash(PlanHashable.CURRENT_FOR_CONTINUATION);
+        if (aPlanHash != bPlanHash) {
+            return Integer.compare(aPlanHash, bPlanHash);
         }
 
-        return 0;
+        //
+        // There can be plan duplicates. We must be sure to tie-break them as well.
+        //
+        return -1;
     }
 
     @Nonnull

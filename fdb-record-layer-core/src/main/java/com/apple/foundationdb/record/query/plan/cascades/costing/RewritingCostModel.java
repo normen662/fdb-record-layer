@@ -18,11 +18,12 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.query.plan.cascades;
+package com.apple.foundationdb.record.query.plan.cascades.costing;
 
 import com.apple.foundationdb.annotation.API;
 import com.apple.foundationdb.annotation.SpotBugsSuppressWarnings;
 import com.apple.foundationdb.record.query.plan.RecordQueryPlannerConfiguration;
+import com.apple.foundationdb.record.query.plan.cascades.PlannerPhase;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalExpression;
 
 import javax.annotation.Nonnull;
@@ -56,8 +57,8 @@ public class RewritingCostModel implements CascadesCostModel {
         //
         // Choose the expression with the fewest select boxes
         //
-        int aSelects = selectCount().evaluate(a);
-        int bSelects = selectCount().evaluate(b);
+        final int aSelects = selectCount().evaluate(a);
+        final int bSelects = selectCount().evaluate(b);
         if (aSelects != bSelects) {
             return Integer.compare(aSelects, bSelects);
         }
@@ -65,8 +66,8 @@ public class RewritingCostModel implements CascadesCostModel {
         //
         // Choose the expression with the fewest TableFunction expressions
         //
-        int aTableFunctions = tableFunctionCount().evaluate(a);
-        int bTableFunctions = tableFunctionCount().evaluate(b);
+        final int aTableFunctions = tableFunctionCount().evaluate(a);
+        final int bTableFunctions = tableFunctionCount().evaluate(b);
         if (aTableFunctions != bTableFunctions) {
             return Integer.compare(aTableFunctions, bTableFunctions);
         }
@@ -74,8 +75,8 @@ public class RewritingCostModel implements CascadesCostModel {
         //
         // Pick the expression where predicates have been pushed down as far as they can go
         //
-        int aPredicateHeight = predicateHeight().evaluate(a);
-        int bPredicateHeight = predicateHeight().evaluate(b);
+        final int aPredicateHeight = predicateHeight().evaluate(a);
+        final int bPredicateHeight = predicateHeight().evaluate(b);
         if (aPredicateHeight != bPredicateHeight) {
             return Integer.compare(aPredicateHeight, bPredicateHeight);
         }
@@ -83,8 +84,8 @@ public class RewritingCostModel implements CascadesCostModel {
         //
         // Choose the expression with the simplest predicate.
         //
-        int aPredicateComplexity = predicateComplexity().evaluate(a);
-        int bPredicateComplexity = predicateComplexity().evaluate(b);
+        final int aPredicateComplexity = predicateComplexity().evaluate(a);
+        final int bPredicateComplexity = predicateComplexity().evaluate(b);
         if (aPredicateComplexity != bPredicateComplexity) {
             return Integer.compare(aPredicateComplexity, bPredicateComplexity);
         }
@@ -92,6 +93,15 @@ public class RewritingCostModel implements CascadesCostModel {
         //
         // If expressions are indistinguishable from a cost perspective, select one by its semanticHash.
         //
-        return Integer.compare(a.semanticHashCode(), b.semanticHashCode());
+        final int aSemanticHash = a.semanticHashCode();
+        final int bSemanticHash = b.semanticHashCode();
+        if (aSemanticHash != bSemanticHash) {
+            return Integer.compare(aSemanticHash, bSemanticHash);
+        }
+
+        //
+        // There can be duplicates. We must be sure to tie-break them as well.
+        //
+        return -1;
     }
 }

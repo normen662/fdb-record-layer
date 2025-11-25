@@ -22,6 +22,9 @@ package com.apple.foundationdb.record.query.plan.cascades;
 
 import com.apple.foundationdb.record.RecordCoreException;
 import com.apple.foundationdb.record.query.plan.RecordQueryPlannerConfiguration;
+import com.apple.foundationdb.record.query.plan.cascades.costing.CascadesCostModel;
+import com.apple.foundationdb.record.query.plan.cascades.costing.PlanningCostModel;
+import com.apple.foundationdb.record.query.plan.cascades.costing.RewritingCostModel;
 import com.apple.foundationdb.record.query.plan.cascades.debug.eventprotos.PPlannerPhase;
 
 import javax.annotation.Nonnull;
