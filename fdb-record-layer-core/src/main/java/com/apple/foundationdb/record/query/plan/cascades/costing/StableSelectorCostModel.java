@@ -29,9 +29,12 @@ import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalE
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -49,6 +52,12 @@ public class StableSelectorCostModel implements CascadesCostModel<RelationalExpr
             ImmutableSet.of();
 
     @Nonnull
+    private static final Tiebreaker<RelationalExpression> tiebreaker =
+            Tiebreaker.combineTiebreakers(ImmutableList.of(
+                    RewritingCostModel.semanticHashTiebreaker(),
+                    RewritingCostModel.pickLeftTieBreaker()));
+
+    @Nonnull
     @Override
     public RecordQueryPlannerConfiguration getConfiguration() {
         return RecordQueryPlannerConfiguration.defaultPlannerConfiguration();
@@ -56,16 +65,16 @@ public class StableSelectorCostModel implements CascadesCostModel<RelationalExpr
 
     @Nonnull
     @Override
-    public Optional<RelationalExpression> getBestExpression(@Nonnull final Set<? extends RelationalExpression> plans,
+    public Optional<RelationalExpression> getBestExpression(@Nonnull final Set<? extends RelationalExpression> expressions,
                                                             @Nonnull final Consumer<RelationalExpression> onRemoveConsumer) {
-        return costExpressions(plans, onRemoveConsumer).getOnlyExpressionMaybe();
+        return costExpressions(expressions, onRemoveConsumer).getOnlyExpressionMaybe();
     }
 
     @Nonnull
     @Override
-    public Set<RelationalExpression> getBestExpressions(@Nonnull final Set<? extends RelationalExpression> plans,
+    public Set<RelationalExpression> getBestExpressions(@Nonnull final Set<? extends RelationalExpression> expressions,
                                                         @Nonnull final Consumer<RelationalExpression> onRemoveConsumer) {
-        return costExpressions(plans, onRemoveConsumer).getBestExpressions();
+        return costExpressions(expressions, onRemoveConsumer).getBestExpressions();
     }
 
     @Nonnull
@@ -75,8 +84,13 @@ public class StableSelectorCostModel implements CascadesCostModel<RelationalExpr
                 createOpsCache();
 
         return Tiebreaker.ofContext(getConfiguration(), opsCache, expressions, RelationalExpression.class, onRemoveConsumer)
-                .thenApply(RewritingCostModel.semanticHashTiebreaker())
-                .thenApply(RewritingCostModel.pickLeftTieBreaker());
+                .thenApply(tiebreaker);
+    }
+
+    @Nullable
+    public Integer compare(@Nonnull final RelationalExpression a,
+                           @Nonnull final RelationalExpression b) {
+        return tiebreaker.compare(getConfiguration(), ImmutableMap.of(), ImmutableMap.of(), a, b);
     }
 
     @Nonnull

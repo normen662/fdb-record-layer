@@ -181,7 +181,8 @@ public final class PlanGenerator {
                                     final var candidatePhysicalPlan = Assert.castUnchecked(candidate, QueryPlan.PhysicalQueryPlan.class);
                                     final var candidateQueryPlan = candidatePhysicalPlan.getRecordQueryPlan();
                                     final var bestQueryPlanSoFar = acc == null ? null : Assert.castUnchecked(acc, QueryPlan.PhysicalQueryPlan.class).getRecordQueryPlan();
-                                    if (bestQueryPlanSoFar == null || new StableSelectorCostModel().compare(candidateQueryPlan, bestQueryPlanSoFar) < 0) {
+                                    if (bestQueryPlanSoFar == null ||
+                                            Objects.requireNonNull(new StableSelectorCostModel().compare(candidateQueryPlan, bestQueryPlanSoFar)) < 0) {
                                         return candidate;
                                     } else {
                                         return acc;

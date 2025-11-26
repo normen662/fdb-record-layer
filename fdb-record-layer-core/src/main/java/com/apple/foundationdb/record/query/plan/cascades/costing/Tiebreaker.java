@@ -30,6 +30,7 @@ import com.google.common.collect.Iterables;
 
 import javax.annotation.Nonnull;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -47,16 +48,34 @@ interface Tiebreaker<T extends RelationalExpression> {
                 @Nonnull final T a, @Nonnull final T b);
 
     @Nonnull
+    static <T extends RelationalExpression> Tiebreaker<T> combineTiebreakers(@Nonnull final List<Tiebreaker<T>> tiebreakers) {
+        return (configuration,
+                opsMapA, opsMapB,
+                a, b) -> {
+            int compareResult = 0;
+            for (final var tiebreaker : tiebreakers) {
+                compareResult = tiebreaker.compare(configuration, opsMapA, opsMapB, a, b);
+                if (compareResult != 0) {
+                    return compareResult;
+                }
+            }
+            return compareResult;
+        };
+    }
+
+    @Nonnull
     static <T extends RelationalExpression> TiebreakerResult<T>
             ofContext(@Nonnull final RecordQueryPlannerConfiguration plannerConfiguration,
                       @Nonnull final LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>> opsCache,
                       @Nonnull final Set<? extends RelationalExpression> expressions,
                       @Nonnull final Class<T> specificClazz,
                       @Nonnull final Consumer<T> onRemoveConsumer) {
-        final var filteredExpressions =
-                expressions.stream()
-                        .map(specificClazz::cast)
-                        .collect(LinkedIdentitySet.toLinkedIdentitySet());
+        final var filteredExpressions = new LinkedIdentitySet<T>();
+        for (final var expression : expressions) {
+            if (specificClazz.isInstance(expression)) {
+                filteredExpressions.add(specificClazz.cast(expression));
+            }
+        }
 
         if (expressions.size() <= 1) {
             return new TerminalTiebreakerResult<>(filteredExpressions);
@@ -119,7 +138,7 @@ interface Tiebreaker<T extends RelationalExpression> {
                     final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB;
                     try {
                         opsMapA = opsCache.get(newExpression);
-                        opsMapB = opsCache.get(newExpression);
+                        opsMapB = opsCache.get(aBestExpression);
                     } catch (ExecutionException eE) {
                         throw new RecordCoreException(eE);
                     }
@@ -130,15 +149,17 @@ interface Tiebreaker<T extends RelationalExpression> {
                 }
 
                 if (compare < 0) {
+                    bestExpressions.forEach(onRemoveConsumer);
                     bestExpressions.clear();
                     bestExpressions.add(newExpression);
                 } else if (compare == 0) {
                     bestExpressions.add(newExpression);
+                } else {
+                    //
+                    // Note, that if expression is more costly than bestExpressions, it will be dropped.
+                    //
+                    onRemoveConsumer.accept(newExpression);
                 }
-                //
-                // Note, that if expression is more costly than bestExpressions, it will be dropped.
-                //
-                onRemoveConsumer.accept(newExpression);
             };
         }
 

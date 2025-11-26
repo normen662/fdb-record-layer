@@ -27,6 +27,7 @@ import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalE
 import com.apple.foundationdb.record.query.plan.plans.RecordQueryPlan;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -43,12 +44,15 @@ public interface CascadesCostModel<T extends RelationalExpression> {
     RecordQueryPlannerConfiguration getConfiguration();
 
     @Nonnull
-    Optional<T> getBestExpression(@Nonnull Set<? extends RelationalExpression> plans,
+    Optional<T> getBestExpression(@Nonnull Set<? extends RelationalExpression> expressions,
                                   @Nonnull Consumer<T> onRemoveConsumer);
 
     @Nonnull
-    Set<T> getBestExpressions(@Nonnull Set<? extends RelationalExpression> plans,
+    Set<T> getBestExpressions(@Nonnull Set<? extends RelationalExpression> expressions,
                               @Nonnull Consumer<T> onRemoveConsumer);
+
+    @Nullable
+    Integer compare(@Nonnull RelationalExpression a, @Nonnull RelationalExpression b);
 
     class PickLeftTieBreaker<T extends RelationalExpression> implements Tiebreaker<T> {
         protected static final PickLeftTieBreaker<RelationalExpression> INSTANCE_EXPRESSION = new PickLeftTieBreaker<>();

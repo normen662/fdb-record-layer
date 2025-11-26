@@ -48,10 +48,12 @@ import com.apple.foundationdb.record.query.plan.plans.RecordQueryTypeFilterPlan;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -86,6 +88,24 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
                     RecordQueryPredicatesFilterPlan.class);
 
     @Nonnull
+    private static final Tiebreaker<RecordQueryPlan> tiebreaker =
+            Tiebreaker.combineTiebreakers(ImmutableList.of(
+                    smallestCardinalityOfDataAccessesTiebreaker(),
+                    lowestNumUnsatisfiedFiltersTiebreaker(),
+                    lowestNumDataAccessesTiebreaker(),
+                    inOperatorTiebreaker(),
+                    primaryScanVsIndexScanTiebreaker(),
+                    lowestNumTypeFilterTiebreaker(),
+                    deepestTypeFilterPositionTiebreaker(),
+                    betterIndexScanTiebreaker(),
+                    deepestDistinctTiebreaker(),
+                    lowestNumUnmatchedFieldsTiebreaker(),
+                    highestNumInJoinTiebreaker(),
+                    lowestNumSimpleOperationsTiebreaker(),
+                    planHashTieBreaker(),
+                    pickLeftTieBreaker()));
+
+    @Nonnull
     private final RecordQueryPlannerConfiguration configuration;
 
     public PlanningCostModel(@Nonnull final RecordQueryPlannerConfiguration configuration) {
@@ -100,16 +120,16 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
 
     @Nonnull
     @Override
-    public Optional<RecordQueryPlan> getBestExpression(@Nonnull final Set<? extends RelationalExpression> plans,
+    public Optional<RecordQueryPlan> getBestExpression(@Nonnull final Set<? extends RelationalExpression> expressions,
                                                        @Nonnull final Consumer<RecordQueryPlan> onRemoveConsumer) {
-        return costPlans(plans, onRemoveConsumer).getOnlyExpressionMaybe();
+        return costPlans(expressions, onRemoveConsumer).getOnlyExpressionMaybe();
     }
 
     @Nonnull
     @Override
-    public Set<RecordQueryPlan> getBestExpressions(@Nonnull final Set<? extends RelationalExpression> plans,
+    public Set<RecordQueryPlan> getBestExpressions(@Nonnull final Set<? extends RelationalExpression> expressions,
                                                    @Nonnull final Consumer<RecordQueryPlan> onRemoveConsumer) {
-        return costPlans(plans, onRemoveConsumer).getBestExpressions();
+        return costPlans(expressions, onRemoveConsumer).getBestExpressions();
     }
 
     @Nonnull
@@ -119,20 +139,33 @@ public class PlanningCostModel implements CascadesCostModel<RecordQueryPlan> {
                 createOpsCache();
 
         return Tiebreaker.ofContext(getConfiguration(), opsCache, expressions, RecordQueryPlan.class, onRemoveConsumer)
-                .thenApply(smallestCardinalityOfDataAccessesTiebreaker())
-                .thenApply(lowestNumUnsatisfiedFiltersTiebreaker())
-                .thenApply(lowestNumDataAccessesTiebreaker())
-                .thenApply(inOperatorTiebreaker())
-                .thenApply(primaryScanVsIndexScanTiebreaker())
-                .thenApply(lowestNumTypeFilterTiebreaker())
-                .thenApply(deepestTypeFilterPositionTiebreaker())
-                .thenApply(betterIndexScanTiebreaker())
-                .thenApply(deepestDistinctTiebreaker())
-                .thenApply(lowestNumUnmatchedFieldsTiebreaker())
-                .thenApply(highestNumInJoinTiebreaker())
-                .thenApply(lowestNumSimpleOperationsTiebreaker())
-                .thenApply(planHashTieBreaker())
-                .thenApply(pickLeftTieBreaker());
+                .thenApply(tiebreaker);
+    }
+
+    @Nullable
+    public Integer compare(@Nonnull final RelationalExpression a,
+                           @Nonnull final RelationalExpression b) {
+        final LoadingCache<RelationalExpression, Map<Class<? extends RelationalExpression>, Set<RelationalExpression>>> opsCache =
+                createOpsCache();
+
+        if (!(a instanceof RecordQueryPlan) && !(b instanceof RecordQueryPlan)) {
+            return null;
+        }
+
+        if (a instanceof RecordQueryPlan && !(b instanceof RecordQueryPlan)) {
+            return -1;
+        }
+
+        if (!(a instanceof RecordQueryPlan) /*&& b instanceof RecordQueryPlan*/) {
+            return 1;
+        }
+
+        final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapA =
+                FindExpressionVisitor.evaluate(interestingPlanClasses, a);
+        final Map<Class<? extends RelationalExpression>, Set<RelationalExpression>> opsMapB =
+                FindExpressionVisitor.evaluate(interestingPlanClasses, b);
+
+        return tiebreaker.compare(getConfiguration(), opsMapA, opsMapB, (RecordQueryPlan)a, (RecordQueryPlan)b);
     }
 
     @Nonnull

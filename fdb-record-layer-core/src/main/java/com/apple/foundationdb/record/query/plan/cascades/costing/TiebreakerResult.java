@@ -23,12 +23,19 @@ package com.apple.foundationdb.record.query.plan.cascades.costing;
 import com.apple.foundationdb.record.query.plan.cascades.expressions.RelationalExpression;
 
 import javax.annotation.Nonnull;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
 interface TiebreakerResult<T extends RelationalExpression> {
+
     @Nonnull
-    TiebreakerResult<T> thenApply(@Nonnull final Tiebreaker<T> nextTiebreaker);
+    TiebreakerResult<T> thenApply(@Nonnull Tiebreaker<T> nextTiebreaker);
+
+    @Nonnull
+    default TiebreakerResult<T> thenApply(@Nonnull List<Tiebreaker<T>> nextTiebreakers) {
+        return thenApply(Tiebreaker.combineTiebreakers(nextTiebreakers));
+    }
 
     @Nonnull
     Set<T> getBestExpressions();

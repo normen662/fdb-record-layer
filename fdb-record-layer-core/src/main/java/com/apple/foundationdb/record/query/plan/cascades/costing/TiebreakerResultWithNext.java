@@ -54,14 +54,14 @@ class TiebreakerResultWithNext<T extends RelationalExpression> implements Tiebre
 
     @Nonnull
     @Override
-    public TiebreakerResult<T> thenApply(@Nonnull final Tiebreaker<T> nextTiebreaker) {
+    public final TiebreakerResult<T> thenApply(@Nonnull final Tiebreaker<T> nextTiebreaker) {
         if (expressions.size() <= 1) {
             return new TerminalTiebreakerResult<>(expressions);
         }
         final var bestExpressions =
                 expressions.stream()
-                        .collect(Tiebreaker.toBestExpressions(plannerConfiguration, nextTiebreaker,
-                                opsCache, onRemoveConsumer));
+                        .collect(Tiebreaker.toBestExpressions(plannerConfiguration,
+                                nextTiebreaker, opsCache, onRemoveConsumer));
 
         return new TiebreakerResultWithNext<>(plannerConfiguration, opsCache, bestExpressions, onRemoveConsumer);
     }
