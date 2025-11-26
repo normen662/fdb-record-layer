@@ -68,7 +68,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -219,6 +218,7 @@ public abstract class AbstractDataAccessRule extends CascadesRule<MatchPartition
                         dataAccessForMatchPartition(call,
                                 requestedOrderings,
                                 matchPartition);
+
                 call.yieldMixedUnknownExpressions(dataAccessExpressions);
             }
         }
@@ -716,9 +716,10 @@ public abstract class AbstractDataAccessRule extends CascadesRule<MatchPartition
      */
     @Nonnull
     @SuppressWarnings("java:S135")
-    private static Optional<NonnullPair<ScanDirection, Set<RequestedOrdering>>> satisfiesAnyRequestedOrderings(@Nonnull final PartialMatch partialMatch,
-                                                                                                               @Nonnull final TranslationMap topToTopTranslationMap,
-                                                                                                               @Nonnull final Set<RequestedOrdering> requestedOrderings) {
+    private static Optional<NonnullPair<ScanDirection, Set<RequestedOrdering>>>
+            satisfiesAnyRequestedOrderings(@Nonnull final PartialMatch partialMatch,
+                                           @Nonnull final TranslationMap topToTopTranslationMap,
+                                           @Nonnull final Set<RequestedOrdering> requestedOrderings) {
         boolean seenForward = false;
         boolean seenReverse = false;
         final var satisfyingRequestedOrderings = ImmutableSet.<RequestedOrdering>builder();
@@ -1140,7 +1141,8 @@ public abstract class AbstractDataAccessRule extends CascadesRule<MatchPartition
             final var cardinalities = cardinalities().evaluate(compensatedExpression);
 
             intersectionInfoMap.put(cacheKey,
-                    IntersectionInfo.ofSingleAccess(orderingFromSingleMatchedAccess, compensation, compensatedExpression,
+                    IntersectionInfo.ofSingleAccess(orderingFromSingleMatchedAccess,
+                            compensation, compensatedExpression, singleMatchedAccess.getSatisfyingRequestedOrderings(),
                             cardinalities.getMaxCardinality()));
         }
     }
@@ -1158,7 +1160,7 @@ public abstract class AbstractDataAccessRule extends CascadesRule<MatchPartition
         Verify.verify(partition.size() >= 2);
         final var cacheKey = intersectionInfoKey(partition);
         if (intersectionResult.hasViableIntersection()) {
-            if (!intersectionResult.getExpressions().isEmpty()) {
+            if (!intersectionResult.getExpressionAndSatisfyingRequestedOrderings().isEmpty()) {
                 // This loop loops partition.size() times
                 for (final var subPartition : ChooseK.chooseK(partition, partition.size() - 1)) {
                     final var subCacheKey = intersectionInfoKey(subPartition);
@@ -1168,7 +1170,8 @@ public abstract class AbstractDataAccessRule extends CascadesRule<MatchPartition
             }
             intersectionInfoMap.put(cacheKey,
                     IntersectionInfo.ofIntersection(intersectionResult.getCommonIntersectionOrdering(),
-                            intersectionResult.getCompensation(), intersectionResult.getExpressions()));
+                            intersectionResult.getCompensation(),
+                            intersectionResult.getExpressionAndSatisfyingRequestedOrderings()));
         }
     }
 
@@ -1327,20 +1330,20 @@ public abstract class AbstractDataAccessRule extends CascadesRule<MatchPartition
         @Nonnull
         private final Compensation compensation;
         @Nonnull
-        private final List<RelationalExpression> expressions;
+        private final List<ExpressionAndSatisfyingOrderings> expressionAndSatisfyingRequestedOrderings;
 
         private IntersectionResult(@Nullable final Ordering.Intersection commonIntersectionOrdering,
                                    @Nonnull final Compensation compensation,
-                                   @Nonnull final List<RelationalExpression> expressions) {
-            Verify.verify(commonIntersectionOrdering != null || expressions.isEmpty());
-            this.expressions = ImmutableList.copyOf(expressions);
+                                   @Nonnull final List<ExpressionAndSatisfyingOrderings> expressionsAndSatisfyingRequestedOrderings) {
+            Verify.verify(commonIntersectionOrdering != null || expressionsAndSatisfyingRequestedOrderings.isEmpty());
+            this.expressionAndSatisfyingRequestedOrderings = ImmutableList.copyOf(expressionsAndSatisfyingRequestedOrderings);
             this.commonIntersectionOrdering = commonIntersectionOrdering;
             this.compensation = compensation;
         }
 
         @Nonnull
-        public List<RelationalExpression> getExpressions() {
-            return Objects.requireNonNull(expressions);
+        public List<ExpressionAndSatisfyingOrderings> getExpressionAndSatisfyingRequestedOrderings() {
+            return expressionAndSatisfyingRequestedOrderings;
         }
 
         public boolean hasViableIntersection() {
@@ -1365,8 +1368,8 @@ public abstract class AbstractDataAccessRule extends CascadesRule<MatchPartition
         @Nonnull
         public static IntersectionResult of(@Nullable final Ordering.Intersection commonIntersectionOrdering,
                                             @Nonnull final Compensation compensation,
-                                            @Nonnull final List<RelationalExpression> expressions) {
-            return new IntersectionResult(commonIntersectionOrdering, compensation, expressions);
+                                            @Nonnull final List<ExpressionAndSatisfyingOrderings> expressionAndSatisfyingRequestedOrderings) {
+            return new IntersectionResult(commonIntersectionOrdering, compensation, expressionAndSatisfyingRequestedOrderings);
         }
 
         @Override
@@ -1383,23 +1386,46 @@ public abstract class AbstractDataAccessRule extends CascadesRule<MatchPartition
         BOTH
     }
 
+    protected static class ExpressionAndSatisfyingOrderings {
+        @Nonnull
+        private final RelationalExpression expression;
+        @Nonnull
+        private final Set<RequestedOrdering> satisfyingOrderings;
+
+        private ExpressionAndSatisfyingOrderings(@Nonnull final RelationalExpression expression,
+                                                 @Nonnull final Set<RequestedOrdering> satisfyingOrderings) {
+            this.expression = expression;
+            this.satisfyingOrderings = ImmutableSet.copyOf(satisfyingOrderings);
+        }
+
+        public static ExpressionAndSatisfyingOrderings ofSingleSatisfyingOrdering(@Nonnull final RelationalExpression expression,
+                                                                                  @Nonnull final RequestedOrdering satisfyingOrdering) {
+            return of(expression, ImmutableSet.of(satisfyingOrdering));
+        }
+
+        public static ExpressionAndSatisfyingOrderings of(@Nonnull final RelationalExpression expression,
+                                                          @Nonnull final Set<RequestedOrdering> satisfyingOrderings) {
+            return new ExpressionAndSatisfyingOrderings(expression, satisfyingOrderings);
+        }
+    }
+
     protected static class IntersectionInfo {
         @Nonnull
         private final Ordering intersectionOrdering;
         @Nonnull
         private final Compensation compensation;
         @Nonnull
-        private final List<RelationalExpression> expressions;
+        private final List<ExpressionAndSatisfyingOrderings> expressionAndSatisfyingOrderings;
         @Nonnull
         private final Cardinality maxCardinality;
 
         private IntersectionInfo(@Nonnull final Ordering intersectionOrdering,
                                  @Nonnull final Compensation compensation,
-                                 @Nonnull final List<RelationalExpression> expressions,
+                                 @Nonnull final List<ExpressionAndSatisfyingOrderings> expressionAndSatisfyingOrderings,
                                  @Nonnull final Cardinality maxCardinality) {
             this.intersectionOrdering = intersectionOrdering;
             this.compensation = compensation;
-            this.expressions = expressions;
+            this.expressionAndSatisfyingOrderings = expressionAndSatisfyingOrderings;
             this.maxCardinality = maxCardinality;
         }
 
@@ -1414,8 +1440,8 @@ public abstract class AbstractDataAccessRule extends CascadesRule<MatchPartition
         }
 
         @Nonnull
-        public List<RelationalExpression> getExpressions() {
-            return expressions;
+        public List<ExpressionAndSatisfyingOrderings> getExpressionAndSatisfyingOrderings() {
+            return expressionAndSatisfyingOrderings;
         }
 
         @Nonnull
@@ -1424,28 +1450,31 @@ public abstract class AbstractDataAccessRule extends CascadesRule<MatchPartition
         }
 
         public void evictExpressions() {
-            expressions.clear();
+            expressionAndSatisfyingOrderings.clear();
         }
 
         @Nonnull
         public static IntersectionInfo ofSingleAccess(@Nonnull final Ordering ordering,
                                                       @Nonnull final Compensation compensation,
                                                       @Nonnull final RelationalExpression expression,
+                                                      @Nonnull final Set<RequestedOrdering> satisfyingRequestedOrderings,
                                                       @Nonnull final Cardinality maxCardinality) {
-            return new IntersectionInfo(ordering, compensation, Lists.newArrayList(expression), maxCardinality);
+            return new IntersectionInfo(ordering, compensation,
+                    ImmutableList.of(ExpressionAndSatisfyingOrderings.of(expression, satisfyingRequestedOrderings)),
+                    maxCardinality);
         }
 
         @Nonnull
         public static IntersectionInfo ofImpossibleAccess(@Nonnull final Ordering ordering,
                                                           @Nonnull final Compensation compensation) {
-            return new IntersectionInfo(ordering, compensation, Lists.newArrayList(), Cardinality.unknownCardinality());
+            return new IntersectionInfo(ordering, compensation, ImmutableList.of(), Cardinality.unknownCardinality());
         }
 
         @Nonnull
         public static IntersectionInfo ofIntersection(@Nonnull final Ordering ordering,
                                                       @Nonnull final Compensation compensation,
-                                                      @Nonnull final List<RelationalExpression> expressions) {
-            return new IntersectionInfo(ordering, compensation, Lists.newArrayList(expressions),
+                                                      @Nonnull final List<ExpressionAndSatisfyingOrderings> expressionAndSatisfyingOrderings) {
+            return new IntersectionInfo(ordering, compensation, ImmutableList.copyOf(expressionAndSatisfyingOrderings),
                     Cardinality.unknownCardinality());
         }
     }

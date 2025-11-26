@@ -170,7 +170,8 @@ public class AggregateDataAccessRule extends AbstractDataAccessRule {
         final var topToTopTranslationMap = firstMatchedAccess.getTopToTopTranslationMap();
 
         boolean hasCommonOrdering = false;
-        final var expressionsBuilder = ImmutableList.<RelationalExpression>builder();
+        final var expressionAndSatisfyingOrderingsBuilder =
+                ImmutableList.<ExpressionAndSatisfyingOrderings>builder();
         final var seenComparisonOrderingParts = new HashSet<List<OrderingPart.ProvidedOrderingPart>>();
         for (final var requestedOrdering : requestedOrderings) {
             final var translatedRequestedOrdering =
@@ -236,13 +237,15 @@ public class AggregateDataAccessRule extends AbstractDataAccessRule {
                                             newQuantifiers, candidateTopAliasesBuilder.build(),
                                             (Type.Record)intersectionResultValue.getResultType(),
                                             commonGroupingKeyValues.size()));
-                    expressionsBuilder.add(compensatedIntersection);
+                    expressionAndSatisfyingOrderingsBuilder.add(
+                            ExpressionAndSatisfyingOrderings.ofSingleSatisfyingOrdering(compensatedIntersection,
+                                    requestedOrdering));
                 }
             }
         }
 
         return IntersectionResult.of(hasCommonOrdering ? intersectionOrdering : null, compensation,
-                expressionsBuilder.build());
+                expressionAndSatisfyingOrderingsBuilder.build());
     }
 
     @Nonnull

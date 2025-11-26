@@ -612,28 +612,11 @@ public class CascadesPlanner implements QueryPlanner {
 
         @Override
         public void execute() {
-            RelationalExpression bestFinalExpression = null;
             final CascadesCostModel<? extends RelationalExpression> costModel = plannerPhase.createCostModel(configuration);
-            for (final var finalExpression : group.getFinalExpressions()) {
-                if (bestFinalExpression == null || costModel.compare(finalExpression, bestFinalExpression) < 0) {
-                    if (bestFinalExpression != null) {
-                        // best member is being pruned
-                        //traversal.removeExpression(group, bestFinalExpression);
-                    }
-                    bestFinalExpression = finalExpression;
-                } else {
-                    // member is being pruned
-                    //traversal.removeExpression(group, finalExpression);
-                }
-            }
-
             final var bestFinalExpressionOptional =
                     costModel.getBestExpression(group.getFinalExpressions(),
-                            removedExpression -> traversal.removeExpression(group, removedExpression));
-
-            if (bestFinalExpressionOptional.isPresent()) {
-                Verify.verify(bestFinalExpressionOptional.get().equals(bestFinalExpression));
-            }
+                            removedExpression ->
+                                    traversal.removeExpression(group, removedExpression));
 
             //
             // In the past we would iterate through ALL members to find the cheapest plan.

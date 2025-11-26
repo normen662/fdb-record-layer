@@ -148,7 +148,8 @@ public class WithPrimaryKeyDataAccessRule extends AbstractDataAccessRule {
         final var topToTopTranslationMap = firstMatchedAccess.getTopToTopTranslationMap();
 
         boolean hasCommonOrdering = false;
-        final var expressionsBuilder = ImmutableList.<RelationalExpression>builder();
+        final var expressionAndSatisfyingOrderingsBuilder =
+                ImmutableList.<ExpressionAndSatisfyingOrderings>builder();
         final var seenComparisonOrderingParts = new HashSet<List<OrderingPart.ProvidedOrderingPart>>();
         for (final var requestedOrdering : requestedOrderings) {
             final var translatedRequestedOrdering =
@@ -191,13 +192,15 @@ public class WithPrimaryKeyDataAccessRule extends AbstractDataAccessRule {
                     final var compensatedIntersection =
                             compensation.applyAllNeededCompensations(memoizer, intersectionPlan,
                                     matchedToRealizedTranslationMapFunction);
-                    expressionsBuilder.add(compensatedIntersection);
+                    expressionAndSatisfyingOrderingsBuilder.add(
+                            ExpressionAndSatisfyingOrderings.ofSingleSatisfyingOrdering(compensatedIntersection,
+                                    requestedOrdering));
                 }
             }
         }
 
         return IntersectionResult.of(hasCommonOrdering ? intersectionOrdering : null, compensation,
-                expressionsBuilder.build());
+                expressionAndSatisfyingOrderingsBuilder.build());
     }
 
     @Nonnull
