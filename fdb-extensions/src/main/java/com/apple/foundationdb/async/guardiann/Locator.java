@@ -35,15 +35,9 @@ import java.util.function.Supplier;
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class Locator {
     @Nonnull
-    private final Subspace subspace;
-    @Nonnull
     private final Executor executor;
     @Nonnull
-    private final Config config;
-    @Nonnull
-    private final OnWriteListener onWriteListener;
-    @Nonnull
-    private final OnReadListener onReadListener;
+    private final StorageAdapter storageAdapter;
 
     @Nonnull
     private final Supplier<Primitives> primitivesSupplier;
@@ -73,15 +67,18 @@ public class Locator {
                    @Nonnull final Config config,
                    @Nonnull final OnWriteListener onWriteListener,
                    @Nonnull final OnReadListener onReadListener) {
-        this.subspace = subspace;
         this.executor = executor;
-        this.config = config;
-        this.onWriteListener = onWriteListener;
-        this.onReadListener = onReadListener;
+        this.storageAdapter = new StorageAdapter(config, subspace, onWriteListener, onReadListener);
+
         this.primitivesSupplier = Suppliers.memoize(() -> new Primitives(this));
         this.searchSupplier = Suppliers.memoize(() -> new Search(this));
         this.insertSupplier = Suppliers.memoize(() -> new Insert(this));
         this.deleteSupplier = Suppliers.memoize(() -> new Delete(this));
+    }
+
+    @Nonnull
+    StorageAdapter getStorageAdapter() {
+        return storageAdapter;
     }
 
     /**
@@ -91,7 +88,7 @@ public class Locator {
      */
     @Nonnull
     public Subspace getSubspace() {
-        return subspace;
+        return getStorageAdapter().getSubspace();
     }
 
     /**
@@ -109,7 +106,7 @@ public class Locator {
      */
     @Nonnull
     public Config getConfig() {
-        return config;
+        return getStorageAdapter().getConfig();
     }
 
     /**
@@ -118,7 +115,7 @@ public class Locator {
      */
     @Nonnull
     public OnWriteListener getOnWriteListener() {
-        return onWriteListener;
+        return getStorageAdapter().getOnWriteListener();
     }
 
     /**
@@ -127,7 +124,7 @@ public class Locator {
      */
     @Nonnull
     public OnReadListener getOnReadListener() {
-        return onReadListener;
+        return getStorageAdapter().getOnReadListener();
     }
 
     @Nonnull

@@ -1,5 +1,5 @@
 /*
- * VectorReferences.java
+ * Cluster.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -20,31 +20,27 @@
 
 package com.apple.foundationdb.async.guardiann;
 
-import com.apple.foundationdb.linear.RealVector;
-import com.apple.foundationdb.linear.Transformed;
-
 import javax.annotation.Nonnull;
 import java.util.Objects;
+import java.util.UUID;
 
-class VectorReferences {
+class ClusterState {
     @Nonnull
-    private final VectorId id;
-    @Nonnull
-    private final Transformed<RealVector> vector;
+    private final UUID uuid;
+    private final boolean isDraining;
 
-    public VectorReferences(@Nonnull final VectorId id, @Nonnull final Transformed<RealVector> vector) {
-        this.id = id;
-        this.vector = vector;
+    public ClusterState(@Nonnull final UUID uuid, final boolean isDraining) {
+        this.uuid = uuid;
+        this.isDraining = isDraining;
     }
 
     @Nonnull
-    public VectorId getId() {
-        return id;
+    public UUID getUuid() {
+        return uuid;
     }
 
-    @Nonnull
-    public Transformed<RealVector> getVector() {
-        return vector;
+    public boolean isDraining() {
+        return isDraining;
     }
 
     @Override
@@ -52,12 +48,13 @@ class VectorReferences {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        final VectorReferences that = (VectorReferences)o;
-        return Objects.equals(getId(), that.getId()) && Objects.equals(getVector(), that.getVector());
+        final ClusterState cluster = (ClusterState)o;
+        return Objects.equals(getUuid(), cluster.getUuid()) &&
+                isDraining() == cluster.isDraining();
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(getId(), getVector());
+        return Objects.hash(getUuid(), isDraining());
     }
 }

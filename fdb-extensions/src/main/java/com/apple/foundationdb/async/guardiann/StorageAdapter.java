@@ -20,24 +20,17 @@
 
 package com.apple.foundationdb.async.guardiann;
 
-import com.apple.foundationdb.ReadTransaction;
-import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.async.common.StorageHelpers;
 import com.apple.foundationdb.async.common.StorageTransform;
-import com.apple.foundationdb.async.hnsw.AccessInfo;
-import com.apple.foundationdb.async.hnsw.EntryNodeReference;
-import com.apple.foundationdb.linear.AffineOperator;
-import com.apple.foundationdb.linear.Quantizer;
 import com.apple.foundationdb.linear.RealVector;
-import com.apple.foundationdb.linear.Transformed;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
+import com.google.common.base.Suppliers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
-import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 /**
  * TODO.
@@ -59,17 +52,17 @@ class StorageAdapter {
     /**
      * Subspace for the cluster data, that is the centroids currently in use.
      */
-    private static final long SUBSPACE_PREFIX_CLUSTER_STATE = 0x02;
+    private static final long SUBSPACE_PREFIX_CLUSTER_STATES = 0x02;
 
     /**
      * Subspace for the vector entries.
      */
-    private static final long SUBSPACE_PREFIX_VECTORS_REFERENCES = 0x03;
+    private static final long SUBSPACE_PREFIX_VECTOR_REFERENCES = 0x03;
 
     /**
      * Subspace for the vector entries.
      */
-    private static final long SUBSPACE_PREFIX_VECTOR_IDS = 0x04;
+    private static final long SUBSPACE_PREFIX_VECTOR_STATES = 0x04;
 
     /**
      * Subspace for (mostly) statistical analysis (like finding a centroid, etc.). Contains samples of vectors.
@@ -91,7 +84,20 @@ class StorageAdapter {
     private final OnReadListener onReadListener;
 
     @Nonnull
-    private final Subspace clusterHnswSubspace;
+    private final Supplier<Subspace> accessInfoSubspaceSupplier;
+    @Nonnull
+    private final Supplier<Subspace> clusterHnswSubspaceSupplier;
+    @Nonnull
+    private final Supplier<Subspace> clusterStatesSubspaceSupplier;
+    @Nonnull
+    private final Supplier<Subspace> vectorReferencesSubspaceSupplier;
+    @Nonnull
+    private final Supplier<Subspace> vectorStatesSubspaceSupplier;
+    @Nonnull
+    private final Supplier<Subspace> samplesSubspaceSupplier;
+    @Nonnull
+    private final Supplier<Subspace> tasksSubspaceSupplier;
+
 
     /**
      * Constructs a new {@code StorageAdapter}.
@@ -113,7 +119,20 @@ class StorageAdapter {
         this.subspace = subspace;
         this.onWriteListener = onWriteListener;
         this.onReadListener = onReadListener;
-        this.clusterHnswSubspace = subspace.subspace(Tuple.from(SUBSPACE_PREFIX_CLUSTER_HNSW));
+        this.accessInfoSubspaceSupplier =
+                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_ACCESS_INFO)));
+        this.clusterHnswSubspaceSupplier =
+                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_CLUSTER_HNSW)));
+        this.clusterStatesSubspaceSupplier =
+                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_CLUSTER_STATES)));
+        this.vectorReferencesSubspaceSupplier =
+                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_VECTOR_REFERENCES)));
+        this.vectorStatesSubspaceSupplier =
+                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_VECTOR_STATES)));
+        this.samplesSubspaceSupplier =
+                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_SAMPLES)));
+        this.tasksSubspaceSupplier =
+                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_TASKS)));
     }
 
     @Nonnull
@@ -127,8 +146,38 @@ class StorageAdapter {
     }
 
     @Nonnull
+    public Subspace getAccessInfoSubspace() {
+        return accessInfoSubspaceSupplier.get();
+    }
+
+    @Nonnull
     Subspace getClusterHnswSubspace() {
-        return clusterHnswSubspace;
+        return clusterHnswSubspaceSupplier.get();
+    }
+
+    @Nonnull
+    public Subspace getClusterStatesSubspace() {
+        return clusterStatesSubspaceSupplier.get();
+    }
+
+    @Nonnull
+    public Subspace getVectorReferencesSubspace() {
+        return vectorReferencesSubspaceSupplier.get();
+    }
+
+    @Nonnull
+    public Subspace getVectorStatesSubspace() {
+        return vectorStatesSubspaceSupplier.get();
+    }
+
+    @Nonnull
+    public Subspace getSamplesSubspace() {
+        return samplesSubspaceSupplier.get();
+    }
+
+    @Nonnull
+    public Supplier<Subspace> getTasksSubspaceSupplier() {
+        return tasksSubspaceSupplier;
     }
 
     @Nonnull
@@ -142,115 +191,32 @@ class StorageAdapter {
     }
 
     @Nonnull
-    @Override
-    public CompletableFuture<AbstractNode<N>> fetchNode(@Nonnull final ReadTransaction readTransaction,
-                                                        @Nonnull final StorageTransform storageTransform,
-                                                        final int layer, @Nonnull Tuple primaryKey) {
-        return fetchNodeInternal(readTransaction, storageTransform, layer, primaryKey).thenApply(this::checkNode);
-    }
-
-    /**
-     * Asynchronously fetches a specific node from the data store for a given layer and primary key.
-     * <p>
-     * This is an internal, abstract method that concrete subclasses must implement to define
-     * the storage-specific logic for retrieving a node. The operation is performed within the
-     * context of the provided {@link ReadTransaction}.
-     *
-     * @param readTransaction the transaction to use for the read operation; must not be {@code null}
-     * @param storageTransform an affine vector transformation operator that is used to transform the fetched vector
-     *        into the storage space that is currently being used
-     * @param layer the layer index from which to fetch the node
-     * @param primaryKey the primary key that uniquely identifies the node to be fetched; must not be {@code null}
-     *
-     * @return a {@link CompletableFuture} that will be completed with the fetched {@link AbstractNode}.
-     *         The future will complete with {@code null} if no node is found for the given key and layer.
-     */
-    @Nonnull
-    protected abstract CompletableFuture<AbstractNode<N>> fetchNodeInternal(@Nonnull ReadTransaction readTransaction,
-                                                                            @Nonnull StorageTransform storageTransform,
-                                                                            int layer, @Nonnull Tuple primaryKey);
-
-    /**
-     * Method to perform basic invariant check(s) on a newly-fetched node.
-     *
-     * @param node the node to check
-     * was passed in
-     *
-     * @return the node that was passed in
-     */
-    @Nullable
-    protected <T extends AbstractNode<N>> T checkNode(@Nullable final T node) {
-        return node;
-    }
-
-    /**
-     * Writes a given node and its neighbor modifications to the underlying storage.
-     * <p>
-     * This operation is executed within the context of the provided {@link Transaction}.
-     * It handles persisting the node's data at a specific {@code layer} and applies
-     * the changes to its neighbors as defined in the {@link NeighborsChangeSet}.
-     * This method delegates the core writing logic to an internal method and provides
-     * debug logging upon completion.
-     *
-     * @param transaction the non-null {@link Transaction} context for this write operation
-     * @param quantizer the quantizer to use
-     * @param layer the layer index where the node is being written
-     * @param node the non-null {@link Node} to be written to storage
-     * @param changeSet the non-null {@link NeighborsChangeSet} detailing the modifications
-     * to the node's neighbors
-     */
-    @Override
-    public void writeNode(@Nonnull final Transaction transaction, @Nonnull final Quantizer quantizer,
-                          final int layer, @Nonnull final AbstractNode<N> node,
-                          @Nonnull final NeighborsChangeSet<N> changeSet) {
-        writeNodeInternal(transaction, quantizer, layer, node, changeSet);
-        if (logger.isTraceEnabled()) {
-            logger.trace("written node with key={} at layer={}", node.getPrimaryKey(), layer);
-        }
-    }
-
-    /**
-     * Writes a single node to the given layer of the data store as part of a larger transaction.
-     * <p>
-     * This is an abstract method that concrete implementations must provide.
-     * It is responsible for the low-level persistence of the given {@code node} at a
-     * specific {@code layer}. The implementation should also handle the modifications
-     * to the node's neighbors, as detailed in the {@code changeSet}.
-     *
-     * @param transaction the non-null transaction context for the write operation
-     * @param quantizer the quantizer to use
-     * @param layer the layer or level of the node in the structure
-     * @param node the non-null {@link Node} to write
-     * @param changeSet the non-null {@link NeighborsChangeSet} detailing additions or
-     * removals of neighbor links
-     */
-    protected abstract void writeNodeInternal(@Nonnull Transaction transaction, @Nonnull Quantizer quantizer,
-                                              int layer, @Nonnull AbstractNode<N> node,
-                                              @Nonnull NeighborsChangeSet<N> changeSet);
-
-    @Override
-    public void deleteNode(@Nonnull final Transaction transaction, final int layer, @Nonnull final Tuple primaryKey) {
-        deleteNodeInternal(transaction, layer, primaryKey);
-        if (logger.isTraceEnabled()) {
-            logger.trace("deleted node with key={} at layer={}", primaryKey, layer);
-        }
-    }
-
-    /**
-     * Deletes a single node from the given layer of the data store as part of a larger transaction.
-     * @param transaction the transaction to use
-     * @param layer the layer
-     * @param primaryKey the primary key of the node
-     */
-    protected abstract void deleteNodeInternal(@Nonnull Transaction transaction, int layer, @Nonnull Tuple primaryKey);
-
-    @Nonnull
-    static Subspace accessInfoSubspace(@Nonnull final Subspace rootSubspace) {
-        return rootSubspace.subspace(Tuple.from(SUBSPACE_PREFIX_ACCESS_INFO));
+    static AccessInfo accessInfoFromTuple(@Nonnull final Config config, @Nonnull final Tuple valueTuple) {
+        final long rotatorSeed = valueTuple.getLong(0);
+        final Tuple centroidVectorTuple = valueTuple.getNestedTuple(1);
+        return new AccessInfo(rotatorSeed,
+                centroidVectorTuple == null ? null : StorageHelpers.vectorFromTuple(config, centroidVectorTuple));
     }
 
     @Nonnull
-    static Subspace samplesSubspace(@Nonnull final Subspace rootSubspace) {
-        return rootSubspace.subspace(Tuple.from(SUBSPACE_PREFIX_SAMPLES));
+    static Tuple tupleFromAccessInfo(@Nonnull final AccessInfo accessInfo) {
+        final RealVector centroid = accessInfo.getNegatedCentroid();
+        return Tuple.from(accessInfo.getRotatorSeed(),
+                centroid == null ? null : StorageHelpers.tupleFromVector(centroid));
+    }
+
+    @Nonnull
+    static ClusterState clusterStateFromTuple(@Nonnull final Tuple valueTuple) {
+        return new ClusterState(valueTuple.getUUID(0), valueTuple.getBoolean(1));
+    }
+
+    @Nonnull
+    static VectorReference vectorReferenceFromTuples(@Nonnull final Config config,
+                                                     @Nonnull final StorageTransform storageTransform,
+                                                     @Nonnull final Tuple primaryKey,
+                                                     @Nonnull final Tuple valueTuple) {
+        final VectorId vectorId = new VectorId(primaryKey, valueTuple.getUUID(0));
+        return new VectorReference(vectorId,
+                storageTransform.transform(StorageHelpers.vectorFromBytes(config, valueTuple.getBytes(1))));
     }
 }

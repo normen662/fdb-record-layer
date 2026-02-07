@@ -133,6 +133,36 @@ public class Insert {
         return getLocator().search();
     }
 
+    @Nonnull
+    private StorageAdapter getStorageAdapter() {
+        return getLocator().getStorageAdapter();
+    }
+
+    @Nonnull
+    private Subspace getAccessInfoSubspace() {
+        return getStorageAdapter().getAccessInfoSubspace();
+    }
+
+    @Nonnull
+    private Subspace getClusterHnswSubspace() {
+        return getStorageAdapter().getClusterHnswSubspace();
+    }
+
+    @Nonnull
+    private Subspace getClusterStatesSubspace() {
+        return getStorageAdapter().getClusterStatesSubspace();
+    }
+
+    @Nonnull
+    private Subspace getVectorReferencesSubspace() {
+        return getStorageAdapter().getVectorReferencesSubspace();
+    }
+
+    @Nonnull
+    private Subspace getSamplesSubspace() {
+        return getStorageAdapter().getSamplesSubspace();
+    }
+
     /**
      * Inserts a new vector with its associated primary key into the HNSW graph.
      * <p>
@@ -306,10 +336,10 @@ public class Insert {
                                                           @Nonnull final Transaction transaction,
                                                           @Nonnull final AccessInfo currentAccessInfo,
                                                           @Nonnull final Transformed<RealVector> transformedNewVector) {
+        final Subspace samplesSubspace = getSamplesSubspace();
         if (getConfig().isUseRaBitQ() &&
                 !currentAccessInfo.canUseRaBitQ()) {
             final Primitives primitives = primitives();
-            final Subspace samplesSubspace = primitives.samplesSubspace();
             if (shouldSampleVector(random)) {
                 appendSampledVector(transaction, samplesSubspace, 1, transformedNewVector,
                         getOnWriteListener());

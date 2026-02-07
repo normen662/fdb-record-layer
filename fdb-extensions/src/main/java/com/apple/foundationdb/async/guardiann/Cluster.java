@@ -35,10 +35,10 @@ class Cluster {
     private final Transformed<RealVector> centroid;
     private final boolean isDraining;
     @Nonnull
-    private final List<VectorReferences> vectorEntries;
+    private final List<VectorReference> vectorEntries;
 
     public Cluster(@Nonnull final UUID uuid, @Nonnull final Transformed<RealVector> centroid,
-                   final boolean isDraining, @Nonnull final List<VectorReferences> vectorEntries) {
+                   final boolean isDraining, @Nonnull final List<VectorReference> vectorEntries) {
         this.uuid = uuid;
         this.centroid = centroid;
         this.isDraining = isDraining;
@@ -60,7 +60,7 @@ class Cluster {
     }
 
     @Nonnull
-    public List<VectorReferences> getVectorEntries() {
+    public List<VectorReference> getVectorEntries() {
         return vectorEntries;
     }
 
