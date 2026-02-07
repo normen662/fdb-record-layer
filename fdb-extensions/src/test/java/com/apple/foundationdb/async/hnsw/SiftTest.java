@@ -198,7 +198,8 @@ class SiftTest implements BaseTest {
                     final long startTs = System.nanoTime();
                     final AsyncIterator<ResultEntry> it =
                             hnsw.orderByDistance(tr, 100, 500, false, queryVector,
-                                    minVectorAndDistance.getDistance(), minVectorAndDistance.getPrimaryKey());
+                                    minVectorAndDistance.getDistance(), minVectorAndDistance.getPrimaryKey(),
+                                    false);
 
                     final ImmutableList.Builder<ResultEntry> resultsBuilder = ImmutableList.builder();
                     for (int resultCounter = 0; resultCounter < length && it.hasNext(); resultCounter ++) {

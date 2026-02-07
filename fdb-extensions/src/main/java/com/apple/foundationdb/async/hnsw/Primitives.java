@@ -24,6 +24,7 @@ import com.apple.foundationdb.Database;
 import com.apple.foundationdb.ReadTransaction;
 import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.annotation.API;
+import com.apple.foundationdb.async.common.StorageTransform;
 import com.apple.foundationdb.linear.Estimator;
 import com.apple.foundationdb.linear.FhtKacRotator;
 import com.apple.foundationdb.linear.LinearOperator;
@@ -311,10 +312,10 @@ public class Primitives {
      * nodes fetched from storage.
      *
      * @return a {@link CompletableFuture} that, upon completion, will contain a list of
-     * {@link NodeReferenceWithVector} objects for the specified neighbors
+     *         {@link NodeReferenceWithVectorAndAdditionalValues} objects for the specified neighbors
      */
     @Nonnull
-    <N extends NodeReference> CompletableFuture<List<NodeReferenceWithVector>>
+    <N extends NodeReference> CompletableFuture<List<NodeReferenceWithVectorAndAdditionalValues>>
             fetchNeighborhoodReferences(@Nonnull final StorageAdapter<N> storageAdapter,
                                         @Nonnull final ReadTransaction readTransaction,
                                         @Nonnull final StorageTransform storageTransform,
@@ -324,14 +325,18 @@ public class Primitives {
         return fetchSomeNodesAndApply(storageAdapter, readTransaction, storageTransform, layer, neighborReferences,
                 neighborReference -> {
                     if (neighborReference.isNodeReferenceWithVector()) {
-                        return neighborReference.asNodeReferenceWithVector();
+                        final NodeReferenceWithVector nodeReferenceWithVector =
+                                neighborReference.asNodeReferenceWithVector();
+                        return new NodeReferenceWithVectorAndAdditionalValues(nodeReferenceWithVector.getPrimaryKey(),
+                                nodeReferenceWithVector.getVector(), null);
                     }
                     final AbstractNode<N> neighborNode = nodeCache.get(neighborReference.getPrimaryKey());
                     if (neighborNode == null) {
                         return null;
                     }
-                    return new NodeReferenceWithVector(neighborReference.getPrimaryKey(),
-                            neighborNode.asCompactNode().getVector());
+                    final CompactNode compactNode = neighborNode.asCompactNode();
+                    return new NodeReferenceWithVectorAndAdditionalValues(neighborReference.getPrimaryKey(),
+                            compactNode.getVector(), compactNode.getAdditionalValues());
                 },
                 (neighborReference, neighborNode) -> {
                     if (neighborNode != null) {
@@ -341,8 +346,9 @@ public class Primitives {
                         // the nodes as compact nodes.
                         //
                         nodeCache.put(neighborReference.getPrimaryKey(), neighborNode);
-                        return new NodeReferenceWithVector(neighborReference.getPrimaryKey(),
-                                neighborNode.asCompactNode().getVector());
+                        final CompactNode compactNode = neighborNode.asCompactNode();
+                        return new NodeReferenceWithVectorAndAdditionalValues(neighborReference.getPrimaryKey(),
+                                compactNode.getVector(), compactNode.getAdditionalValues());
                     }
                     return null;
                 });
@@ -454,9 +460,14 @@ public class Primitives {
             filterExisting(@Nonnull final StorageAdapter<N> storageAdapter,
                            @Nonnull final ReadTransaction readTransaction,
                            @Nonnull final StorageTransform storageTransform,
-                           @Nonnull final Iterable<NodeReferenceAndNode<NodeReferenceWithVector, N>> nodeReferenceAndNodes) {
+                           @Nonnull final Iterable<? extends NodeReferenceAndNode<? extends NodeReferenceWithVector, N>> nodeReferenceAndNodes) {
         if (!storageAdapter.isInliningStorageAdapter()) {
-            return CompletableFuture.completedFuture(ImmutableList.copyOf(nodeReferenceAndNodes));
+            final var resultBuilder =
+                    ImmutableList.<NodeReferenceAndNode<NodeReferenceWithVector, N>>builder();
+            for (final NodeReferenceAndNode<? extends NodeReferenceWithVector, N> nodeReferenceAndNode : nodeReferenceAndNodes) {
+                resultBuilder.add(new NodeReferenceAndNode<>(nodeReferenceAndNode.getNodeReference(), nodeReferenceAndNode.getNode()));
+            }
+            return CompletableFuture.completedFuture(resultBuilder.build());
         }
 
         return forEach(nodeReferenceAndNodes,
@@ -503,6 +514,23 @@ public class Primitives {
         //
         return fetchBaseNode(readTransaction, StorageTransform.identity(), primaryKey)
                 .thenApply(Objects::nonNull);
+    }
+
+    @Nonnull
+    CompletableFuture<ResultEntry> fetch(@Nonnull final ReadTransaction readTransaction,
+                                         @Nonnull final Tuple primaryKey) {
+        return StorageAdapter.fetchAccessInfo(getConfig(), readTransaction, getSubspace(), getOnReadListener())
+                .thenCompose(accessInfo -> {
+                    if (accessInfo == null) {
+                        // not a single node in the index
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    final StorageTransform storageTransform = storageTransform(accessInfo);
+                    return fetchBaseNode(readTransaction, storageTransform, primaryKey)
+                            .thenApply(node ->
+                                    new ResultEntry(primaryKey, storageTransform.untransform(node.getVector()),
+                                            node.getAdditionalValues(), 0, -1));
+                });
     }
 
     @Nonnull
@@ -790,7 +818,7 @@ public class Primitives {
      *
      * @return a {@link CompletableFuture} which will complete with a list of {@link NodeReferenceWithVector}
      */
-    private <T extends NodeReference, N extends NodeReference> CompletableFuture<List<NodeReferenceWithVector>>
+    private <T extends NodeReference, N extends NodeReference> CompletableFuture<? extends List<? extends NodeReferenceWithVector>>
             neighborReferences(@Nonnull final StorageAdapter<N> storageAdapter,
                                @Nonnull final ReadTransaction readTransaction,
                                @Nonnull final StorageTransform storageTransform,
@@ -876,6 +904,7 @@ public class Primitives {
      * @param transaction the transaction to use for writing to the database
      * @param primaryKey the primary key of the record for which lonely nodes are being written
      * @param vector the search path vector that was followed to find this key
+     * @param additionalValues additional values that are associated with the vector that is written
      * @param highestLayerInclusive the highest layer (inclusive) to begin writing lonely nodes on
      * @param lowestLayerExclusive the lowest layer (exclusive) at which to stop writing lonely nodes
      */
@@ -883,11 +912,12 @@ public class Primitives {
                           @Nonnull final Transaction transaction,
                           @Nonnull final Tuple primaryKey,
                           @Nonnull final Transformed<RealVector> vector,
+                          @Nullable final Tuple additionalValues,
                           final int highestLayerInclusive,
                           final int lowestLayerExclusive) {
         for (int layer = highestLayerInclusive; layer > lowestLayerExclusive; layer --) {
             final StorageAdapter<?> storageAdapter = storageAdapterForLayer(layer);
-            writeLonelyNodeOnLayer(quantizer, storageAdapter, transaction, layer, primaryKey, vector);
+            writeLonelyNodeOnLayer(quantizer, storageAdapter, transaction, layer, primaryKey, vector, additionalValues);
         }
     }
 
@@ -906,16 +936,20 @@ public class Primitives {
      * @param layer the layer index where the new node will be written
      * @param primaryKey the primary key for the new node; must not be null
      * @param vector the vector data for the new node; must not be null
+     * @param additionalValues additional values associated with the vector that is written
      */
     <N extends NodeReference> void writeLonelyNodeOnLayer(@Nonnull final Quantizer quantizer,
                                                           @Nonnull final StorageAdapter<N> storageAdapter,
                                                           @Nonnull final Transaction transaction,
                                                           final int layer,
                                                           @Nonnull final Tuple primaryKey,
-                                                          @Nonnull final Transformed<RealVector> vector) {
+                                                          @Nonnull final Transformed<RealVector> vector,
+                                                          @Nullable final Tuple additionalValues) {
+        final AbstractNode<N> node =
+                storageAdapter.getNodeFactory()
+                        .create(primaryKey, vector, layer == 0 ? additionalValues : null, ImmutableList.of());
         storageAdapter.writeNode(transaction, quantizer,
-                layer, storageAdapter.getNodeFactory()
-                        .create(primaryKey, vector, ImmutableList.of()),
+                layer, node,
                 new BaseNeighborsChangeSet<>(ImmutableList.of()));
         if (logger.isTraceEnabled()) {
             logger.trace("written lonely node at key={} on layer={}", primaryKey, layer);

@@ -121,7 +121,6 @@ public class EncodedRealVector implements RealVector {
         return encoded[dimension];
     }
 
-
     @Override
     public double getComponent(final int dimension) {
         return getData()[dimension];

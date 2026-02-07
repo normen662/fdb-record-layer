@@ -18,9 +18,11 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.async.hnsw;
+package com.apple.foundationdb.async.guardiann;
 
 import com.apple.foundationdb.async.common.OnKeyValueWriteListener;
+import com.apple.foundationdb.async.hnsw.Node;
+import com.apple.foundationdb.async.hnsw.NodeReference;
 import com.apple.foundationdb.tuple.Tuple;
 
 import javax.annotation.Nonnull;

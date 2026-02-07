@@ -114,7 +114,7 @@ class TestHelpers {
                     return data.build();
                 }
                 data.add(record);
-                hnsw.insert(tr, record.getPrimaryKey(), record.getVector()).join();
+                hnsw.insert(tr, record.getPrimaryKey(), record.getVector(), null).join();
             }
             final long endTs = System.nanoTime();
             logger.info("inserted batchSize={} records starting at nodeId={} took elapsedTime={}ms, readCounts={}, readBytes={}",
@@ -381,8 +381,8 @@ class TestHelpers {
         }
 
         return nodeFactory.create(primaryKey,
-                AffineOperator.identity().transform(createRandomHalfVector(random, numDimensions)),
-                neighborsBuilder.build());
+                neighborsBuilder.build(), AffineOperator.identity().transform(createRandomHalfVector(random, numDimensions))
+        );
     }
 
     @Nonnull
@@ -397,8 +397,8 @@ class TestHelpers {
         }
 
         return nodeFactory.create(primaryKey,
-                AffineOperator.identity().transform(createRandomHalfVector(random, numDimensions)),
-                neighborsBuilder.build());
+                neighborsBuilder.build(), AffineOperator.identity().transform(createRandomHalfVector(random, numDimensions))
+        );
     }
 
     @Nonnull

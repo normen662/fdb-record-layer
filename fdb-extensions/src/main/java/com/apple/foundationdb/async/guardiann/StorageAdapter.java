@@ -1,5 +1,5 @@
 /*
- * AbstractStorageAdapter.java
+ * StorageAdapter.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -18,15 +18,20 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.async.hnsw;
+package com.apple.foundationdb.async.guardiann;
 
 import com.apple.foundationdb.ReadTransaction;
 import com.apple.foundationdb.Transaction;
+import com.apple.foundationdb.async.common.StorageHelpers;
 import com.apple.foundationdb.async.common.StorageTransform;
+import com.apple.foundationdb.async.hnsw.AccessInfo;
+import com.apple.foundationdb.async.hnsw.EntryNodeReference;
+import com.apple.foundationdb.linear.AffineOperator;
 import com.apple.foundationdb.linear.Quantizer;
+import com.apple.foundationdb.linear.RealVector;
+import com.apple.foundationdb.linear.Transformed;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
-import com.google.common.base.Verify;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,23 +40,49 @@ import javax.annotation.Nullable;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * An abstract base class for {@link StorageAdapter} implementations.
- * <p>
- * This class provides the common infrastructure for managing HNSW graph data within a {@link Subspace}.
- * It handles the configuration, node creation, and listener management, while delegating the actual
- * storage-specific read and write operations to concrete subclasses through the {@code fetchNodeInternal}
- * and {@code writeNodeInternal} abstract methods.
- *
- * @param <N> the type of {@link NodeReference} used to reference nodes in the graph
+ * TODO.
  */
-abstract class AbstractStorageAdapter<N extends NodeReference> implements StorageAdapter<N> {
+class StorageAdapter {
     @Nonnull
-    private static final Logger logger = LoggerFactory.getLogger(AbstractStorageAdapter.class);
+    private static final Logger logger = LoggerFactory.getLogger(StorageAdapter.class);
+
+    /**
+     * Subspace for the access info.
+     */
+    private static final long SUBSPACE_PREFIX_ACCESS_INFO = 0x00;
+
+    /**
+     * Subspace for the cluster data, that is the centroids currently in use.
+     */
+    private static final long SUBSPACE_PREFIX_CLUSTER_HNSW = 0x01;
+
+    /**
+     * Subspace for the cluster data, that is the centroids currently in use.
+     */
+    private static final long SUBSPACE_PREFIX_CLUSTER_STATE = 0x02;
+
+    /**
+     * Subspace for the vector entries.
+     */
+    private static final long SUBSPACE_PREFIX_VECTORS_REFERENCES = 0x03;
+
+    /**
+     * Subspace for the vector entries.
+     */
+    private static final long SUBSPACE_PREFIX_VECTOR_IDS = 0x04;
+
+    /**
+     * Subspace for (mostly) statistical analysis (like finding a centroid, etc.). Contains samples of vectors.
+     */
+    private static final long SUBSPACE_PREFIX_SAMPLES = 0x05;
+
+    /**
+     * Subspace for outstanding tasks.
+     */
+    private static final long SUBSPACE_PREFIX_TASKS = 0x06;
 
     @Nonnull
     private final Config config;
-    @Nonnull
-    private final NodeFactory<N> nodeFactory;
     @Nonnull
     private final Subspace subspace;
     @Nonnull
@@ -60,102 +91,53 @@ abstract class AbstractStorageAdapter<N extends NodeReference> implements Storag
     private final OnReadListener onReadListener;
 
     @Nonnull
-    private final Subspace dataSubspace;
+    private final Subspace clusterHnswSubspace;
 
     /**
-     * Constructs a new {@code AbstractStorageAdapter}.
+     * Constructs a new {@code StorageAdapter}.
      * <p>
      * This constructor initializes the adapter with the necessary configuration,
-     * factories, and listeners for managing an HNSW graph. It also sets up a
+     * factories, and listeners for managing a guardian structure. It also sets up a
      * dedicated data subspace within the provided main subspace for storing node data.
      *
      * @param config the HNSW graph configuration
-     * @param nodeFactory the factory to create new nodes of type {@code <N>}
      * @param subspace the primary subspace for storing all graph-related data
      * @param onWriteListener the listener to be called on write operations
      * @param onReadListener the listener to be called on read operations
      */
-    protected AbstractStorageAdapter(@Nonnull final Config config, @Nonnull final NodeFactory<N> nodeFactory,
-                                     @Nonnull final Subspace subspace,
-                                     @Nonnull final OnWriteListener onWriteListener,
-                                     @Nonnull final OnReadListener onReadListener) {
+    StorageAdapter(@Nonnull final Config config,
+                   @Nonnull final Subspace subspace,
+                   @Nonnull final OnWriteListener onWriteListener,
+                   @Nonnull final OnReadListener onReadListener) {
         this.config = config;
-        this.nodeFactory = nodeFactory;
         this.subspace = subspace;
         this.onWriteListener = onWriteListener;
         this.onReadListener = onReadListener;
-        this.dataSubspace = subspace.subspace(Tuple.from(SUBSPACE_PREFIX_DATA));
+        this.clusterHnswSubspace = subspace.subspace(Tuple.from(SUBSPACE_PREFIX_CLUSTER_HNSW));
     }
 
-    @Override
     @Nonnull
-    public Config getConfig() {
+    Config getConfig() {
         return config;
     }
 
     @Nonnull
-    @Override
-    public NodeFactory<N> getNodeFactory() {
-        return nodeFactory;
-    }
-
-    @Override
-    public boolean isInliningStorageAdapter() {
-        final boolean isInliningStorageAdapter = getNodeFactory().getNodeKind() == NodeKind.INLINING;
-        Verify.verify(!isInliningStorageAdapter || this instanceof InliningStorageAdapter);
-        return isInliningStorageAdapter;
-    }
-
-    @Nonnull
-    @Override
-    public InliningStorageAdapter asInliningStorageAdapter() {
-        Verify.verify(isInliningStorageAdapter());
-        return (InliningStorageAdapter)this;
-    }
-
-    @Override
-    public boolean isCompactStorageAdapter() {
-        final boolean isCompactStorageAdapter = getNodeFactory().getNodeKind() == NodeKind.COMPACT;
-        Verify.verify(!isCompactStorageAdapter || this instanceof CompactStorageAdapter);
-        return isCompactStorageAdapter;
-    }
-
-    @Nonnull
-    @Override
-    public CompactStorageAdapter asCompactStorageAdapter() {
-        Verify.verify(isCompactStorageAdapter());
-        return (CompactStorageAdapter)this;
-    }
-
-    @Override
-    @Nonnull
-    public Subspace getSubspace() {
+    Subspace getSubspace() {
         return subspace;
     }
 
-    /**
-     * Gets the cached subspace for the data associated with this component.
-     * <p>
-     * The data subspace defines the portion of the directory space where the data
-     * for this component is stored.
-     *
-     * @return the non-null {@link Subspace} for the data
-     */
-    @Override
     @Nonnull
-    public Subspace getDataSubspace() {
-        return dataSubspace;
+    Subspace getClusterHnswSubspace() {
+        return clusterHnswSubspace;
     }
 
-    @Override
     @Nonnull
-    public OnWriteListener getOnWriteListener() {
+    OnWriteListener getOnWriteListener() {
         return onWriteListener;
     }
 
-    @Override
     @Nonnull
-    public OnReadListener getOnReadListener() {
+    OnReadListener getOnReadListener() {
         return onReadListener;
     }
 
@@ -261,4 +243,14 @@ abstract class AbstractStorageAdapter<N extends NodeReference> implements Storag
      * @param primaryKey the primary key of the node
      */
     protected abstract void deleteNodeInternal(@Nonnull Transaction transaction, int layer, @Nonnull Tuple primaryKey);
+
+    @Nonnull
+    static Subspace accessInfoSubspace(@Nonnull final Subspace rootSubspace) {
+        return rootSubspace.subspace(Tuple.from(SUBSPACE_PREFIX_ACCESS_INFO));
+    }
+
+    @Nonnull
+    static Subspace samplesSubspace(@Nonnull final Subspace rootSubspace) {
+        return rootSubspace.subspace(Tuple.from(SUBSPACE_PREFIX_SAMPLES));
+    }
 }

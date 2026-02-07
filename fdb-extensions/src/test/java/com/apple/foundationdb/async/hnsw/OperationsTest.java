@@ -22,6 +22,7 @@ package com.apple.foundationdb.async.hnsw;
 
 import com.apple.foundationdb.Database;
 import com.apple.foundationdb.async.AsyncIterator;
+import com.apple.foundationdb.async.common.StorageTransform;
 import com.apple.foundationdb.async.hnsw.TestHelpers.PrimaryKeyAndVector;
 import com.apple.foundationdb.async.hnsw.TestHelpers.PrimaryKeyVectorAndDistance;
 import com.apple.foundationdb.async.hnsw.TestHelpers.TestOnReadListener;
@@ -661,7 +662,7 @@ class OperationsTest implements BaseTest {
                 db.run(tr -> {
                     final AsyncIterator<ResultEntry> it =
                             hnsw.orderByDistance(tr, 100, 1000, false,
-                                    queryVector, discriminator.getDistance(), discriminator.getPrimaryKey());
+                                    queryVector, discriminator.getDistance(), discriminator.getPrimaryKey(), false);
                     final ImmutableList.Builder<ResultEntry> resultsBuilder = ImmutableList.builder();
                     while (it.hasNext()) {
                         resultsBuilder.add(it.next());

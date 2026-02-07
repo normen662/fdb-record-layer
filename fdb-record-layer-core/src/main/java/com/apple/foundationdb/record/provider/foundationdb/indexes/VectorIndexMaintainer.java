@@ -349,7 +349,7 @@ public class VectorIndexMaintainer extends StandardIndexMaintainer {
                 return hnsw.delete(state.transaction, trimmedPrimaryKey);
             } else {
                 return hnsw.insert(state.transaction, trimmedPrimaryKey,
-                        RealVector.fromBytes(vectorBytes));
+                        RealVector.fromBytes(vectorBytes), null);
             }
         });
     }

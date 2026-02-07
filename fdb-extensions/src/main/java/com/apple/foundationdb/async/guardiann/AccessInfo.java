@@ -18,7 +18,7 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.async.hnsw;
+package com.apple.foundationdb.async.guardiann;
 
 import com.apple.foundationdb.async.common.StorageTransform;
 import com.apple.foundationdb.linear.RealVector;
@@ -28,18 +28,11 @@ import javax.annotation.Nullable;
 import java.util.Objects;
 
 /**
- * Class to capture the current state of this HNSW that cannot be expressed as metadata but that also is not the actual
- * data that is inserted, organized and retrieved. For instance, an HNSW needs to keep track of the entry point that
- * resides in the highest layer(currently). Another example is any information that pertains to coordinate system
- * transformations that have to be carried out prior/posterior to inserting/retrieving an item into/from the HNSW.
+ * Class to capture the current state of this GUARDIANN that cannot be expressed as metadata but that also is not the actual
+ * data that is inserted, organized and retrieved. For instance, any information that pertains to coordinate system
+ * transformations that have to be carried out prior/posterior to inserting/retrieving an item into/from the structure.
  */
 class AccessInfo {
-    /**
-     * The current entry point. All searches start here.
-     */
-    @Nonnull
-    private final EntryNodeReference entryNodeReference;
-
     /**
      * A seed that can be used to reconstruct a random rotator {@link com.apple.foundationdb.linear.FhtKacRotator} used
      * in ({@link StorageTransform}).
@@ -55,16 +48,9 @@ class AccessInfo {
     @Nullable
     private final RealVector negatedCentroid;
 
-    public AccessInfo(@Nonnull final EntryNodeReference entryNodeReference, final long rotatorSeed,
-                      @Nullable final RealVector negatedCentroid) {
-        this.entryNodeReference = entryNodeReference;
+    public AccessInfo(final long rotatorSeed, @Nullable final RealVector negatedCentroid) {
         this.rotatorSeed = rotatorSeed;
         this.negatedCentroid = negatedCentroid;
-    }
-
-    @Nonnull
-    public EntryNodeReference getEntryNodeReference() {
-        return entryNodeReference;
     }
 
     public boolean canUseRaBitQ() {
@@ -80,11 +66,6 @@ class AccessInfo {
         return negatedCentroid;
     }
 
-    @Nonnull
-    public AccessInfo withNewEntryNodeReference(@Nonnull final EntryNodeReference entryNodeReference) {
-        return new AccessInfo(entryNodeReference, getRotatorSeed(), getNegatedCentroid());
-    }
-
     @Override
     public boolean equals(final Object o) {
         if (!(o instanceof AccessInfo)) {
@@ -92,20 +73,18 @@ class AccessInfo {
         }
         final AccessInfo that = (AccessInfo)o;
         return rotatorSeed == that.rotatorSeed &&
-                Objects.equals(entryNodeReference, that.entryNodeReference) &&
                 Objects.equals(negatedCentroid, that.negatedCentroid);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(entryNodeReference, rotatorSeed, negatedCentroid);
+        return Objects.hash(rotatorSeed, negatedCentroid);
     }
 
     @Nonnull
     @Override
     public String toString() {
         return "AccessInfo[" +
-                "entryNodeReference=" + entryNodeReference +
                 ", rotatorSeed=" + rotatorSeed +
                 ", centroid=" + negatedCentroid + "]";
     }

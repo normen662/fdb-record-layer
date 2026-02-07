@@ -53,6 +53,9 @@ public class ResultEntry {
     @Nullable
     private final RealVector vector;
 
+    @Nullable
+    private final Tuple additionalValues;
+
     /**
      * The distance of item's vector to the query vector.
      */
@@ -63,10 +66,12 @@ public class ResultEntry {
      */
     private final int rankOrRowNumber;
 
-    public ResultEntry(@Nonnull final Tuple primaryKey, @Nullable final RealVector vector, final double distance,
+    public ResultEntry(@Nonnull final Tuple primaryKey, @Nullable final RealVector vector,
+                       @Nullable final Tuple additionalValues, final double distance,
                        final int rankOrRowNumber) {
         this.primaryKey = primaryKey;
         this.vector = vector;
+        this.additionalValues = additionalValues;
         this.distance = distance;
         this.rankOrRowNumber = rankOrRowNumber;
     }
@@ -79,6 +84,11 @@ public class ResultEntry {
     @Nullable
     public RealVector getVector() {
         return vector;
+    }
+
+    @Nullable
+    public Tuple getAdditionalValues() {
+        return additionalValues;
     }
 
     public double getDistance() {
@@ -98,12 +108,13 @@ public class ResultEntry {
         return Double.compare(distance, that.distance) == 0 &&
                 rankOrRowNumber == that.rankOrRowNumber &&
                 Objects.equals(primaryKey, that.primaryKey) &&
-                Objects.equals(vector, that.vector);
+                Objects.equals(vector, that.vector) &&
+                Objects.equals(additionalValues, that.additionalValues);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(primaryKey, vector, distance, rankOrRowNumber);
+        return Objects.hash(primaryKey, vector, additionalValues, distance, rankOrRowNumber);
     }
 
     @Override
@@ -111,6 +122,7 @@ public class ResultEntry {
         return "[" +
                 "primaryKey=" + primaryKey +
                 ", vector=" + vector +
+                ", additionalValues=" + additionalValues +
                 ", distance=" + distance +
                 ", rankOrRowNumber=" + rankOrRowNumber + "]";
     }
