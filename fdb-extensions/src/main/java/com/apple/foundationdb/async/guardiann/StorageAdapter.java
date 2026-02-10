@@ -22,6 +22,7 @@ package com.apple.foundationdb.async.guardiann;
 
 import com.apple.foundationdb.async.common.StorageHelpers;
 import com.apple.foundationdb.async.common.StorageTransform;
+import com.apple.foundationdb.async.hnsw.HNSW;
 import com.apple.foundationdb.linear.RealVector;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
@@ -47,7 +48,7 @@ class StorageAdapter {
     /**
      * Subspace for the cluster data, that is the centroids currently in use.
      */
-    private static final long SUBSPACE_PREFIX_CLUSTER_HNSW = 0x01;
+    private static final long SUBSPACE_PREFIX_CLUSTER_CENTROIDS = 0x01;
 
     /**
      * Subspace for the cluster data, that is the centroids currently in use.
@@ -86,7 +87,7 @@ class StorageAdapter {
     @Nonnull
     private final Supplier<Subspace> accessInfoSubspaceSupplier;
     @Nonnull
-    private final Supplier<Subspace> clusterHnswSubspaceSupplier;
+    private final Supplier<Subspace> clusterCentroidsSubspaceSupplier;
     @Nonnull
     private final Supplier<Subspace> clusterStatesSubspaceSupplier;
     @Nonnull
@@ -98,6 +99,8 @@ class StorageAdapter {
     @Nonnull
     private final Supplier<Subspace> tasksSubspaceSupplier;
 
+    @Nonnull
+    private final Supplier<com.apple.foundationdb.async.hnsw.Config> clusterCentroidsHnswConfigSupplier;
 
     /**
      * Constructs a new {@code StorageAdapter}.
@@ -121,8 +124,8 @@ class StorageAdapter {
         this.onReadListener = onReadListener;
         this.accessInfoSubspaceSupplier =
                 Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_ACCESS_INFO)));
-        this.clusterHnswSubspaceSupplier =
-                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_CLUSTER_HNSW)));
+        this.clusterCentroidsSubspaceSupplier =
+                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_CLUSTER_CENTROIDS)));
         this.clusterStatesSubspaceSupplier =
                 Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_CLUSTER_STATES)));
         this.vectorReferencesSubspaceSupplier =
@@ -133,6 +136,8 @@ class StorageAdapter {
                 Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_SAMPLES)));
         this.tasksSubspaceSupplier =
                 Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_TASKS)));
+
+        this.clusterCentroidsHnswConfigSupplier = Suppliers.memoize(this::computeClusterCentroidHnswConfig);
     }
 
     @Nonnull
@@ -151,8 +156,8 @@ class StorageAdapter {
     }
 
     @Nonnull
-    Subspace getClusterHnswSubspace() {
-        return clusterHnswSubspaceSupplier.get();
+    Subspace getClusterCentroidsSubspace() {
+        return clusterCentroidsSubspaceSupplier.get();
     }
 
     @Nonnull
@@ -176,8 +181,8 @@ class StorageAdapter {
     }
 
     @Nonnull
-    public Supplier<Subspace> getTasksSubspaceSupplier() {
-        return tasksSubspaceSupplier;
+    public Subspace getTasksSubspace() {
+        return tasksSubspaceSupplier.get();
     }
 
     @Nonnull
@@ -188,6 +193,27 @@ class StorageAdapter {
     @Nonnull
     OnReadListener getOnReadListener() {
         return onReadListener;
+    }
+
+    @Nonnull
+    com.apple.foundationdb.async.hnsw.Config getClusterCentroidsHnswConfig() {
+        return clusterCentroidsHnswConfigSupplier.get();
+    }
+
+    @Nonnull
+    private com.apple.foundationdb.async.hnsw.Config computeClusterCentroidHnswConfig() {
+        final Config config = getConfig();
+        return HNSW.newConfigBuilder()
+                .setMetric(config.getMetric())
+                .setUseInlining(false)
+                .setEfRepair(64)
+                .setExtendCandidates(false)
+                .setKeepPrunedConnections(false)
+                .setUseRaBitQ(false)
+                .setM(32)
+                .setMMax(48)
+                .setMMax0(64)
+                .build(config.getNumDimensions());
     }
 
     @Nonnull
@@ -203,6 +229,11 @@ class StorageAdapter {
         final RealVector centroid = accessInfo.getNegatedCentroid();
         return Tuple.from(accessInfo.getRotatorSeed(),
                 centroid == null ? null : StorageHelpers.tupleFromVector(centroid));
+    }
+
+    @Nonnull
+    static VectorId vectorIdFromTuple(@Nonnull final Tuple primaryKey, @Nonnull final Tuple valueTuple) {
+        return new VectorId(primaryKey, valueTuple.getUUID(0));
     }
 
     @Nonnull

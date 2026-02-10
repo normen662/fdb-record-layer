@@ -22,9 +22,11 @@ package com.apple.foundationdb.async.guardiann;
 
 import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.annotation.API;
+import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.async.AsyncUtil;
 import com.apple.foundationdb.async.common.AggregatedVector;
 import com.apple.foundationdb.async.common.StorageTransform;
+import com.apple.foundationdb.async.hnsw.ResultEntry;
 import com.apple.foundationdb.linear.DoubleRealVector;
 import com.apple.foundationdb.linear.Estimator;
 import com.apple.foundationdb.linear.FhtKacRotator;
@@ -144,8 +146,8 @@ public class Insert {
     }
 
     @Nonnull
-    private Subspace getClusterHnswSubspace() {
-        return getStorageAdapter().getClusterHnswSubspace();
+    private Subspace getClusterCentroidsSubspace() {
+        return getStorageAdapter().getClusterCentroidsSubspace();
     }
 
     @Nonnull
@@ -194,8 +196,7 @@ public class Insert {
                         (accessInfo, nodeAlreadyExists) -> {
                             if (nodeAlreadyExists) {
                                 if (logger.isDebugEnabled()) {
-                                    logger.debug("new record already exists in HNSW with key={} on layer={}",
-                                            newPrimaryKey, insertionLayer);
+                                    logger.debug("new record already exists in with key={}", newPrimaryKey);
                                 }
                             }
                             return new Primitives.AccessInfoAndNodeExistence(accessInfo, nodeAlreadyExists);
@@ -216,6 +217,17 @@ public class Insert {
                     final Transformed<RealVector> transformedNewVector = storageTransform.transform(newVector);
                     final Quantizer quantizer = primitives.quantizer(accessInfo);
                     final Estimator estimator = quantizer.estimator();
+
+                    // accessInfo could be retrieved, we should have a cluster HNSW
+                    final AsyncIterator<ResultEntry> bestClusterCentroidsEntries =
+                            primitives.centroidsOrderedByDistance(transaction, newVector);
+
+                    //
+                    // First one we find (and the only one we insist must be found) is the primary cluster we insert
+                    // into. All the others may be clusters we want to duplicate into. We immediately stop as soon as
+                    // a cluster is outside the overlap range.
+                    //
+
 
                     final AccessInfo currentAccessInfo;
 

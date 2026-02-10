@@ -26,8 +26,11 @@ import com.apple.foundationdb.ReadTransaction;
 import com.apple.foundationdb.StreamingMode;
 import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.annotation.API;
+import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.async.AsyncUtil;
 import com.apple.foundationdb.async.common.StorageTransform;
+import com.apple.foundationdb.async.hnsw.HNSW;
+import com.apple.foundationdb.async.hnsw.ResultEntry;
 import com.apple.foundationdb.linear.FhtKacRotator;
 import com.apple.foundationdb.linear.LinearOperator;
 import com.apple.foundationdb.linear.Metric;
@@ -37,6 +40,7 @@ import com.apple.foundationdb.linear.Transformed;
 import com.apple.foundationdb.rabitq.RaBitQuantizer;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
+import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +52,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.function.Supplier;
 
 /**
  * An implementation of primitives for the Hierarchical Navigable Small World (HNSW) algorithm for
@@ -61,6 +66,9 @@ public class Primitives {
     @Nonnull
     private final Locator locator;
 
+    @Nonnull
+    private final Supplier<HNSW> clusterCentroidsHnswSupplier;
+
     /**
      * Constructs a new primitives instance.
      *
@@ -69,6 +77,8 @@ public class Primitives {
      */
     public Primitives(@Nonnull final Locator locator) {
         this.locator = locator;
+
+        this.clusterCentroidsHnswSupplier = Suppliers.memoize(this::computeClusterCentroidsHnsw);
     }
 
     @Nonnull
@@ -133,8 +143,8 @@ public class Primitives {
     }
 
     @Nonnull
-    Subspace getClusterHnswSubspace() {
-        return getStorageAdapter().getClusterHnswSubspace();
+    Subspace getClusterCentroidsSubspace() {
+        return getStorageAdapter().getClusterCentroidsSubspace();
     }
 
     @Nonnull
@@ -148,8 +158,50 @@ public class Primitives {
     }
 
     @Nonnull
+    Subspace getVectorStatesSubspace() {
+        return getStorageAdapter().getVectorStatesSubspace();
+    }
+
+    @Nonnull
     Subspace getSamplesSubspace() {
         return getStorageAdapter().getSamplesSubspace();
+    }
+
+    @Nonnull
+    private HNSW getClusterCentroidsHnsw() {
+        return clusterCentroidsHnswSupplier.get();
+    }
+
+    @Nonnull
+    private HNSW computeClusterCentroidsHnsw() {
+        final com.apple.foundationdb.async.hnsw.OnWriteListener onWriteListener =
+                new com.apple.foundationdb.async.hnsw.OnWriteListener() {
+                    @Override
+                    public void onKeyValueWritten(final int layer, @Nonnull final byte[] key, @Nonnull final byte[] value) {
+                        getOnWriteListener().onKeyValueWritten(layer, key, value);
+                    }
+
+                    @Override
+                    public void onKeyDeleted(final int layer, @Nonnull final byte[] key) {
+                        getOnWriteListener().onKeyDeleted(layer, key);
+                    }
+
+                    @Override
+                    public void onRangeDeleted(final int layer, @Nonnull final Range range) {
+                        getOnWriteListener().onRangeDeleted(layer, range);
+                    }
+                };
+
+        final com.apple.foundationdb.async.hnsw.OnReadListener onReadListener =
+                new com.apple.foundationdb.async.hnsw.OnReadListener() {
+                    @Override
+                    public void onKeyValueRead(final int layer, @Nonnull final byte[] key, @Nullable final byte[] value) {
+                        getOnReadListener().onKeyValueRead(layer, key, value);
+                    }
+                };
+
+        return new HNSW(getClusterCentroidsSubspace(), getExecutor(),
+                getStorageAdapter().getClusterCentroidsHnswConfig(), onWriteListener, onReadListener);
     }
 
     boolean isMetricNeedsNormalizedVectors() {
@@ -199,7 +251,7 @@ public class Primitives {
                 .thenApply(valueBytes -> {
                     getOnReadListener().onKeyValueRead(-1, key, valueBytes);
                     if (valueBytes == null) {
-                        return null; // not a single node in the index
+                        return null; // not a single vector in the index
                     }
                     return StorageAdapter.accessInfoFromTuple(getConfig(), Tuple.fromBytes(valueBytes));
                 });
@@ -212,6 +264,35 @@ public class Primitives {
         final byte[] value = StorageAdapter.tupleFromAccessInfo(accessInfo).pack();
         transaction.set(key, value);
         getOnWriteListener().onKeyValueWritten(-1, key, value);
+    }
+
+    @Nonnull
+    CompletableFuture<Boolean> exists(@Nonnull final ReadTransaction readTransaction, final Tuple primaryKey) {
+        return fetchVectorId(readTransaction, primaryKey).thenApply(Objects::nonNull);
+    }
+
+    @Nonnull
+    CompletableFuture<VectorId> fetchVectorId(@Nonnull final ReadTransaction readTransaction, final Tuple primaryKey) {
+        final Subspace vectorStatesSubspace = getVectorStatesSubspace();
+        final byte[] key = vectorStatesSubspace.pack(primaryKey);
+
+        return readTransaction.get(key)
+                .thenApply(valueBytes -> {
+                    getOnReadListener().onKeyValueRead(-1, key, valueBytes);
+                    if (valueBytes == null) {
+                        return null; // unable to find vector
+                    }
+                    return StorageAdapter.vectorIdFromTuple(primaryKey, Tuple.fromBytes(valueBytes));
+                });
+    }
+
+    @Nonnull
+    AsyncIterator<ResultEntry> centroidsOrderedByDistance(@Nonnull final ReadTransaction readTransaction,
+                                                          @Nonnull final RealVector centerVector) {
+        final HNSW centroidsHnsw = getClusterCentroidsHnsw();
+
+        return centroidsHnsw.orderByDistance(readTransaction, 100, 400, true,
+                centerVector, 0.0d, null, true);
     }
 
     @Nonnull
