@@ -23,7 +23,9 @@ package com.apple.foundationdb.async.guardiann;
 import com.apple.foundationdb.async.common.StorageHelpers;
 import com.apple.foundationdb.async.common.StorageTransform;
 import com.apple.foundationdb.async.hnsw.HNSW;
+import com.apple.foundationdb.linear.Quantizer;
 import com.apple.foundationdb.linear.RealVector;
+import com.apple.foundationdb.linear.Transformed;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import com.google.common.base.Suppliers;
@@ -53,7 +55,7 @@ class StorageAdapter {
     /**
      * Subspace for the cluster data, that is the centroids currently in use.
      */
-    private static final long SUBSPACE_PREFIX_CLUSTER_STATES = 0x02;
+    private static final long SUBSPACE_PREFIX_CLUSTER_INFOS = 0x02;
 
     /**
      * Subspace for the vector entries.
@@ -63,7 +65,7 @@ class StorageAdapter {
     /**
      * Subspace for the vector entries.
      */
-    private static final long SUBSPACE_PREFIX_VECTOR_STATES = 0x04;
+    private static final long SUBSPACE_PREFIX_VECTOR_IDS = 0x04;
 
     /**
      * Subspace for (mostly) statistical analysis (like finding a centroid, etc.). Contains samples of vectors.
@@ -89,11 +91,11 @@ class StorageAdapter {
     @Nonnull
     private final Supplier<Subspace> clusterCentroidsSubspaceSupplier;
     @Nonnull
-    private final Supplier<Subspace> clusterStatesSubspaceSupplier;
+    private final Supplier<Subspace> clusterInfosSubspaceSupplier;
     @Nonnull
     private final Supplier<Subspace> vectorReferencesSubspaceSupplier;
     @Nonnull
-    private final Supplier<Subspace> vectorStatesSubspaceSupplier;
+    private final Supplier<Subspace> vectorIdsSubspaceSupplier;
     @Nonnull
     private final Supplier<Subspace> samplesSubspaceSupplier;
     @Nonnull
@@ -126,12 +128,12 @@ class StorageAdapter {
                 Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_ACCESS_INFO)));
         this.clusterCentroidsSubspaceSupplier =
                 Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_CLUSTER_CENTROIDS)));
-        this.clusterStatesSubspaceSupplier =
-                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_CLUSTER_STATES)));
+        this.clusterInfosSubspaceSupplier =
+                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_CLUSTER_INFOS)));
         this.vectorReferencesSubspaceSupplier =
                 Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_VECTOR_REFERENCES)));
-        this.vectorStatesSubspaceSupplier =
-                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_VECTOR_STATES)));
+        this.vectorIdsSubspaceSupplier =
+                Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_VECTOR_IDS)));
         this.samplesSubspaceSupplier =
                 Suppliers.memoize(() -> subspace.subspace(Tuple.from(SUBSPACE_PREFIX_SAMPLES)));
         this.tasksSubspaceSupplier =
@@ -161,8 +163,8 @@ class StorageAdapter {
     }
 
     @Nonnull
-    public Subspace getClusterStatesSubspace() {
-        return clusterStatesSubspaceSupplier.get();
+    public Subspace getClusterInfosSubspace() {
+        return clusterInfosSubspaceSupplier.get();
     }
 
     @Nonnull
@@ -171,8 +173,8 @@ class StorageAdapter {
     }
 
     @Nonnull
-    public Subspace getVectorStatesSubspace() {
-        return vectorStatesSubspaceSupplier.get();
+    public Subspace getVectorIdsSubspace() {
+        return vectorIdsSubspaceSupplier.get();
     }
 
     @Nonnull
@@ -237,8 +239,19 @@ class StorageAdapter {
     }
 
     @Nonnull
-    static ClusterState clusterStateFromTuple(@Nonnull final Tuple valueTuple) {
-        return new ClusterState(valueTuple.getUUID(0), valueTuple.getBoolean(1));
+    static Tuple valueTupleFromVectorId(@Nonnull final VectorId vectorId) {
+        return Tuple.from(vectorId.getUuid());
+    }
+
+    @Nonnull
+    static ClusterInfo clusterInfoFromTuple(@Nonnull final Tuple valueTuple) {
+        return new ClusterInfo(valueTuple.getUUID(0), Math.toIntExact(valueTuple.getLong(1)),
+                Math.toIntExact(valueTuple.getLong(2)));
+    }
+
+    @Nonnull
+    static Tuple valueTupleFromClusterInfo(@Nonnull final ClusterInfo clusterInfo) {
+        return Tuple.from(clusterInfo.getUuid(), clusterInfo.getNumVectors(), clusterInfo.getState().getCode());
     }
 
     @Nonnull
@@ -249,5 +262,13 @@ class StorageAdapter {
         final VectorId vectorId = new VectorId(primaryKey, valueTuple.getUUID(0));
         return new VectorReference(vectorId,
                 storageTransform.transform(StorageHelpers.vectorFromBytes(config, valueTuple.getBytes(1))));
+    }
+
+    @Nonnull
+    static Tuple valueTupleFromVectorReference(@Nonnull final Quantizer quantizer,
+                                               @Nonnull final VectorReference vectorReference) {
+        final VectorId vectorId = vectorReference.getId();
+        final Transformed<RealVector> encodedVector = quantizer.encode(vectorReference.getVector());
+        return Tuple.from(vectorId.getUuid(), encodedVector.getUnderlyingVector().getRawData());
     }
 }

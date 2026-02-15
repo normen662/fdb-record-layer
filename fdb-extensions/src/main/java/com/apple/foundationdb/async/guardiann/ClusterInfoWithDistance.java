@@ -1,5 +1,5 @@
 /*
- * Cluster.java
+ * ClusterInfoWithDistance.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -24,22 +24,22 @@ import com.apple.foundationdb.linear.RealVector;
 import com.apple.foundationdb.linear.Transformed;
 
 import javax.annotation.Nonnull;
-import java.util.List;
 import java.util.Objects;
 
-class Cluster {
+class ClusterInfoWithDistance {
     @Nonnull
     private final ClusterInfo clusterInfo;
+
     @Nonnull
     private final Transformed<RealVector> centroid;
-    @Nonnull
-    private final List<VectorReference> vectorEntries;
+    private final double distance;
 
-    public Cluster(@Nonnull final ClusterInfo clusterInfo, @Nonnull final Transformed<RealVector> centroid,
-                   @Nonnull final List<VectorReference> vectorEntries) {
-        this.clusterInfo = clusterInfo;
+    public ClusterInfoWithDistance(@Nonnull final ClusterInfo clusterInfo,
+                                   @Nonnull final Transformed<RealVector> centroid,
+                                   final double distance) {
         this.centroid = centroid;
-        this.vectorEntries = vectorEntries;
+        this.distance = distance;
+        this.clusterInfo = clusterInfo;
     }
 
     @Nonnull
@@ -52,9 +52,8 @@ class Cluster {
         return centroid;
     }
 
-    @Nonnull
-    public List<VectorReference> getVectorEntries() {
-        return vectorEntries;
+    public double getDistance() {
+        return distance;
     }
 
     @Override
@@ -62,14 +61,13 @@ class Cluster {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        final Cluster cluster = (Cluster)o;
-        return Objects.equals(getClusterInfo(), cluster.getClusterInfo()) &&
-                Objects.equals(getCentroid(), cluster.getCentroid()) &&
-                Objects.equals(getVectorEntries(), cluster.getVectorEntries());
+        final ClusterInfoWithDistance that = (ClusterInfoWithDistance)o;
+        return  Objects.equals(getClusterInfo(), that.getClusterInfo()) &&
+                Objects.equals(getCentroid(), that.getCentroid());
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(getClusterInfo(), getCentroid(), getVectorEntries());
+        return Objects.hash(getCentroid(), getClusterInfo());
     }
 }

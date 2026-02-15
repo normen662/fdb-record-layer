@@ -148,8 +148,8 @@ public class Primitives {
     }
 
     @Nonnull
-    Subspace getClusterStatesSubspace() {
-        return getStorageAdapter().getClusterStatesSubspace();
+    Subspace getClusterInfosSubspace() {
+        return getStorageAdapter().getClusterInfosSubspace();
     }
 
     @Nonnull
@@ -158,8 +158,8 @@ public class Primitives {
     }
 
     @Nonnull
-    Subspace getVectorStatesSubspace() {
-        return getStorageAdapter().getVectorStatesSubspace();
+    Subspace getVectorIdsSubspace() {
+        return getStorageAdapter().getVectorIdsSubspace();
     }
 
     @Nonnull
@@ -272,8 +272,9 @@ public class Primitives {
     }
 
     @Nonnull
-    CompletableFuture<VectorId> fetchVectorId(@Nonnull final ReadTransaction readTransaction, final Tuple primaryKey) {
-        final Subspace vectorStatesSubspace = getVectorStatesSubspace();
+    CompletableFuture<VectorId> fetchVectorId(@Nonnull final ReadTransaction readTransaction,
+                                              @Nonnull final Tuple primaryKey) {
+        final Subspace vectorStatesSubspace = getVectorIdsSubspace();
         final byte[] key = vectorStatesSubspace.pack(primaryKey);
 
         return readTransaction.get(key)
@@ -286,6 +287,16 @@ public class Primitives {
                 });
     }
 
+    void writeVectorId(@Nonnull final Transaction transaction,
+                       @Nonnull final VectorId vectorId) {
+        final Subspace vectorIdsSubspace = getVectorIdsSubspace();
+        final byte[] key = vectorIdsSubspace.pack(vectorId.getPrimaryKey());
+        final byte[] value = StorageAdapter.valueTupleFromVectorId(vectorId).pack();
+
+        getOnWriteListener().onKeyValueWritten(-1, key, value);
+        transaction.set(key, value);
+    }
+
     @Nonnull
     AsyncIterator<ResultEntry> centroidsOrderedByDistance(@Nonnull final ReadTransaction readTransaction,
                                                           @Nonnull final RealVector centerVector) {
@@ -293,6 +304,15 @@ public class Primitives {
 
         return centroidsHnsw.orderByDistance(readTransaction, 100, 400, true,
                 centerVector, 0.0d, null, true);
+    }
+
+    @Nonnull
+    CompletableFuture<ClusterInfoWithDistance> fetchClusterInfoWithDistance(@Nonnull final ReadTransaction readTransaction,
+                                                                            @Nonnull final UUID clusterUuid,
+                                                                            @Nonnull final Transformed<RealVector> centroid,
+                                                                            final double distance) {
+        return fetchClusterInfo(readTransaction, clusterUuid)
+                .thenApply(clusterState -> new ClusterInfoWithDistance(clusterState, centroid, distance));
     }
 
     @Nonnull
@@ -309,24 +329,34 @@ public class Primitives {
                                             @Nonnull final StorageTransform storageTransform,
                                             @Nonnull final UUID clusterUuid,
                                             @Nonnull final Transformed<RealVector> centroid) {
-        return fetchClusterState(readTransaction, clusterUuid)
+        return fetchClusterInfo(readTransaction, clusterUuid)
                 .thenCombine(fetchVectorReferences(readTransaction, storageTransform, clusterUuid),
-                        (clusterState, vectorReferences) ->
-                                new Cluster(clusterUuid, centroid, clusterState.isDraining(), vectorReferences));
+                        (clusterInfo, vectorReferences) ->
+                                new Cluster(clusterInfo, centroid, vectorReferences));
     }
 
     @Nonnull
-    CompletableFuture<ClusterState> fetchClusterState(@Nonnull final ReadTransaction readTransaction,
-                                                      @Nonnull final UUID clusterUuid) {
-        final byte[] key = getClusterStatesSubspace().pack(Tuple.from(clusterUuid));
+    CompletableFuture<ClusterInfo> fetchClusterInfo(@Nonnull final ReadTransaction readTransaction,
+                                                    @Nonnull final UUID clusterUuid) {
+        final byte[] key = getClusterInfosSubspace().pack(Tuple.from(clusterUuid));
         return readTransaction.get(key)
                 .thenApply(valueBytes -> {
                     getOnReadListener().onKeyValueRead(-1, key, valueBytes);
                     if (valueBytes == null) {
                         return null;
                     }
-                    return StorageAdapter.clusterStateFromTuple(Tuple.fromBytes(valueBytes));
+                    return StorageAdapter.clusterInfoFromTuple(Tuple.fromBytes(valueBytes));
                 });
+    }
+
+    void writeClusterInfo(@Nonnull final Transaction transaction,
+                          @Nonnull final ClusterInfo clusterInfo) {
+        final Subspace clusterInfosSubspace = getClusterInfosSubspace();
+        final byte[] key = clusterInfosSubspace.pack(Tuple.from(clusterInfo.getUuid()));
+        final byte[] value = StorageAdapter.valueTupleFromClusterInfo(clusterInfo).pack();
+
+        getOnWriteListener().onKeyValueWritten(-1, key, value);
+        transaction.set(key, value);
     }
 
     @Nonnull
@@ -351,6 +381,18 @@ public class Primitives {
                     }
                     return vectorReferencesBuilder.build();
                 });
+    }
+
+    void writeVectorReference(@Nonnull final Transaction transaction,
+                              @Nonnull final Quantizer quantizer,
+                              @Nonnull final UUID clusterUuid,
+                              @Nonnull final VectorReference vectorReference) {
+        final Subspace vectorStatesSubspace = getVectorReferencesSubspace();
+        final byte[] key = vectorStatesSubspace.pack(Tuple.from(clusterUuid, vectorReference.getId().getPrimaryKey()));
+        final byte[] value = StorageAdapter.valueTupleFromVectorReference(quantizer, vectorReference).pack();
+
+        getOnWriteListener().onKeyValueWritten(-1, key, value);
+        transaction.set(key, value);
     }
 
     static class AccessInfoAndNodeExistence {

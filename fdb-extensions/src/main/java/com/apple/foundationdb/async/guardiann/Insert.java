@@ -22,8 +22,9 @@ package com.apple.foundationdb.async.guardiann;
 
 import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.annotation.API;
-import com.apple.foundationdb.async.AsyncIterator;
+import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncUtil;
+import com.apple.foundationdb.async.MoreAsyncUtil;
 import com.apple.foundationdb.async.common.AggregatedVector;
 import com.apple.foundationdb.async.common.StorageTransform;
 import com.apple.foundationdb.async.hnsw.ResultEntry;
@@ -36,17 +37,28 @@ import com.apple.foundationdb.linear.Transformed;
 import com.apple.foundationdb.rabitq.RaBitQuantizer;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
+import com.google.common.base.Verify;
+import com.google.common.util.concurrent.AtomicDouble;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import java.util.Objects;
 import java.util.SplittableRandom;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.ToDoubleFunction;
 
+import static com.apple.foundationdb.async.MoreAsyncUtil.filterIterable;
 import static com.apple.foundationdb.async.MoreAsyncUtil.forLoop;
+import static com.apple.foundationdb.async.MoreAsyncUtil.limitIterable;
+import static com.apple.foundationdb.async.MoreAsyncUtil.mapIterablePipelined;
+import static com.apple.foundationdb.async.MoreAsyncUtil.reduce;
+import static com.apple.foundationdb.async.MoreAsyncUtil.slurp;
+import static com.apple.foundationdb.async.MoreAsyncUtil.whileIterable;
 import static com.apple.foundationdb.async.common.StorageHelpers.aggregateVectors;
 import static com.apple.foundationdb.async.common.StorageHelpers.appendSampledVector;
 import static com.apple.foundationdb.async.common.StorageHelpers.consumeSampledVectors;
@@ -151,8 +163,8 @@ public class Insert {
     }
 
     @Nonnull
-    private Subspace getClusterStatesSubspace() {
-        return getStorageAdapter().getClusterStatesSubspace();
+    private Subspace getClusterInfosSubspace() {
+        return getStorageAdapter().getClusterInfosSubspace();
     }
 
     @Nonnull
@@ -189,6 +201,7 @@ public class Insert {
     public CompletableFuture<Void> insert(@Nonnull final Transaction transaction, @Nonnull final Tuple newPrimaryKey,
                                           @Nonnull final RealVector newVector,
                                           @Nullable final Tuple newAdditionalValues) {
+        final Config config = getConfig();
         final Primitives primitives = primitives();
 
         return primitives.fetchAccessInfo(transaction)
@@ -219,64 +232,85 @@ public class Insert {
                     final Estimator estimator = quantizer.estimator();
 
                     // accessInfo could be retrieved, we should have a cluster HNSW
-                    final AsyncIterator<ResultEntry> bestClusterCentroidsEntries =
-                            primitives.centroidsOrderedByDistance(transaction, newVector);
 
-                    //
-                    // First one we find (and the only one we insist must be found) is the primary cluster we insert
-                    // into. All the others may be clusters we want to duplicate into. We immediately stop as soon as
-                    // a cluster is outside the overlap range.
-                    //
+                    final AsyncIterable<ResultEntry> clusterCentroidsEntriesByDistanceIterable =
+                            MoreAsyncUtil.iterableOf(() ->
+                                    primitives.centroidsOrderedByDistance(transaction, newVector), getExecutor());
 
+                    final AsyncIterable<ClusterInfoWithDistance> clusterInfosByDistanceIterable =
+                            mapIterablePipelined(clusterCentroidsEntriesByDistanceIterable,
+                                    resultEntry -> {
+                                        final Transformed<RealVector> transformedCentroid =
+                                                storageTransform.transform(Objects.requireNonNull(resultEntry.getVector()));
+                                        return primitives.fetchClusterInfoWithDistance(transaction,
+                                                resultEntry.getPrimaryKey().getUUID(0), transformedCentroid,
+                                                resultEntry.getDistance());
+                                    },
+                                    10);
 
-                    final AccessInfo currentAccessInfo;
+                    final AsyncIterable<ClusterInfoWithDistance> filteredClusterInfosByDistanceIterable =
+                            filterIterable(getExecutor(), clusterInfosByDistanceIterable,
+                                    clusterInfoWithDistance ->
+                                            clusterInfoWithDistance.getClusterInfo().getState() != ClusterInfo.State.DRAINING);
 
-                    final EntryNodeReference entryNodeReference = accessInfo.getEntryNodeReference();
-                    final int lMax = entryNodeReference.getLayer();
-                    if (logger.isTraceEnabled()) {
-                        logger.trace("entry node read with key {} at layer {}", entryNodeReference.getPrimaryKey(), lMax);
-                    }
+                    final AtomicInteger indexAtomic = new AtomicInteger(0);
+                    final AtomicDouble primaryDistanceAtomic = new AtomicDouble(Double.NaN);
 
-                    if (insertionLayer > lMax) {
-                        primitives.writeLonelyNodes(quantizer, transaction, newPrimaryKey, transformedNewVector,
-                                newAdditionalValues, insertionLayer, lMax);
-                        currentAccessInfo = accessInfo.withNewEntryNodeReference(
-                                new EntryNodeReference(newPrimaryKey, transformedNewVector,
-                                        insertionLayer));
-                        com.apple.foundationdb.async.hnsw.StorageAdapter.writeAccessInfo(transaction, getSubspace(), currentAccessInfo,
-                                getOnWriteListener());
-                        if (logger.isTraceEnabled()) {
-                            logger.trace("written higher entry node reference with key={} on layer={}",
-                                    newPrimaryKey, insertionLayer);
-                        }
-                    } else {
-                        currentAccessInfo = accessInfo;
-                    }
+                    final AsyncIterable<ClusterInfoWithDistance> affectedNeighborhood =
+                            whileIterable(limitIterable(filteredClusterInfosByDistanceIterable, 3,
+                                            getExecutor()),
+                                    clusterInfoWithDistance -> {
+                                        final int index = indexAtomic.getAndIncrement();
+                                        final double distance = clusterInfoWithDistance.getDistance();
 
-                    final ToDoubleFunction<Transformed<RealVector>> objectiveFunction =
-                            Search.distanceToTargetVector(estimator, transformedNewVector);
-                    final NodeReferenceWithDistance initialNodeReference =
-                            new NodeReferenceWithDistance(entryNodeReference.getPrimaryKey(),
-                                    entryNodeReference.getVector(),
-                                    objectiveFunction.applyAsDouble(entryNodeReference.getVector()));
-                    final Search search = searcher();
+                                        if (index == 0) {
+                                            // first and nearest cluster -- always accept
+                                            primaryDistanceAtomic.set(distance);
+                                            return true;
+                                        }
 
-                    return forLoop(lMax, initialNodeReference,
-                            layer -> layer > insertionLayer,
-                            layer -> layer - 1,
-                            (layer, previousNodeReference) -> {
-                                final com.apple.foundationdb.async.hnsw.StorageAdapter<? extends NodeReference> storageAdapter =
-                                        primitives.storageAdapterForLayer(layer);
-                                return search.greedySearchLayer(storageAdapter, transaction, storageTransform,
-                                        previousNodeReference, layer, objectiveFunction);
-                            }, getExecutor())
-                            .thenCompose(nodeReference ->
-                                    insertIntoLayers(transaction, storageTransform, quantizer, newPrimaryKey,
-                                            transformedNewVector, newAdditionalValues, nodeReference, lMax,
-                                            insertionLayer))
-                            .thenCompose(ignored ->
-                                    addToStatsIfNecessary(random, transaction, currentAccessInfo, transformedNewVector));
-                }).thenCompose(ignored -> AsyncUtil.DONE);
+                                        final double distanceToPrimaryCentroid = primaryDistanceAtomic.get();
+                                        Verify.verify(Double.isFinite(distanceToPrimaryCentroid));
+
+                                        //
+                                        // Distance should be greater than the distance to the primary cluster's
+                                        // centroid. So the fraction on the left should always be greater or equal
+                                        // to 1.0d. The config provides some fuzziness to replicate the new vector
+                                        // into other clusters if it happens to be at the border between two (or more)
+                                        // clusters.
+                                        //
+                                        return distance / distanceToPrimaryCentroid <= 1.0d + config.getClusterOverlap();
+                                    }, getExecutor());
+
+                    final VectorId newVectorId = new VectorId(newPrimaryKey, UUID.randomUUID());
+                    primitives.writeVectorId(transaction, newVectorId);
+
+                    final var updatedNeighborhood = mapIterablePipelined(affectedNeighborhood,
+                            clusterInfoWithDistance -> {
+                                final ClusterInfo clusterInfo = clusterInfoWithDistance.getClusterInfo();
+                                final ClusterInfo newClusterInfo;
+                                if (clusterInfo.getState() == ClusterInfo.State.ACTIVE &&
+                                        clusterInfo.getNumVectors() >= config.getClusterMax()) {
+                                    // create a split task
+
+                                    newClusterInfo =
+                                            clusterInfo.withAdditionalVectors(ClusterInfo.State.REBALANCING,
+                                                    1);
+                                } else {
+                                    newClusterInfo =
+                                            clusterInfo.withAdditionalVectors(clusterInfo.getState(),
+                                                    1);
+                                }
+
+                                primitives.writeVectorReference(transaction, quantizer, clusterInfo.getUuid(),
+                                        new VectorReference(newVectorId, transformedNewVector));
+                                primitives.writeClusterInfo(transaction, newClusterInfo);
+                                return AsyncUtil.DONE;
+                            },
+                            10);
+
+                    return slurp(updatedNeighborhood, getExecutor());
+                });
     }
 
     private void firstInsert(@Nonnull final Transaction transaction,
