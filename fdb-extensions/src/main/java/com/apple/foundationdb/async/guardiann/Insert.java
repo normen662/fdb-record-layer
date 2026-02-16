@@ -26,15 +26,15 @@ import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncUtil;
 import com.apple.foundationdb.async.MoreAsyncUtil;
 import com.apple.foundationdb.async.common.AggregatedVector;
+import com.apple.foundationdb.async.common.RandomHelpers;
 import com.apple.foundationdb.async.common.StorageTransform;
+import com.apple.foundationdb.async.guardiann.Primitives.AccessInfoAndNodeExistence;
 import com.apple.foundationdb.async.hnsw.ResultEntry;
 import com.apple.foundationdb.linear.DoubleRealVector;
-import com.apple.foundationdb.linear.Estimator;
 import com.apple.foundationdb.linear.FhtKacRotator;
 import com.apple.foundationdb.linear.Quantizer;
 import com.apple.foundationdb.linear.RealVector;
 import com.apple.foundationdb.linear.Transformed;
-import com.apple.foundationdb.rabitq.RaBitQuantizer;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import com.google.common.base.Verify;
@@ -50,14 +50,10 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.ToDoubleFunction;
 
 import static com.apple.foundationdb.async.MoreAsyncUtil.filterIterable;
-import static com.apple.foundationdb.async.MoreAsyncUtil.forLoop;
 import static com.apple.foundationdb.async.MoreAsyncUtil.limitIterable;
 import static com.apple.foundationdb.async.MoreAsyncUtil.mapIterablePipelined;
-import static com.apple.foundationdb.async.MoreAsyncUtil.reduce;
-import static com.apple.foundationdb.async.MoreAsyncUtil.slurp;
 import static com.apple.foundationdb.async.MoreAsyncUtil.whileIterable;
 import static com.apple.foundationdb.async.common.StorageHelpers.aggregateVectors;
 import static com.apple.foundationdb.async.common.StorageHelpers.appendSampledVector;
@@ -143,33 +139,8 @@ public class Insert {
     }
 
     @Nonnull
-    private Search searcher() {
-        return getLocator().search();
-    }
-
-    @Nonnull
     private StorageAdapter getStorageAdapter() {
         return getLocator().getStorageAdapter();
-    }
-
-    @Nonnull
-    private Subspace getAccessInfoSubspace() {
-        return getStorageAdapter().getAccessInfoSubspace();
-    }
-
-    @Nonnull
-    private Subspace getClusterCentroidsSubspace() {
-        return getStorageAdapter().getClusterCentroidsSubspace();
-    }
-
-    @Nonnull
-    private Subspace getClusterInfosSubspace() {
-        return getStorageAdapter().getClusterInfosSubspace();
-    }
-
-    @Nonnull
-    private Subspace getVectorReferencesSubspace() {
-        return getStorageAdapter().getVectorReferencesSubspace();
     }
 
     @Nonnull
@@ -202,6 +173,7 @@ public class Insert {
                                           @Nonnull final RealVector newVector,
                                           @Nullable final Tuple newAdditionalValues) {
         final Config config = getConfig();
+        final SplittableRandom random = RandomHelpers.random(newPrimaryKey);
         final Primitives primitives = primitives();
 
         return primitives.fetchAccessInfo(transaction)
@@ -212,26 +184,25 @@ public class Insert {
                                     logger.debug("new record already exists in with key={}", newPrimaryKey);
                                 }
                             }
-                            return new Primitives.AccessInfoAndNodeExistence(accessInfo, nodeAlreadyExists);
+                            return new AccessInfoAndNodeExistence(accessInfo, nodeAlreadyExists);
                         })
                 .thenCompose(accessInfoAndNodeExistence -> {
+                    final AccessInfo accessInfo = accessInfoAndNodeExistence.getAccessInfo();
+                    if (accessInfo == null) {
+                        return initialAccessInfoAndFirstCluster(transaction, newVector, random)
+                                .thenApply(initialAccessInfo ->
+                                        new AccessInfoAndNodeExistence(initialAccessInfo, false));
+                    }
+                    return CompletableFuture.completedFuture(accessInfoAndNodeExistence);
+                }).thenCompose(accessInfoAndNodeExistence -> {
                     if (accessInfoAndNodeExistence.isNodeExists()) {
                         return AsyncUtil.DONE;
                     }
 
-                    final AccessInfo accessInfo = accessInfoAndNodeExistence.getAccessInfo();
-                    if (accessInfo == null) {
-                        firstInsert(transaction, newPrimaryKey, newVector, newAdditionalValues, random, primitives,
-                                insertionLayer);
-                        return AsyncUtil.DONE;
-                    }
-
+                    final AccessInfo accessInfo = Objects.requireNonNull(accessInfoAndNodeExistence.getAccessInfo());
                     final StorageTransform storageTransform = primitives.storageTransform(accessInfo);
                     final Transformed<RealVector> transformedNewVector = storageTransform.transform(newVector);
                     final Quantizer quantizer = primitives.quantizer(accessInfo);
-                    final Estimator estimator = quantizer.estimator();
-
-                    // accessInfo could be retrieved, we should have a cluster HNSW
 
                     final AsyncIterable<ResultEntry> clusterCentroidsEntriesByDistanceIterable =
                             MoreAsyncUtil.iterableOf(() ->
@@ -282,10 +253,11 @@ public class Insert {
                                         return distance / distanceToPrimaryCentroid <= 1.0d + config.getClusterOverlap();
                                     }, getExecutor());
 
-                    final VectorId newVectorId = new VectorId(newPrimaryKey, UUID.randomUUID());
-                    primitives.writeVectorId(transaction, newVectorId);
+                    final VectorMetadata newVectorMetadata =
+                            new VectorMetadata(newPrimaryKey, UUID.randomUUID(), newAdditionalValues);
+                    primitives.writeVectorMetadata(transaction, newVectorMetadata);
 
-                    final var updatedNeighborhood = mapIterablePipelined(affectedNeighborhood,
+                    final AsyncIterable<Void> updatedNeighborhood = mapIterablePipelined(affectedNeighborhood,
                             clusterInfoWithDistance -> {
                                 final ClusterInfo clusterInfo = clusterInfoWithDistance.getClusterInfo();
                                 final ClusterInfo newClusterInfo;
@@ -303,28 +275,29 @@ public class Insert {
                                 }
 
                                 primitives.writeVectorReference(transaction, quantizer, clusterInfo.getUuid(),
-                                        new VectorReference(newVectorId, transformedNewVector));
+                                        new VectorReference(newVectorMetadata, transformedNewVector));
                                 primitives.writeClusterInfo(transaction, newClusterInfo);
                                 return AsyncUtil.DONE;
                             },
                             10);
 
-                    return slurp(updatedNeighborhood, getExecutor());
+                    return AsyncUtil.collect(updatedNeighborhood, getExecutor())
+                            .thenCompose(results -> {
+                                Verify.verify(!results.isEmpty());
+                                return addToStatsIfNecessary(random, transaction, accessInfo, transformedNewVector);
+                            });
                 });
     }
 
-    private void firstInsert(@Nonnull final Transaction transaction,
-                             @Nonnull final Tuple newPrimaryKey,
-                             @Nonnull final RealVector newVector,
-                             @Nullable final Tuple additionalValues,
-                             @Nonnull final SplittableRandom random,
-                             @Nonnull final Primitives primitives,
-                             final int insertionLayer) {
-        final com.apple.foundationdb.async.hnsw.Config config = getConfig();
+    @Nonnull
+    private CompletableFuture<AccessInfo> initialAccessInfoAndFirstCluster(@Nonnull final Transaction transaction,
+                                                                           @Nonnull final RealVector newVector,
+                                                                           @Nonnull final SplittableRandom random) {
+        final Config config = getConfig();
+        final Primitives primitives = primitives();
         final long rotatorSeed;
-        final StorageTransform storageTransform;
-        final Quantizer quantizer;
         final RealVector negatedCentroid;
+
         if (config.isUseRaBitQ() &&
                 !config.getMetric().satisfiesPreservedUnderTranslation()) {
             //
@@ -333,31 +306,21 @@ public class Insert {
             // Instead, we use RaBitQ immediately under an identity translation.
             //
             rotatorSeed = random.nextLong();
-            storageTransform = primitives.storageTransform(rotatorSeed, null,
-                    primitives.isMetricNeedsNormalizedVectors());
-            quantizer = new RaBitQuantizer(config.getMetric(), config.getRaBitQNumExBits());
             negatedCentroid = DoubleRealVector.zeroVector(config.getNumDimensions());
         } else {
             rotatorSeed = -1L;
-            storageTransform = StorageTransform.identity();
-            quantizer = Quantizer.noOpQuantizer(config.getMetric());
             negatedCentroid = null;
         }
 
-        final Transformed<RealVector> transformedNewVector = storageTransform.transform(newVector);
-
-        // this is the first node
-        primitives.writeLonelyNodes(quantizer, transaction, newPrimaryKey, transformedNewVector, additionalValues,
-                insertionLayer, -1);
-        final AccessInfo initialAccessInfo = new AccessInfo(
-                new EntryNodeReference(newPrimaryKey, transformedNewVector, insertionLayer),
-                rotatorSeed, negatedCentroid);
-        writeAccessInfo(transaction, getSubspace(), initialAccessInfo,
-                getOnWriteListener());
+        final AccessInfo initialAccessInfo = new AccessInfo(rotatorSeed, negatedCentroid);
+        primitives.writeAccessInfo(transaction, initialAccessInfo);
         if (logger.isTraceEnabled()) {
-            logger.trace("written initial entry node reference with key={} on layer={}",
-                    newPrimaryKey, insertionLayer);
+            logger.trace("written initial access info");
         }
+
+        return primitives.getClusterCentroidsHnsw()
+                .insert(transaction, Tuple.from(UUID.randomUUID()), newVector, null)
+                .thenApply(ignored -> initialAccessInfo);
     }
 
     /**
@@ -416,9 +379,6 @@ public class Insert {
                                             partialVector.multiply(-1.0d / partialCount);
                                     final RealVector rotatedCentroid =
                                             rotator.apply(centroid.getUnderlyingVector());
-                                    final StorageTransform storageTransform =
-                                            new StorageTransform(rotator, rotatedCentroid,
-                                                    primitives().isMetricNeedsNormalizedVectors());
 
                                     final AccessInfo newAccessInfo =
                                             new AccessInfo(rotatorSeed, rotatedCentroid);

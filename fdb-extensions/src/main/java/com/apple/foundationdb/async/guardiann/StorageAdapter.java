@@ -234,13 +234,13 @@ class StorageAdapter {
     }
 
     @Nonnull
-    static VectorId vectorIdFromTuple(@Nonnull final Tuple primaryKey, @Nonnull final Tuple valueTuple) {
-        return new VectorId(primaryKey, valueTuple.getUUID(0));
+    static VectorMetadata vectorMetadataFromTuple(@Nonnull final Tuple primaryKey, @Nonnull final Tuple valueTuple) {
+        return new VectorMetadata(primaryKey, valueTuple.getUUID(0), valueTuple.getNestedTuple(1));
     }
 
     @Nonnull
-    static Tuple valueTupleFromVectorId(@Nonnull final VectorId vectorId) {
-        return Tuple.from(vectorId.getUuid());
+    static Tuple valueTupleFromVectorMetadata(@Nonnull final VectorMetadata vectorMetadata) {
+        return Tuple.from(vectorMetadata.getUuid(), vectorMetadata.getAdditionalValues());
     }
 
     @Nonnull
@@ -261,7 +261,7 @@ class StorageAdapter {
                                                      @Nonnull final Tuple valueTuple) {
         final VectorId vectorId = new VectorId(primaryKey, valueTuple.getUUID(0));
         return new VectorReference(vectorId,
-                storageTransform.transform(StorageHelpers.vectorFromBytes(config, valueTuple.getBytes(1))));
+                storageTransform.transform(StorageHelpers.vectorFromBytes(config, valueTuple.getBytes(2))));
     }
 
     @Nonnull

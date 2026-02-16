@@ -25,6 +25,7 @@ import com.apple.foundationdb.annotation.API;
 import com.apple.foundationdb.async.AsyncUtil;
 import com.apple.foundationdb.async.MoreAsyncUtil;
 import com.apple.foundationdb.async.common.AggregatedVector;
+import com.apple.foundationdb.async.common.RandomHelpers;
 import com.apple.foundationdb.async.common.StorageTransform;
 import com.apple.foundationdb.linear.DoubleRealVector;
 import com.apple.foundationdb.linear.Estimator;
@@ -173,7 +174,7 @@ public class Insert {
                                           @Nonnull final RealVector newVector,
                                           @Nullable final Tuple newAdditionalValues) {
         final Primitives primitives = primitives();
-        final SplittableRandom random = Primitives.random(newPrimaryKey);
+        final SplittableRandom random = RandomHelpers.random(newPrimaryKey);
         final int insertionLayer = primitives.topLayer(newPrimaryKey);
         if (logger.isTraceEnabled()) {
             logger.trace("new node with key={} selected to be inserted into layer={}", newPrimaryKey, insertionLayer);

@@ -23,6 +23,7 @@ package com.apple.foundationdb.async.hnsw;
 import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.annotation.API;
 import com.apple.foundationdb.async.AsyncUtil;
+import com.apple.foundationdb.async.common.RandomHelpers;
 import com.apple.foundationdb.async.common.StorageTransform;
 import com.apple.foundationdb.linear.Estimator;
 import com.apple.foundationdb.linear.Quantizer;
@@ -183,7 +184,7 @@ class Delete {
     @Nonnull
     public CompletableFuture<Void> delete(@Nonnull final Transaction transaction, @Nonnull final Tuple primaryKey) {
         final Primitives primitives = primitives();
-        final SplittableRandom random = Primitives.random(primaryKey);
+        final SplittableRandom random = RandomHelpers.random(primaryKey);
         final int topLayer = primitives.topLayer(primaryKey);
         if (logger.isTraceEnabled()) {
             logger.trace("node with key={} to be deleted form layer={}", primaryKey, topLayer);

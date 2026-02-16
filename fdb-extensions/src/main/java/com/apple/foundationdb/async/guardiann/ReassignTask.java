@@ -1,5 +1,5 @@
 /*
- * VectorId.java
+ * SplitMergeTask.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -20,45 +20,38 @@
 
 package com.apple.foundationdb.async.guardiann;
 
+import com.apple.foundationdb.async.AsyncUtil;
 import com.apple.foundationdb.tuple.Tuple;
+import com.google.common.base.Verify;
 
 import javax.annotation.Nonnull;
-import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
-class VectorId {
-    @Nonnull
-    private final Tuple primaryKey;
-    @Nonnull
-    private final UUID uuid;
-
-    VectorId(@Nonnull final Tuple primaryKey, @Nonnull final UUID uuid) {
-        this.primaryKey = primaryKey;
-        this.uuid = uuid;
+public class ReassignTask extends AbstractDeferredTask {
+    private ReassignTask(@Nonnull final UUID taskId) {
+        super(taskId);
     }
 
     @Nonnull
-    public Tuple getPrimaryKey() {
-        return primaryKey;
-    }
-
-    @Nonnull
-    public UUID getUuid() {
-        return uuid;
-    }
-
     @Override
-    public boolean equals(final Object o) {
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
-        final VectorId vectorId = (VectorId)o;
-        return Objects.equals(getPrimaryKey(), vectorId.getPrimaryKey()) &&
-                Objects.equals(getUuid(), vectorId.getUuid());
+    public Tuple valueTuple() {
+        return Tuple.from(getKind().getCode());
     }
 
-    @Override
-    public int hashCode() {
-        return Objects.hash(getPrimaryKey(), getUuid());
+    @Nonnull
+    public CompletableFuture<Void> runTask() {
+        return AsyncUtil.DONE;
+    }
+
+    @Nonnull
+    public Kind getKind() {
+        return Kind.REASSIGN;
+    }
+
+    @Nonnull
+    public static ReassignTask fromTuples(@Nonnull final Tuple keyTuple, @Nonnull final Tuple valueTuple) {
+        Verify.verify(Kind.fromValueTuple(valueTuple) == Kind.SPLIT_MERGE);
+        return new ReassignTask(keyTuple.getUUID(0));
     }
 }

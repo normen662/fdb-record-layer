@@ -24,6 +24,7 @@ import com.apple.foundationdb.Database;
 import com.apple.foundationdb.ReadTransaction;
 import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.annotation.API;
+import com.apple.foundationdb.async.common.RandomHelpers;
 import com.apple.foundationdb.async.common.StorageTransform;
 import com.apple.foundationdb.linear.Estimator;
 import com.apple.foundationdb.linear.FhtKacRotator;
@@ -1064,11 +1065,6 @@ public class Primitives {
         return storageAdapterForLayer(getConfig(), getSubspace(), getOnWriteListener(), getOnReadListener(), layer);
     }
 
-    @Nonnull
-    static SplittableRandom random(@Nonnull final Tuple primaryKey) {
-        return new SplittableRandom(splitMixLong(primaryKey.hashCode()));
-    }
-
     /**
      * Calculates a layer for a new element to be inserted or for an element to be deleted from.
      * <p>
@@ -1081,7 +1077,7 @@ public class Primitives {
      */
     int topLayer(@Nonnull final Tuple primaryKey) {
         double lambda = 1.0 / Math.log(getConfig().getM());
-        double u = 1.0 - splitMixDouble(primaryKey.hashCode());  // Avoid log(0)
+        double u = 1.0 - RandomHelpers.splitMixDouble(primaryKey.hashCode());  // Avoid log(0)
         return (int) Math.floor(-Math.log(u) * lambda);
     }
 
@@ -1148,34 +1144,6 @@ public class Primitives {
         return config.isUseInlining() && layer > 0
                ? new InliningStorageAdapter(config, InliningNode.factory(), subspace, onWriteListener, onReadListener)
                : new CompactStorageAdapter(config, CompactNode.factory(), subspace, onWriteListener, onReadListener);
-    }
-
-    /**
-     * Returns a good double hash code for the argument of type {@code long}. It uses {@link #splitMixLong(long)}
-     * internally and then maps the {@code long} result to a {@code double} between {@code 0} and {@code 1}.
-     * This method is directly used in {@link #topLayer(Tuple)} to determine the top layer of a record given its
-     * primary key.
-     * @param x a {@code long}
-     * @return a high quality hash code of {@code x} as a {@code double} in the range {@code [0.0d, 1.0d)}.
-     */
-    static double splitMixDouble(final long x) {
-        return (splitMixLong(x) >>> 11) * 0x1.0p-53;
-    }
-
-    /**
-     * Returns a good long hash code for the argument of type {@code long}. It is an implementation of the
-     * output mixing function {@code SplitMix64} as employed by many PRNG such as {@link SplittableRandom}.
-     * See <a href="https://en.wikipedia.org/wiki/Linear_congruential_generator">Linear congruential generator</a> for
-     * more information.
-     * @param x a {@code long}
-     * @return a high quality hash code of {@code x}
-     */
-    static long splitMixLong(long x) {
-        x += 0x9e3779b97f4a7c15L;
-        x = (x ^ (x >>> 30)) * 0xbf58476d1ce4e5b9L;
-        x = (x ^ (x >>> 27)) * 0x94d049bb133111ebL;
-        x = x ^ (x >>> 31);
-        return x;
     }
 
     @Nonnull

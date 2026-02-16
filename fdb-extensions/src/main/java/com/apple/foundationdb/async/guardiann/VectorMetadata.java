@@ -23,28 +23,22 @@ package com.apple.foundationdb.async.guardiann;
 import com.apple.foundationdb.tuple.Tuple;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.util.Objects;
 import java.util.UUID;
 
-class VectorId {
-    @Nonnull
-    private final Tuple primaryKey;
-    @Nonnull
-    private final UUID uuid;
+class VectorMetadata extends VectorId {
+    @Nullable
+    private final Tuple additionalValues;
 
-    VectorId(@Nonnull final Tuple primaryKey, @Nonnull final UUID uuid) {
-        this.primaryKey = primaryKey;
-        this.uuid = uuid;
+    VectorMetadata(@Nonnull final Tuple primaryKey, @Nonnull final UUID uuid, @Nullable final Tuple additionalValues) {
+        super(primaryKey, uuid);
+        this.additionalValues = additionalValues;
     }
 
-    @Nonnull
-    public Tuple getPrimaryKey() {
-        return primaryKey;
-    }
-
-    @Nonnull
-    public UUID getUuid() {
-        return uuid;
+    @Nullable
+    public Tuple getAdditionalValues() {
+        return additionalValues;
     }
 
     @Override
@@ -52,13 +46,15 @@ class VectorId {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        final VectorId vectorId = (VectorId)o;
-        return Objects.equals(getPrimaryKey(), vectorId.getPrimaryKey()) &&
-                Objects.equals(getUuid(), vectorId.getUuid());
+        if (!super.equals(o)) {
+            return false;
+        }
+        final VectorMetadata that = (VectorMetadata)o;
+        return Objects.equals(getAdditionalValues(), that.getAdditionalValues());
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(getPrimaryKey(), getUuid());
+        return Objects.hash(super.hashCode(), getAdditionalValues());
     }
 }

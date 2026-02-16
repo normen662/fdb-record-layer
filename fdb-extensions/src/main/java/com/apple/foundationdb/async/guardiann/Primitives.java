@@ -42,6 +42,7 @@ import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -168,7 +169,12 @@ public class Primitives {
     }
 
     @Nonnull
-    private HNSW getClusterCentroidsHnsw() {
+    Subspace getTasksSubspace() {
+        return getStorageAdapter().getTasksSubspace();
+    }
+
+    @Nonnull
+    HNSW getClusterCentroidsHnsw() {
         return clusterCentroidsHnswSupplier.get();
     }
 
@@ -268,12 +274,12 @@ public class Primitives {
 
     @Nonnull
     CompletableFuture<Boolean> exists(@Nonnull final ReadTransaction readTransaction, final Tuple primaryKey) {
-        return fetchVectorId(readTransaction, primaryKey).thenApply(Objects::nonNull);
+        return fetchVectorMetadata(readTransaction, primaryKey).thenApply(Objects::nonNull);
     }
 
     @Nonnull
-    CompletableFuture<VectorId> fetchVectorId(@Nonnull final ReadTransaction readTransaction,
-                                              @Nonnull final Tuple primaryKey) {
+    CompletableFuture<VectorMetadata> fetchVectorMetadata(@Nonnull final ReadTransaction readTransaction,
+                                                          @Nonnull final Tuple primaryKey) {
         final Subspace vectorStatesSubspace = getVectorIdsSubspace();
         final byte[] key = vectorStatesSubspace.pack(primaryKey);
 
@@ -283,15 +289,15 @@ public class Primitives {
                     if (valueBytes == null) {
                         return null; // unable to find vector
                     }
-                    return StorageAdapter.vectorIdFromTuple(primaryKey, Tuple.fromBytes(valueBytes));
+                    return StorageAdapter.vectorMetadataFromTuple(primaryKey, Tuple.fromBytes(valueBytes));
                 });
     }
 
-    void writeVectorId(@Nonnull final Transaction transaction,
-                       @Nonnull final VectorId vectorId) {
+    void writeVectorMetadata(@Nonnull final Transaction transaction,
+                             @Nonnull final VectorMetadata vectorMetadata) {
         final Subspace vectorIdsSubspace = getVectorIdsSubspace();
-        final byte[] key = vectorIdsSubspace.pack(vectorId.getPrimaryKey());
-        final byte[] value = StorageAdapter.valueTupleFromVectorId(vectorId).pack();
+        final byte[] key = vectorIdsSubspace.pack(vectorMetadata.getPrimaryKey());
+        final byte[] value = StorageAdapter.valueTupleFromVectorMetadata(vectorMetadata).pack();
 
         getOnWriteListener().onKeyValueWritten(-1, key, value);
         transaction.set(key, value);
@@ -390,6 +396,43 @@ public class Primitives {
         final Subspace vectorStatesSubspace = getVectorReferencesSubspace();
         final byte[] key = vectorStatesSubspace.pack(Tuple.from(clusterUuid, vectorReference.getId().getPrimaryKey()));
         final byte[] value = StorageAdapter.valueTupleFromVectorReference(quantizer, vectorReference).pack();
+
+        getOnWriteListener().onKeyValueWritten(-1, key, value);
+        transaction.set(key, value);
+    }
+
+    @Nonnull
+    CompletableFuture<AbstractDeferredTask> fetchAnyDeferredTask(@Nonnull final ReadTransaction readTransaction) {
+        return fetchSomeDeferredTasks(readTransaction, 1).thenApply(Iterables::getOnlyElement);
+    }
+
+    @Nonnull
+    CompletableFuture<List<AbstractDeferredTask>> fetchSomeDeferredTasks(@Nonnull final ReadTransaction readTransaction,
+                                                                         final int numTasks) {
+        final Subspace tasksSubspace = getTasksSubspace();
+        final byte[] rangeKey = tasksSubspace.pack();
+
+        return AsyncUtil.collect(readTransaction.getRange(Range.startsWith(rangeKey), numTasks, false,
+                        StreamingMode.WANT_ALL), readTransaction.getExecutor())
+                .thenApply(keyValues -> {
+                    final ImmutableList.Builder<AbstractDeferredTask> deferredTasksBuilder = ImmutableList.builder();
+                    for (final KeyValue keyValue : keyValues) {
+                        final byte[] keyBytes = keyValue.getKey();
+                        final byte[] valueBytes = keyValue.getValue();
+                        final Tuple keyTuple = tasksSubspace.unpack(keyValue.getKey());
+                        final Tuple valueTuple = Tuple.fromBytes(valueBytes);
+                        deferredTasksBuilder.add(AbstractDeferredTask.newFromTuples(keyTuple, valueTuple));
+                        getOnReadListener().onKeyValueRead(-1, keyBytes, valueBytes);
+                    }
+                    return deferredTasksBuilder.build();
+                });
+    }
+
+    void writeDeferredTask(@Nonnull final Transaction transaction,
+                           @Nonnull final AbstractDeferredTask deferredTask) {
+        final Subspace tasksSubspace = getTasksSubspace();
+        final byte[] key = tasksSubspace.pack(Tuple.from(deferredTask.getTaskId()));
+        final byte[] value = deferredTask.valueTuple().pack();
 
         getOnWriteListener().onKeyValueWritten(-1, key, value);
         transaction.set(key, value);
