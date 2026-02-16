@@ -181,7 +181,7 @@ public class Insert {
                         (accessInfo, nodeAlreadyExists) -> {
                             if (nodeAlreadyExists) {
                                 if (logger.isDebugEnabled()) {
-                                    logger.debug("new record already exists in with key={}", newPrimaryKey);
+                                    logger.debug("new record already exists with key={}", newPrimaryKey);
                                 }
                             }
                             return new AccessInfoAndNodeExistence(accessInfo, nodeAlreadyExists);
@@ -193,7 +193,10 @@ public class Insert {
                                 .thenApply(initialAccessInfo ->
                                         new AccessInfoAndNodeExistence(initialAccessInfo, false));
                     }
-                    return CompletableFuture.completedFuture(accessInfoAndNodeExistence);
+
+                    // do some deferred tasks
+                    return primitives.doSomeDeferredTasks(transaction)
+                            .thenApply(ignored -> accessInfoAndNodeExistence);
                 }).thenCompose(accessInfoAndNodeExistence -> {
                     if (accessInfoAndNodeExistence.isNodeExists()) {
                         return AsyncUtil.DONE;
@@ -264,6 +267,7 @@ public class Insert {
                                 if (clusterInfo.getState() == ClusterInfo.State.ACTIVE &&
                                         clusterInfo.getNumVectors() >= config.getClusterMax()) {
                                     // create a split task
+                                    primitives.writeDeferredTask(transaction, SplitMergeTask.of(clusterInfo.getUuid()));
 
                                     newClusterInfo =
                                             clusterInfo.withAdditionalVectors(ClusterInfo.State.REBALANCING,

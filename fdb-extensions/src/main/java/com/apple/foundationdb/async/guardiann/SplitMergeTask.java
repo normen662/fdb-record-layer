@@ -54,4 +54,9 @@ public class SplitMergeTask extends AbstractDeferredTask {
         Verify.verify(Kind.fromValueTuple(valueTuple) == Kind.SPLIT_MERGE);
         return new SplitMergeTask(keyTuple.getUUID(0));
     }
+
+    @Nonnull
+    public static SplitMergeTask of(@Nonnull UUID taskId) {
+        return new SplitMergeTask(taskId);
+    }
 }

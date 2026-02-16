@@ -55,6 +55,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.function.Supplier;
 
+import static com.apple.foundationdb.async.MoreAsyncUtil.forLoop;
+
 /**
  * An implementation of primitives for the Hierarchical Navigable Small World (HNSW) algorithm for
  * efficient approximate nearest neighbor (ANN) search.
@@ -402,6 +404,19 @@ public class Primitives {
     }
 
     @Nonnull
+    CompletableFuture<Void> doSomeDeferredTasks(@Nonnull final Transaction readTransaction) {
+        return fetchSomeDeferredTasks(readTransaction, 2)
+                .thenCompose(deferredTasks ->
+                        forLoop(0, null,
+                                i -> i < deferredTasks.size(), i -> i + 1,
+                                (i, ignored) -> {
+                                    final AbstractDeferredTask deferredTask = deferredTasks.get(i);
+                                    deleteDeferredTask(readTransaction, deferredTask);
+                                    return deferredTask.runTask();
+                                }, getExecutor()));
+    }
+
+    @Nonnull
     CompletableFuture<AbstractDeferredTask> fetchAnyDeferredTask(@Nonnull final ReadTransaction readTransaction) {
         return fetchSomeDeferredTasks(readTransaction, 1).thenApply(Iterables::getOnlyElement);
     }
@@ -436,6 +451,14 @@ public class Primitives {
 
         getOnWriteListener().onKeyValueWritten(-1, key, value);
         transaction.set(key, value);
+    }
+
+    void deleteDeferredTask(@Nonnull final Transaction transaction,
+                            @Nonnull final AbstractDeferredTask deferredTask) {
+        final Subspace tasksSubspace = getTasksSubspace();
+        final byte[] key = tasksSubspace.pack(Tuple.from(deferredTask.getTaskId()));
+
+        transaction.clear(key);
     }
 
     static class AccessInfoAndNodeExistence {
