@@ -839,7 +839,27 @@ public class MoreAsyncUtil {
     public static <T1, T2> AsyncIterable<T2> mapIterablePipelined(@Nonnull AsyncIterable<T1> iterable,
                                                                   @Nonnull final Function<T1, CompletableFuture<T2>> func,
                                                                   int pipelineSize) {
-        return mapConcatIterable(iterable,
+        return mapIterablePipelined(ForkJoinPool.commonPool(), iterable, func, pipelineSize);
+    }
+
+    /**
+     * Maps an AsyncIterable using an asynchronous mapping function.
+     * @param executor the executor to use to do the work
+     * @param iterable the source
+     * @param func Maps items of iterable to a new value asynchronously
+     * @param pipelineSize the number of map results to pipeline. As items comes back from iterable,
+     * this will have up to this many func futures in waiting before waiting on them without advancing
+     * the iterable.
+     * @param <T1> the source type
+     * @param <T2> the destination type
+     * @return a new {@code AsyncIterable} with the results of applying func to each of the elements of iterable
+     */
+    @Nonnull
+    public static <T1, T2> AsyncIterable<T2> mapIterablePipelined(@Nonnull final Executor executor,
+                                                                  @Nonnull final AsyncIterable<T1> iterable,
+                                                                  @Nonnull final Function<T1, CompletableFuture<T2>> func,
+                                                                  int pipelineSize) {
+        return mapConcatIterable(executor, iterable,
                 item -> mapToIterable(item, func),
                 pipelineSize);
     }

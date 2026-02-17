@@ -20,6 +20,7 @@
 
 package com.apple.foundationdb.async.guardiann;
 
+import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.tuple.Tuple;
 
 import javax.annotation.Nonnull;
@@ -28,15 +29,32 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
 public abstract class AbstractDeferredTask {
     @Nonnull
+    private final Locator locator;
+    @Nonnull
+    private final AccessInfo accessInfo;
+    @Nonnull
     private final UUID taskId;
 
-    public AbstractDeferredTask(@Nonnull final UUID taskId) {
+    AbstractDeferredTask(@Nonnull final Locator locator,
+                         @Nonnull final AccessInfo accessInfo,
+                         @Nonnull final UUID taskId) {
+        this.locator = locator;
+        this.accessInfo = accessInfo;
         this.taskId = taskId;
+    }
+
+    @Nonnull
+    public Locator getLocator() {
+        return locator;
+    }
+
+    @Nonnull
+    AccessInfo getAccessInfo() {
+        return accessInfo;
     }
 
     @Nonnull
@@ -48,14 +66,16 @@ public abstract class AbstractDeferredTask {
     public abstract Tuple valueTuple();
 
     @Nonnull
-    public abstract CompletableFuture<Void> runTask();
+    public abstract CompletableFuture<Void> runTask(@Nonnull Transaction transaction);
 
     @Nonnull
     public abstract Kind getKind();
 
-    public static AbstractDeferredTask newFromTuples(@Nonnull Tuple keyTuple, @Nonnull Tuple valueTuple) {
+    static AbstractDeferredTask newFromTuples(@Nonnull final Locator locator,
+                                              @Nonnull final AccessInfo accessInfo,
+                                              @Nonnull final Tuple keyTuple, @Nonnull final Tuple valueTuple) {
         final Kind kind = Kind.fromValueTuple(valueTuple);
-        return kind.create(keyTuple, valueTuple);
+        return kind.create(locator, accessInfo, keyTuple, valueTuple);
     }
 
     public enum Kind {
@@ -67,11 +87,11 @@ public abstract class AbstractDeferredTask {
                         .collect(Collectors.toMap(s -> s.code, s -> s));
 
         private final int code;
-        private final BiFunction<Tuple, Tuple, AbstractDeferredTask> creatorFn;
+        private final TaskCreationFunction taskCreationFunction;
 
-        Kind(final int code, @Nonnull final BiFunction<Tuple, Tuple, AbstractDeferredTask> creatorFn) {
+        Kind(final int code, @Nonnull final TaskCreationFunction taskCreationFunction) {
             this.code = code;
-            this.creatorFn = creatorFn;
+            this.taskCreationFunction = taskCreationFunction;
         }
 
         public int getCode() {
@@ -79,8 +99,11 @@ public abstract class AbstractDeferredTask {
         }
 
         @Nonnull
-        public AbstractDeferredTask create(@Nonnull final Tuple keyTuple, @Nonnull final Tuple valueTuple) {
-            return creatorFn.apply(keyTuple, valueTuple);
+        private AbstractDeferredTask create(@Nonnull final Locator locator,
+                                            @Nonnull final AccessInfo accessInfo,
+                                            @Nonnull final Tuple keyTuple,
+                                            @Nonnull final Tuple valueTuple) {
+            return taskCreationFunction.create(locator, accessInfo, keyTuple, valueTuple);
         }
 
         public static Kind fromValueTuple(@Nonnull final Tuple valueTuple) {
@@ -91,5 +114,13 @@ public abstract class AbstractDeferredTask {
         public static Kind ofCode(final int code) {
             return Objects.requireNonNull(BY_CODE.getOrDefault(code, null));
         }
+    }
+
+    @FunctionalInterface
+    private interface TaskCreationFunction {
+        AbstractDeferredTask create(@Nonnull Locator locator,
+                                    @Nonnull AccessInfo accessInfo,
+                                    @Nonnull Tuple keyTuple,
+                                    @Nonnull Tuple valueTuple);
     }
 }

@@ -42,7 +42,6 @@ import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -404,25 +403,22 @@ public class Primitives {
     }
 
     @Nonnull
-    CompletableFuture<Void> doSomeDeferredTasks(@Nonnull final Transaction readTransaction) {
-        return fetchSomeDeferredTasks(readTransaction, 2)
+    CompletableFuture<Void> doSomeDeferredTasks(@Nonnull final Transaction transaction,
+                                                @Nonnull final AccessInfo accessInfo) {
+        return fetchSomeDeferredTasks(transaction, accessInfo, 2)
                 .thenCompose(deferredTasks ->
                         forLoop(0, null,
                                 i -> i < deferredTasks.size(), i -> i + 1,
                                 (i, ignored) -> {
                                     final AbstractDeferredTask deferredTask = deferredTasks.get(i);
-                                    deleteDeferredTask(readTransaction, deferredTask);
-                                    return deferredTask.runTask();
+                                    deleteDeferredTask(transaction, deferredTask);
+                                    return deferredTask.runTask(transaction);
                                 }, getExecutor()));
     }
 
     @Nonnull
-    CompletableFuture<AbstractDeferredTask> fetchAnyDeferredTask(@Nonnull final ReadTransaction readTransaction) {
-        return fetchSomeDeferredTasks(readTransaction, 1).thenApply(Iterables::getOnlyElement);
-    }
-
-    @Nonnull
     CompletableFuture<List<AbstractDeferredTask>> fetchSomeDeferredTasks(@Nonnull final ReadTransaction readTransaction,
+                                                                         @Nonnull final AccessInfo accessInfo,
                                                                          final int numTasks) {
         final Subspace tasksSubspace = getTasksSubspace();
         final byte[] rangeKey = tasksSubspace.pack();
@@ -436,7 +432,8 @@ public class Primitives {
                         final byte[] valueBytes = keyValue.getValue();
                         final Tuple keyTuple = tasksSubspace.unpack(keyValue.getKey());
                         final Tuple valueTuple = Tuple.fromBytes(valueBytes);
-                        deferredTasksBuilder.add(AbstractDeferredTask.newFromTuples(keyTuple, valueTuple));
+                        deferredTasksBuilder.add(AbstractDeferredTask.newFromTuples(getLocator(), accessInfo,
+                                keyTuple, valueTuple));
                         getOnReadListener().onKeyValueRead(-1, keyBytes, valueBytes);
                     }
                     return deferredTasksBuilder.build();

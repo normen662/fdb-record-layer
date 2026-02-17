@@ -20,7 +20,13 @@
 
 package com.apple.foundationdb.async.guardiann;
 
+import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.async.AsyncUtil;
+import com.apple.foundationdb.async.common.StorageHelpers;
+import com.apple.foundationdb.async.common.StorageTransform;
+import com.apple.foundationdb.linear.Quantizer;
+import com.apple.foundationdb.linear.RealVector;
+import com.apple.foundationdb.linear.Transformed;
 import com.apple.foundationdb.tuple.Tuple;
 import com.google.common.base.Verify;
 
@@ -29,18 +35,39 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 public class SplitMergeTask extends AbstractDeferredTask {
-    private SplitMergeTask(@Nonnull final UUID taskId) {
-        super(taskId);
+    @Nonnull
+    private final UUID clusterId;
+    @Nonnull
+    private final Transformed<RealVector> centroid;
+
+    private SplitMergeTask(@Nonnull final Locator locator, @Nonnull final AccessInfo accessInfo,
+                           @Nonnull final UUID taskId, @Nonnull final UUID clusterId,
+                           @Nonnull final Transformed<RealVector> centroid) {
+        super(locator, accessInfo, taskId);
+        this.clusterId = clusterId;
+        this.centroid = centroid;
+    }
+
+    @Nonnull
+    public UUID getClusterId() {
+        return clusterId;
+    }
+
+    @Nonnull
+    public Transformed<RealVector> getCentroid() {
+        return centroid;
     }
 
     @Nonnull
     @Override
     public Tuple valueTuple() {
-        return Tuple.from(getKind().getCode());
+        final Quantizer quantizer = getLocator().primitives().quantizer(getAccessInfo());
+        final Transformed<RealVector> encodedVector = quantizer.encode(getCentroid());
+        return Tuple.from(getKind().getCode(), clusterId, encodedVector.getUnderlyingVector().getRawData());
     }
 
     @Nonnull
-    public CompletableFuture<Void> runTask() {
+    public CompletableFuture<Void> runTask(@Nonnull final Transaction transaction) {
         return AsyncUtil.DONE;
     }
 
@@ -50,13 +77,21 @@ public class SplitMergeTask extends AbstractDeferredTask {
     }
 
     @Nonnull
-    public static SplitMergeTask fromTuples(@Nonnull final Tuple keyTuple, @Nonnull final Tuple valueTuple) {
+    static SplitMergeTask fromTuples(@Nonnull final Locator locator, @Nonnull final AccessInfo accessInfo,
+                                     @Nonnull final Tuple keyTuple, @Nonnull final Tuple valueTuple) {
         Verify.verify(Kind.fromValueTuple(valueTuple) == Kind.SPLIT_MERGE);
-        return new SplitMergeTask(keyTuple.getUUID(0));
+        final StorageTransform storageTransform = locator.primitives().storageTransform(accessInfo);
+        final Transformed<RealVector> centroid = storageTransform.transform(
+                StorageHelpers.vectorFromBytes(locator.getConfig(), valueTuple.getBytes(2)));
+
+        return new SplitMergeTask(locator, accessInfo, keyTuple.getUUID(1),
+                valueTuple.getUUID(1), centroid);
     }
 
     @Nonnull
-    public static SplitMergeTask of(@Nonnull UUID taskId) {
-        return new SplitMergeTask(taskId);
+    static SplitMergeTask of(@Nonnull final Locator locator, @Nonnull final AccessInfo accessInfo,
+                             @Nonnull final UUID taskId, @Nonnull final UUID clusterId,
+                             @Nonnull final Transformed<RealVector> centroid) {
+        return new SplitMergeTask(locator, accessInfo, taskId, clusterId, centroid);
     }
 }

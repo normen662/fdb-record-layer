@@ -20,6 +20,7 @@
 
 package com.apple.foundationdb.async.guardiann;
 
+import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.async.AsyncUtil;
 import com.apple.foundationdb.tuple.Tuple;
 import com.google.common.base.Verify;
@@ -29,8 +30,9 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 public class ReassignTask extends AbstractDeferredTask {
-    private ReassignTask(@Nonnull final UUID taskId) {
-        super(taskId);
+    private ReassignTask(@Nonnull final Locator locator, @Nonnull final AccessInfo accessInfo,
+                         @Nonnull final UUID taskId) {
+        super(locator, accessInfo, taskId);
     }
 
     @Nonnull
@@ -40,7 +42,7 @@ public class ReassignTask extends AbstractDeferredTask {
     }
 
     @Nonnull
-    public CompletableFuture<Void> runTask() {
+    public CompletableFuture<Void> runTask(@Nonnull final Transaction transaction) {
         return AsyncUtil.DONE;
     }
 
@@ -50,8 +52,15 @@ public class ReassignTask extends AbstractDeferredTask {
     }
 
     @Nonnull
-    public static ReassignTask fromTuples(@Nonnull final Tuple keyTuple, @Nonnull final Tuple valueTuple) {
+    static ReassignTask fromTuples(@Nonnull final Locator locator, @Nonnull final AccessInfo accessInfo,
+                                   @Nonnull final Tuple keyTuple, @Nonnull final Tuple valueTuple) {
         Verify.verify(Kind.fromValueTuple(valueTuple) == Kind.SPLIT_MERGE);
-        return new ReassignTask(keyTuple.getUUID(0));
+        return ReassignTask.of(locator, accessInfo, keyTuple.getUUID(0));
+    }
+
+    @Nonnull
+    static ReassignTask of(@Nonnull final Locator locator, @Nonnull final AccessInfo accessInfo,
+                           @Nonnull final UUID taskId) {
+        return new ReassignTask(locator, accessInfo, taskId);
     }
 }

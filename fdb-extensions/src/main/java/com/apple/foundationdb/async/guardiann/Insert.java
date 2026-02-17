@@ -45,6 +45,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.SplittableRandom;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -195,7 +196,7 @@ public class Insert {
                     }
 
                     // do some deferred tasks
-                    return primitives.doSomeDeferredTasks(transaction)
+                    return primitives.doSomeDeferredTasks(transaction, accessInfo)
                             .thenApply(ignored -> accessInfoAndNodeExistence);
                 }).thenCompose(accessInfoAndNodeExistence -> {
                     if (accessInfoAndNodeExistence.isNodeExists()) {
@@ -211,27 +212,37 @@ public class Insert {
                             MoreAsyncUtil.iterableOf(() ->
                                     primitives.centroidsOrderedByDistance(transaction, newVector), getExecutor());
 
-                    final AsyncIterable<ClusterInfoWithDistance> clusterInfosByDistanceIterable =
-                            mapIterablePipelined(clusterCentroidsEntriesByDistanceIterable,
-                                    resultEntry -> {
-                                        final Transformed<RealVector> transformedCentroid =
-                                                storageTransform.transform(Objects.requireNonNull(resultEntry.getVector()));
-                                        return primitives.fetchClusterInfoWithDistance(transaction,
-                                                resultEntry.getPrimaryKey().getUUID(0), transformedCentroid,
-                                                resultEntry.getDistance());
-                                    },
+                    final AsyncIterable<Optional<ClusterInfoWithDistance>> clusterInfoOptionalsIterable =
+                            mapIterablePipelined(getExecutor(), clusterCentroidsEntriesByDistanceIterable,
+                                    resultEntry ->
+                                            primitives.fetchClusterInfo(transaction,
+                                                            resultEntry.getPrimaryKey().getUUID(0))
+                                                    .thenApply(clusterInfo -> {
+                                                        if (clusterInfo.getState() == ClusterInfo.State.DRAINING) {
+                                                            return Optional.empty();
+                                                        }
+                                                        final Transformed<RealVector> transformedCentroid =
+                                                                storageTransform.transform(Objects.requireNonNull(resultEntry.getVector()));
+                                                        return Optional.of(
+                                                                new ClusterInfoWithDistance(clusterInfo,
+                                                                        transformedCentroid,
+                                                                        resultEntry.getDistance()));
+                                                    }),
                                     10);
 
-                    final AsyncIterable<ClusterInfoWithDistance> filteredClusterInfosByDistanceIterable =
-                            filterIterable(getExecutor(), clusterInfosByDistanceIterable,
-                                    clusterInfoWithDistance ->
-                                            clusterInfoWithDistance.getClusterInfo().getState() != ClusterInfo.State.DRAINING);
+                    final AsyncIterable<ClusterInfoWithDistance> filteredClusterInfoIterable =
+                            MoreAsyncUtil.mapIterablePipelined(getExecutor(),
+                                    filterIterable(getExecutor(), clusterInfoOptionalsIterable, Optional::isPresent),
+                                    clusterInfoWithDistanceOptional ->
+                                            CompletableFuture.completedFuture(clusterInfoWithDistanceOptional
+                                                    .orElseThrow(() -> new IllegalStateException("optional must be present"))),
+                                    10);
 
                     final AtomicInteger indexAtomic = new AtomicInteger(0);
                     final AtomicDouble primaryDistanceAtomic = new AtomicDouble(Double.NaN);
 
                     final AsyncIterable<ClusterInfoWithDistance> affectedNeighborhood =
-                            whileIterable(limitIterable(filteredClusterInfosByDistanceIterable, 3,
+                            whileIterable(limitIterable(filteredClusterInfoIterable, 3,
                                             getExecutor()),
                                     clusterInfoWithDistance -> {
                                         final int index = indexAtomic.getAndIncrement();
@@ -266,8 +277,10 @@ public class Insert {
                                 final ClusterInfo newClusterInfo;
                                 if (clusterInfo.getState() == ClusterInfo.State.ACTIVE &&
                                         clusterInfo.getNumVectors() >= config.getClusterMax()) {
-                                    // create a split task
-                                    primitives.writeDeferredTask(transaction, SplitMergeTask.of(clusterInfo.getUuid()));
+                                    // create a split/merge task
+                                    primitives.writeDeferredTask(transaction,
+                                            SplitMergeTask.of(getLocator(), accessInfo, UUID.randomUUID(),
+                                                    clusterInfo.getUuid(), clusterInfoWithDistance.getCentroid()));
 
                                     newClusterInfo =
                                             clusterInfo.withAdditionalVectors(ClusterInfo.State.REBALANCING,
