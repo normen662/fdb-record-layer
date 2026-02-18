@@ -29,24 +29,24 @@ import java.util.stream.Collectors;
 
 class ClusterInfo {
     @Nonnull
-    private final UUID uuid;
+    private final UUID id;
     private final int numVectors;
     @Nonnull
     private final State state;
 
-    public ClusterInfo(@Nonnull final UUID uuid, final int numVectors, final int stateCode) {
-        this(uuid, numVectors, State.ofCode(stateCode));
+    public ClusterInfo(@Nonnull final UUID id, final int numVectors, final int stateCode) {
+        this(id, numVectors, State.ofCode(stateCode));
     }
 
-    public ClusterInfo(@Nonnull final UUID uuid, final int numVectors, @Nonnull final State state) {
-        this.uuid = uuid;
+    public ClusterInfo(@Nonnull final UUID id, final int numVectors, @Nonnull final State state) {
+        this.id = id;
         this.numVectors = numVectors;
         this.state = state;
     }
 
     @Nonnull
-    public UUID getUuid() {
-        return uuid;
+    public UUID getId() {
+        return id;
     }
 
     public int getNumVectors() {
@@ -60,7 +60,7 @@ class ClusterInfo {
 
     @Nonnull
     public ClusterInfo withAdditionalVectors(@Nonnull final State state, final int numVectorsAdded) {
-        return new ClusterInfo(getUuid(), getNumVectors() + numVectorsAdded, state);
+        return new ClusterInfo(getId(), getNumVectors() + numVectorsAdded, state);
     }
 
     @Override
@@ -69,19 +69,19 @@ class ClusterInfo {
             return false;
         }
         final ClusterInfo cluster = (ClusterInfo)o;
-        return Objects.equals(getUuid(), cluster.getUuid()) &&
+        return Objects.equals(getId(), cluster.getId()) &&
                 getNumVectors() == cluster.getNumVectors() &&
                 getState() == cluster.getState();
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(getUuid(), getNumVectors(), getState().name());
+        return Objects.hash(getId(), getNumVectors(), getState().name());
     }
 
     public enum State {
         ACTIVE(0),
-        REBALANCING(1),
+        SPLIT_MERGE(1),
         DRAINING(2);
 
         private static final Map<Integer, State> BY_CODE =

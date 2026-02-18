@@ -33,6 +33,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
+import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
@@ -244,6 +245,16 @@ class StorageAdapter {
     }
 
     @Nonnull
+    static UUID clusterIdFromTuple(@Nonnull final Tuple tuple) {
+        return tuple.getUUID(0);
+    }
+
+    @Nonnull
+    static Tuple tupleFromClusterId(@Nonnull final UUID clusterId) {
+        return Tuple.from(clusterId);
+    }
+
+    @Nonnull
     static ClusterInfo clusterInfoFromTuple(@Nonnull final Tuple valueTuple) {
         return new ClusterInfo(valueTuple.getUUID(0), Math.toIntExact(valueTuple.getLong(1)),
                 Math.toIntExact(valueTuple.getLong(2)));
@@ -251,7 +262,7 @@ class StorageAdapter {
 
     @Nonnull
     static Tuple valueTupleFromClusterInfo(@Nonnull final ClusterInfo clusterInfo) {
-        return Tuple.from(clusterInfo.getUuid(), clusterInfo.getNumVectors(), clusterInfo.getState().getCode());
+        return Tuple.from(clusterInfo.getId(), clusterInfo.getNumVectors(), clusterInfo.getState().getCode());
     }
 
     @Nonnull

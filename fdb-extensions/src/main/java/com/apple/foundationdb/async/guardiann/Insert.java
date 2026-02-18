@@ -208,15 +208,15 @@ public class Insert {
                     final Transformed<RealVector> transformedNewVector = storageTransform.transform(newVector);
                     final Quantizer quantizer = primitives.quantizer(accessInfo);
 
-                    final AsyncIterable<ResultEntry> clusterCentroidsEntriesByDistanceIterable =
+                    final AsyncIterable<ResultEntry> clusterCentroidEntriesByDistanceIterable =
                             MoreAsyncUtil.iterableOf(() ->
                                     primitives.centroidsOrderedByDistance(transaction, newVector), getExecutor());
 
                     final AsyncIterable<Optional<ClusterInfoWithDistance>> clusterInfoOptionalsIterable =
-                            mapIterablePipelined(getExecutor(), clusterCentroidsEntriesByDistanceIterable,
+                            mapIterablePipelined(getExecutor(), clusterCentroidEntriesByDistanceIterable,
                                     resultEntry ->
                                             primitives.fetchClusterInfo(transaction,
-                                                            resultEntry.getPrimaryKey().getUUID(0))
+                                                            StorageAdapter.clusterIdFromTuple(resultEntry.getPrimaryKey()))
                                                     .thenApply(clusterInfo -> {
                                                         if (clusterInfo.getState() == ClusterInfo.State.DRAINING) {
                                                             return Optional.empty();
@@ -280,10 +280,10 @@ public class Insert {
                                     // create a split/merge task
                                     primitives.writeDeferredTask(transaction,
                                             SplitMergeTask.of(getLocator(), accessInfo, UUID.randomUUID(),
-                                                    clusterInfo.getUuid(), clusterInfoWithDistance.getCentroid()));
+                                                    clusterInfo.getId(), clusterInfoWithDistance.getCentroid()));
 
                                     newClusterInfo =
-                                            clusterInfo.withAdditionalVectors(ClusterInfo.State.REBALANCING,
+                                            clusterInfo.withAdditionalVectors(ClusterInfo.State.SPLIT_MERGE,
                                                     1);
                                 } else {
                                     newClusterInfo =
@@ -291,7 +291,7 @@ public class Insert {
                                                     1);
                                 }
 
-                                primitives.writeVectorReference(transaction, quantizer, clusterInfo.getUuid(),
+                                primitives.writeVectorReference(transaction, quantizer, clusterInfo.getId(),
                                         new VectorReference(newVectorMetadata, transformedNewVector));
                                 primitives.writeClusterInfo(transaction, newClusterInfo);
                                 return AsyncUtil.DONE;
@@ -336,7 +336,8 @@ public class Insert {
         }
 
         return primitives.getClusterCentroidsHnsw()
-                .insert(transaction, Tuple.from(UUID.randomUUID()), newVector, null)
+                .insert(transaction, StorageAdapter.tupleFromClusterId(UUID.randomUUID()),
+                        newVector, null)
                 .thenApply(ignored -> initialAccessInfo);
     }
 

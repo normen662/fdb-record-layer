@@ -315,37 +315,37 @@ public class Primitives {
 
     @Nonnull
     CompletableFuture<ClusterInfoWithDistance> fetchClusterInfoWithDistance(@Nonnull final ReadTransaction readTransaction,
-                                                                            @Nonnull final UUID clusterUuid,
+                                                                            @Nonnull final UUID clusterId,
                                                                             @Nonnull final Transformed<RealVector> centroid,
                                                                             final double distance) {
-        return fetchClusterInfo(readTransaction, clusterUuid)
+        return fetchClusterInfo(readTransaction, clusterId)
                 .thenApply(clusterState -> new ClusterInfoWithDistance(clusterState, centroid, distance));
     }
 
     @Nonnull
     CompletableFuture<Cluster> fetchCluster(@Nonnull final ReadTransaction readTransaction,
                                             @Nonnull final StorageTransform storageTransform,
-                                            @Nonnull final UUID clusterUuid,
+                                            @Nonnull final UUID clusterId,
                                             @Nonnull final RealVector centroid) {
         final Transformed<RealVector> transformedCentroid = storageTransform.transform(centroid);
-        return fetchCluster(readTransaction, storageTransform, clusterUuid, transformedCentroid);
+        return fetchCluster(readTransaction, storageTransform, clusterId, transformedCentroid);
     }
 
     @Nonnull
     CompletableFuture<Cluster> fetchCluster(@Nonnull final ReadTransaction readTransaction,
                                             @Nonnull final StorageTransform storageTransform,
-                                            @Nonnull final UUID clusterUuid,
+                                            @Nonnull final UUID clusterId,
                                             @Nonnull final Transformed<RealVector> centroid) {
-        return fetchClusterInfo(readTransaction, clusterUuid)
-                .thenCombine(fetchVectorReferences(readTransaction, storageTransform, clusterUuid),
+        return fetchClusterInfo(readTransaction, clusterId)
+                .thenCombine(fetchVectorReferences(readTransaction, storageTransform, clusterId),
                         (clusterInfo, vectorReferences) ->
                                 new Cluster(clusterInfo, centroid, vectorReferences));
     }
 
     @Nonnull
     CompletableFuture<ClusterInfo> fetchClusterInfo(@Nonnull final ReadTransaction readTransaction,
-                                                    @Nonnull final UUID clusterUuid) {
-        final byte[] key = getClusterInfosSubspace().pack(Tuple.from(clusterUuid));
+                                                    @Nonnull final UUID clusterId) {
+        final byte[] key = getClusterInfosSubspace().pack(Tuple.from(clusterId));
         return readTransaction.get(key)
                 .thenApply(valueBytes -> {
                     getOnReadListener().onKeyValueRead(-1, key, valueBytes);
@@ -359,7 +359,7 @@ public class Primitives {
     void writeClusterInfo(@Nonnull final Transaction transaction,
                           @Nonnull final ClusterInfo clusterInfo) {
         final Subspace clusterInfosSubspace = getClusterInfosSubspace();
-        final byte[] key = clusterInfosSubspace.pack(Tuple.from(clusterInfo.getUuid()));
+        final byte[] key = clusterInfosSubspace.pack(Tuple.from(clusterInfo.getId()));
         final byte[] value = StorageAdapter.valueTupleFromClusterInfo(clusterInfo).pack();
 
         getOnWriteListener().onKeyValueWritten(-1, key, value);
@@ -369,9 +369,9 @@ public class Primitives {
     @Nonnull
     CompletableFuture<List<VectorReference>> fetchVectorReferences(@Nonnull final ReadTransaction readTransaction,
                                                                    @Nonnull final StorageTransform storageTransform,
-                                                                   @Nonnull final UUID clusterUuid) {
+                                                                   @Nonnull final UUID clusterId) {
         final Subspace vectorReferencesSubspace = getVectorReferencesSubspace();
-        final byte[] rangeKey = vectorReferencesSubspace.pack(Tuple.from(clusterUuid));
+        final byte[] rangeKey = vectorReferencesSubspace.pack(Tuple.from(clusterId));
 
         return AsyncUtil.collect(readTransaction.getRange(Range.startsWith(rangeKey),
                         ReadTransaction.ROW_LIMIT_UNLIMITED, false, StreamingMode.WANT_ALL), readTransaction.getExecutor())
@@ -392,10 +392,10 @@ public class Primitives {
 
     void writeVectorReference(@Nonnull final Transaction transaction,
                               @Nonnull final Quantizer quantizer,
-                              @Nonnull final UUID clusterUuid,
+                              @Nonnull final UUID clusterId,
                               @Nonnull final VectorReference vectorReference) {
         final Subspace vectorStatesSubspace = getVectorReferencesSubspace();
-        final byte[] key = vectorStatesSubspace.pack(Tuple.from(clusterUuid, vectorReference.getId().getPrimaryKey()));
+        final byte[] key = vectorStatesSubspace.pack(Tuple.from(clusterId, vectorReference.getId().getPrimaryKey()));
         final byte[] value = StorageAdapter.valueTupleFromVectorReference(quantizer, vectorReference).pack();
 
         getOnWriteListener().onKeyValueWritten(-1, key, value);

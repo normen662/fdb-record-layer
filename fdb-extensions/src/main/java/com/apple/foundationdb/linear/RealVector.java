@@ -133,64 +133,32 @@ public interface RealVector {
 
     @Nonnull
     default RealVector normalize() {
-        double n = l2Norm();
-        final int numDimensions = getNumDimensions();
-        double[] y = new double[numDimensions];
-        if (n == 0.0 || !Double.isFinite(n)) {
-            throw new IllegalArgumentException("vector has an L2 norm of infinite, not a number, or 0");
-        }
-        double inv = 1.0 / n;
-        for (int i = 0; i < numDimensions; i++) {
-            y[i] = getComponent(i) * inv;
-        }
-        return withData(y);
+        return withData(RealVectorPrimitives.normalizeInto(this, new double[getNumDimensions()]));
     }
 
     @Nonnull
     default RealVector add(@Nonnull final RealVector other) {
-        Preconditions.checkArgument(getNumDimensions() == other.getNumDimensions());
-        final double[] result = new double[getNumDimensions()];
-        for (int i = 0; i < getNumDimensions(); i ++) {
-            result[i] = getComponent(i) + other.getComponent(i);
-        }
-        return withData(result);
+        return withData(RealVectorPrimitives.addInto(this, other, new double[getNumDimensions()]));
     }
 
     @Nonnull
     default RealVector add(final double scalar) {
-        final double[] result = new double[getNumDimensions()];
-        for (int i = 0; i < getNumDimensions(); i ++) {
-            result[i] = getComponent(i) + scalar;
-        }
-        return withData(result);
+        return withData(RealVectorPrimitives.addInto(this, scalar, new double[getNumDimensions()]));
     }
 
     @Nonnull
     default RealVector subtract(@Nonnull final RealVector other) {
-        Preconditions.checkArgument(getNumDimensions() == other.getNumDimensions());
-        final double[] result = new double[getNumDimensions()];
-        for (int i = 0; i < getNumDimensions(); i ++) {
-            result[i] = getComponent(i) - other.getComponent(i);
-        }
-        return withData(result);
+        return withData(RealVectorPrimitives.subtractInto(this, other, new double[getNumDimensions()]));
     }
 
     @Nonnull
     default RealVector subtract(final double scalar) {
-        final double[] result = new double[getNumDimensions()];
-        for (int i = 0; i < getNumDimensions(); i ++) {
-            result[i] = getComponent(i) - scalar;
-        }
-        return withData(result);
+        return withData(RealVectorPrimitives.subtractInto(this, scalar, new double[getNumDimensions()]));
     }
 
     @Nonnull
-    default RealVector multiply(final double scalarFactor) {
-        final double[] result = new double[getNumDimensions()];
-        for (int i = 0; i < getNumDimensions(); i ++) {
-            result[i] = getComponent(i) * scalarFactor;
-        }
-        return withData(result);
+    default RealVector multiply(final double scalar) {
+        return withData(RealVectorPrimitives.multiplyInto(this, scalar, new double[getNumDimensions()]));
     }
 
     @Nonnull
