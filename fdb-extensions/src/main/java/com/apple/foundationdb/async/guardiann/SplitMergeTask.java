@@ -25,7 +25,6 @@ import com.apple.foundationdb.async.AsyncUtil;
 import com.apple.foundationdb.async.MoreAsyncUtil;
 import com.apple.foundationdb.async.common.StorageHelpers;
 import com.apple.foundationdb.async.common.StorageTransform;
-import com.apple.foundationdb.async.hnsw.ResultEntry;
 import com.apple.foundationdb.linear.Quantizer;
 import com.apple.foundationdb.linear.RealVector;
 import com.apple.foundationdb.linear.Transformed;
@@ -35,6 +34,7 @@ import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nonnull;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -124,6 +124,8 @@ public class SplitMergeTask extends AbstractDeferredTask {
                                           @Nonnull final RealVector primaryClusterCentroid) {
         final Primitives primitives = getLocator().primitives();
         final Executor executor = getLocator().getExecutor();
+        final StorageTransform storageTransform = primitives.storageTransform(getAccessInfo());
+
         final int numInnerNeighborhood = 2;
         final int numOuterNeighborhood = 3;
 
@@ -135,8 +137,10 @@ public class SplitMergeTask extends AbstractDeferredTask {
                                                 executor),
                                         numInnerNeighborhood + numOuterNeighborhood, executor),
                                 resultEntry ->
-                                        primitives.fetchClusterInfo(transaction,
-                                                StorageAdapter.clusterIdFromTuple(resultEntry.getPrimaryKey())), 10));
+                                        primitives.fetchClusterInfoWithDistance(transaction,
+                                                StorageAdapter.clusterIdFromTuple(resultEntry.getPrimaryKey()),
+                                                storageTransform.transform(Objects.requireNonNull(resultEntry.getVector())),
+                                                0.0d), 10));
         clusterNeighborhood.thenCompose(clusterInfos -> {
             //
             // Not having the primary cluster in the neighborhood should be next to impossible. It can happen, however,
@@ -145,21 +149,23 @@ public class SplitMergeTask extends AbstractDeferredTask {
             // primary cluster as that should be almost indicative of another problem.
             //
             boolean foundPrimaryCluster = false;
-            for (final ClusterInfo clusterInfo : clusterInfos) {
-                if (clusterInfo.getId().equals(primaryClusterInfo.getId())) {
+            for (final ClusterInfoWithDistance clusterInfo : clusterInfos) {
+                if (clusterInfo.getClusterInfo().getId().equals(primaryClusterInfo.getId())) {
                     foundPrimaryCluster = true;
                     break;
                 }
             }
 
-            final List<ClusterInfo> innerNeighborhood;
-            final List<ClusterInfo> outerNeighborhood;
+            final List<ClusterInfoWithDistance> innerNeighborhood;
+            final List<ClusterInfoWithDistance> outerNeighborhood;
             if (foundPrimaryCluster) {
                 innerNeighborhood = clusterInfos.subList(0, numInnerNeighborhood);
                 outerNeighborhood = clusterInfos.subList(numInnerNeighborhood, clusterInfos.size());
             } else {
-                final ImmutableList.Builder<ClusterInfo> innerNeighborhoodBuilder = ImmutableList.builder();
-                innerNeighborhoodBuilder.add(primaryClusterInfo);
+                final ImmutableList.Builder<ClusterInfoWithDistance> innerNeighborhoodBuilder = ImmutableList.builder();
+                innerNeighborhoodBuilder.add(
+                        new ClusterInfoWithDistance(primaryClusterInfo,
+                                storageTransform.transform(primaryClusterCentroid), 0.0d));
                 innerNeighborhoodBuilder.addAll(clusterInfos.subList(0, numInnerNeighborhood - 1));
                 innerNeighborhood = innerNeighborhoodBuilder.build();
                 outerNeighborhood = clusterInfos.subList(numInnerNeighborhood - 1, clusterInfos.size() - 1);
@@ -170,6 +176,16 @@ public class SplitMergeTask extends AbstractDeferredTask {
             // innerNeighborhood.size() + 1 number of clusters and outerNeighborhood is comprised of all clusters we
             // may assign some vectors for innerNeighborhood to.
             //
+
+            return forEach(innerNeighborhood,
+                    clusterInfo ->
+                            primitives.fetchCluster(transaction, storageTransform,
+                                    clusterInfo.getClusterInfo().getId(), clusterInfo.getCentroid()),
+                    10,
+                    executor)
+                    .thenCompose(clusters -> {
+                        return AsyncUtil.DONE;
+                    });
         });
 
         return AsyncUtil.DONE;
