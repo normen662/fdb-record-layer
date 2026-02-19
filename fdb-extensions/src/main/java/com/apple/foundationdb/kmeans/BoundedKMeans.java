@@ -20,11 +20,12 @@
 
 package com.apple.foundationdb.kmeans;
 
-import com.apple.foundationdb.linear.DoubleRealVector;
 import com.apple.foundationdb.linear.Estimator;
 import com.apple.foundationdb.linear.MutableDoubleRealVector;
 import com.apple.foundationdb.linear.RealVector;
+import com.apple.foundationdb.util.Lens;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -45,20 +46,36 @@ public final class BoundedKMeans {
         // nothing
     }
 
-    public static final class Result {
-        public final int[] assignment;
-        public final List<RealVector> centroids;
+    public static final class Result<T> {
+        public final List<T> clusterCentroids;
         public final int[] clusterSizes;
+        public final int[] assignment;
         public final double objective;
 
-        public Result(@Nonnull final int[] assignment,
-                      @Nonnull final List<RealVector> centroids,
+        public Result(@Nonnull final List<T> clusterCentroids,
                       @Nonnull final int[] clusterSizes,
+                      @Nonnull final int[] assignment,
                       final double objective) {
+            this.clusterCentroids = ImmutableList.copyOf(clusterCentroids);
             this.assignment = assignment;
-            this.centroids = centroids;
             this.clusterSizes = clusterSizes;
             this.objective = objective;
+        }
+
+        public List<T> getClusterCentroids() {
+            return clusterCentroids;
+        }
+
+        public int[] getClusterSizes() {
+            return clusterSizes;
+        }
+
+        public int[] getAssignment() {
+            return assignment;
+        }
+
+        public double getObjective() {
+            return objective;
         }
     }
 
@@ -89,18 +106,19 @@ public final class BoundedKMeans {
      * @param lambda strength of size balancing; 0 disables
      * @param sizePenalty penalty function; null disables
      */
-    public static Result fit(@Nonnull final SplittableRandom random, @Nonnull final Estimator estimator,
-                             @Nonnull final List<DoubleRealVector> vectors, final int k, final int maxIterations,
-                             final int restarts, final double lambda, @Nullable final SizePenalty sizePenalty,
-                             final boolean shuffleEachIteration) {
+    public static <T> Result<T> fit(@Nonnull final SplittableRandom random, @Nonnull final Estimator estimator,
+                                    @Nonnull final Lens<T, RealVector> vectorLens,
+                                    @Nonnull final List<T> vectors, final int k, final int maxIterations,
+                                    final int maxRestarts, final double lambda, @Nullable final SizePenalty sizePenalty,
+                                    final boolean shuffleEachIteration) {
 
         Preconditions.checkArgument(k >= 2, "k must be >= 2");
         Preconditions.checkArgument(vectors.size() >= k, "vectors.size() must be >= k");
         Preconditions.checkArgument(maxIterations >= 1, "maxIterations must be >= 1");
-        Preconditions.checkArgument(restarts >= 0, "restarts must be >= 0");
+        Preconditions.checkArgument(maxRestarts >= 0, "maxRestarts must be >= 0");
         Preconditions.checkArgument(lambda >= 0, "lambda must be >= 0");
 
-        final int numDimensions = vectors.get(0).getNumDimensions();
+        final int numDimensions = getVector(vectorLens, vectors, 0).getNumDimensions();
         final int n = vectors.size();
         final int targetSize = Math.max(1, n / k);
 
@@ -110,10 +128,10 @@ public final class BoundedKMeans {
             order[i] = i;
         }
 
-        Result best = null;
+        Result<T> best = null;
 
-        for (int r = 0; r <= restarts; r++) {
-            List<MutableDoubleRealVector> centroids = initKMeansPP(random, vectors, k, estimator);
+        for (int r = 0; r <= maxRestarts; r++) {
+            List<MutableDoubleRealVector> centroids = initKMeansPP(random, vectorLens, vectors, k, estimator);
             final int[] assignment = new int[n];
             Arrays.fill(assignment, -1);
             final int[] clusterSizes = new int[k];
@@ -134,7 +152,7 @@ public final class BoundedKMeans {
                 // assignment step
                 for (int t = 0; t < n; t++) {
                     int i = order[t];
-                    final DoubleRealVector vector = vectors.get(i);
+                    final RealVector vector = getVector(vectorLens, vectors, i);
 
                     int bestC = 0;
                     double bestScore = score(estimator, vector, 0, centroids, projected, targetSize,
@@ -170,14 +188,14 @@ public final class BoundedKMeans {
                 }
 
                 for (int i = 0; i < n; i++) {
-                    newCentroids.get(assignment[i]).add(vectors.get(i));
+                    newCentroids.get(assignment[i]).add(getVector(vectorLens, vectors, i));
                 }
 
                 for (int c = 0; c < k; c++) {
                     if (clusterSizes[c] == 0) {
                         // Reseed empty cluster with the "hardest" point under current centroids.
-                        int idx = farthestPointIndex(vectors, centroids, estimator);
-                        newCentroids.set(c, vectors.get(idx).toMutable());
+                        int farthestVectorIndex = farthestVectorIndex(vectorLens, vectors, centroids, estimator);
+                        newCentroids.set(c, getVector(vectorLens, vectors, farthestVectorIndex).toMutable());
                         clusterSizes[c] = 1; // used only to avoid div-by-zero; next iter recomputes sizes
                     } else {
                         newCentroids.get(c).multiply(1.0d / clusterSizes[c]);
@@ -187,21 +205,21 @@ public final class BoundedKMeans {
                 centroids = newCentroids;
             }
 
-            // Objective: sum of distances (NOT including size penalty) to compare restarts fairly.
+            // Objective: sum of distances (NOT including size penalty) to compare maxRestarts fairly.
             double objective = 0.0;
             for (int i = 0; i < n; i++) {
-                objective += estimator.distance(vectors.get(i), centroids.get(assignment[i]));
+                objective += estimator.distance(getVector(vectorLens, vectors, i), centroids.get(assignment[i]));
             }
 
-            final List<RealVector> centroidCopies = new ArrayList<>(k);
+            final ImmutableList.Builder<T> centroidCopies = ImmutableList.builderWithExpectedSize(k);
             for (final MutableDoubleRealVector centroid : centroids) {
-                centroidCopies.add(centroid.toImmutable());
+                centroidCopies.add(vectorLens.wrap(centroid.toImmutable()));
             }
 
-            final Result candidate =
-                    new Result(assignment.clone(), centroidCopies, clusterSizes.clone(), objective);
+            final Result<T> candidate =
+                    new Result<>(centroidCopies.build(), clusterSizes.clone(), assignment.clone(), objective);
 
-            if (best == null || candidate.objective < best.objective) {
+            if (best == null || candidate.getObjective() < best.getObjective()) {
                 best = candidate;
             }
         }
@@ -226,14 +244,16 @@ public final class BoundedKMeans {
      * k-means++ initialization: pick first centroid at random, then sample next centroids
      * with probability proportional to squared distance to nearest chosen centroid.
      */
-    private static List<MutableDoubleRealVector> initKMeansPP(@Nonnull final SplittableRandom random,
-                                                              @Nonnull final List<DoubleRealVector> vectors,
-                                                              final int k,
-                                                              @Nonnull final Estimator estimator) {
+    @Nonnull
+    private static <T> List<MutableDoubleRealVector> initKMeansPP(@Nonnull final SplittableRandom random,
+                                                                  @Nonnull final Lens<T, RealVector> vectorLens,
+                                                                  @Nonnull final List<T> vectors,
+                                                                  final int k,
+                                                                  @Nonnull final Estimator estimator) {
         int n = vectors.size();
 
         List<MutableDoubleRealVector> centroids = new ArrayList<>(k);
-        centroids.add(vectors.get(random.nextInt(n)).toMutable());
+        centroids.add(getVector(vectorLens, vectors, random.nextInt(n)).toMutable());
 
         double[] weights = new double[n];
 
@@ -241,7 +261,7 @@ public final class BoundedKMeans {
             double total = 0.0;
 
             for (int i = 0; i < n; i++) {
-                final DoubleRealVector vector = vectors.get(i);
+                final RealVector vector = getVector(vectorLens, vectors, i);
                 double minD = Double.MAX_VALUE;
                 for (final MutableDoubleRealVector centroid : centroids) {
                     final double d = estimator.distance(vector, centroid);
@@ -256,7 +276,7 @@ public final class BoundedKMeans {
             }
 
             if (total == 0.0) {
-                centroids.add(vectors.get(random.nextInt(n)).toMutable());
+                centroids.add(getVector(vectorLens, vectors, random.nextInt(n)).toMutable());
                 continue;
             }
 
@@ -272,7 +292,7 @@ public final class BoundedKMeans {
                 }
             }
 
-            centroids.add(vectors.get(chosen).toMutable());
+            centroids.add(getVector(vectorLens, vectors, chosen).toMutable());
         }
         return centroids;
     }
@@ -281,14 +301,15 @@ public final class BoundedKMeans {
      * Index of point whose minimum distance to any centroid is maximal.
      * Used to reseed empty clusters.
      */
-    private static int farthestPointIndex(@Nonnull final List<? extends RealVector> vectors,
-                                          @Nonnull final List<MutableDoubleRealVector> centroids,
-                                          @Nonnull final Estimator estimator) {
+    private static <T> int farthestVectorIndex(@Nonnull final Lens<T, RealVector> vectorLens,
+                                               @Nonnull final List<T> vectors,
+                                               @Nonnull final List<MutableDoubleRealVector> centroids,
+                                               @Nonnull final Estimator estimator) {
         double best = -1.0;
         int bestIdx = 0;
 
         for (int i = 0; i < vectors.size(); i++) {
-            RealVector vector = vectors.get(i);
+            final RealVector vector = getVector(vectorLens, vectors, i);
 
             double min = Double.MAX_VALUE;
             for (final MutableDoubleRealVector centroid : centroids) {
@@ -305,6 +326,13 @@ public final class BoundedKMeans {
         }
 
         return bestIdx;
+    }
+
+    @Nonnull
+    private static <T> RealVector getVector(@Nonnull final Lens<T, RealVector> vectorLens,
+                                            @Nonnull final List<T> vectors,
+                                            final int index) {
+        return vectorLens.getNonnull(vectors.get(index));
     }
 
     /** Fisher–Yates shuffle of an int[] using ThreadLocalRandom. */

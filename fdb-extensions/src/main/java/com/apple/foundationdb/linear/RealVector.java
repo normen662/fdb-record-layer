@@ -116,6 +116,11 @@ public interface RealVector {
     @Nonnull
     DoubleRealVector toDoubleRealVector();
 
+    @Nonnull
+    default MutableDoubleRealVector toMutable() {
+        return new MutableDoubleRealVector(getData().clone());
+    }
+
     default double dot(@Nonnull final RealVector other) {
         Preconditions.checkArgument(getNumDimensions() == other.getNumDimensions());
         double sum = 0.0d;

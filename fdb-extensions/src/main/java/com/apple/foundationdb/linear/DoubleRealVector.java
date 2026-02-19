@@ -85,11 +85,6 @@ public class DoubleRealVector extends AbstractRealVector {
     }
 
     @Nonnull
-    public MutableDoubleRealVector toMutable() {
-        return new MutableDoubleRealVector(getData().clone());
-    }
-
-    @Nonnull
     @Override
     public RealVector withData(@Nonnull final double[] data) {
         return new DoubleRealVector(data);

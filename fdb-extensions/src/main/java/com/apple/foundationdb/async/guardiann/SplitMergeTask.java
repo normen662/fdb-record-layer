@@ -23,18 +23,23 @@ package com.apple.foundationdb.async.guardiann;
 import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.async.AsyncUtil;
 import com.apple.foundationdb.async.MoreAsyncUtil;
+import com.apple.foundationdb.async.common.RandomHelpers;
 import com.apple.foundationdb.async.common.StorageHelpers;
 import com.apple.foundationdb.async.common.StorageTransform;
+import com.apple.foundationdb.kmeans.BoundedKMeans;
+import com.apple.foundationdb.linear.Estimator;
 import com.apple.foundationdb.linear.Quantizer;
 import com.apple.foundationdb.linear.RealVector;
 import com.apple.foundationdb.linear.Transformed;
 import com.apple.foundationdb.tuple.Tuple;
+import com.apple.foundationdb.util.Lens;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nonnull;
 import java.util.List;
 import java.util.Objects;
+import java.util.SplittableRandom;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -122,9 +127,13 @@ public class SplitMergeTask extends AbstractDeferredTask {
     private CompletableFuture<Void> split(@Nonnull final Transaction transaction,
                                           @Nonnull final ClusterInfo primaryClusterInfo,
                                           @Nonnull final RealVector primaryClusterCentroid) {
+        final SplittableRandom random = RandomHelpers.random(primaryClusterInfo.getId());
         final Primitives primitives = getLocator().primitives();
         final Executor executor = getLocator().getExecutor();
-        final StorageTransform storageTransform = primitives.storageTransform(getAccessInfo());
+        final AccessInfo accessInfo = getAccessInfo();
+        final StorageTransform storageTransform = primitives.storageTransform(accessInfo);
+        final Quantizer quantizer = primitives.quantizer(accessInfo);
+        final Estimator estimator = quantizer.estimator();
 
         final int numInnerNeighborhood = 2;
         final int numOuterNeighborhood = 3;
@@ -172,9 +181,9 @@ public class SplitMergeTask extends AbstractDeferredTask {
             }
 
             //
-            // At this point innerNeighborhood is comprised of the clusters we want to split into
-            // innerNeighborhood.size() + 1 number of clusters and outerNeighborhood is comprised of all clusters we
-            // may assign some vectors for innerNeighborhood to.
+            // At this point innerNeighborhood contains the clusters we want to split into
+            // innerNeighborhood.size() + 1 number of clusters and outerNeighborhood contains all clusters we
+            // may assign some vectors from innerNeighborhood to.
             //
 
             return forEach(innerNeighborhood,
@@ -184,6 +193,19 @@ public class SplitMergeTask extends AbstractDeferredTask {
                     10,
                     executor)
                     .thenCompose(clusters -> {
+                        final Lens<Transformed<RealVector>, RealVector> underlyingLens = Transformed.underlyingLens();
+                        final ImmutableList.Builder<Transformed<RealVector>> vectorsBuilder = ImmutableList.builder();
+                        for (final Cluster cluster : clusters) {
+                            for (final VectorReference vectorEntry : cluster.getVectorEntries()) {
+                                vectorsBuilder.add(vectorEntry.getVector());
+                            }
+                        }
+
+                        final BoundedKMeans.Result<Transformed<RealVector>> kMeansResult =
+                                BoundedKMeans.fit(random, estimator, underlyingLens, vectorsBuilder.build(),
+                                innerNeighborhood.size() + 1, 3, 1, 0.05,
+                                BoundedKMeans.overflowQuadraticPenalty(), true);
+
                         return AsyncUtil.DONE;
                     });
         });

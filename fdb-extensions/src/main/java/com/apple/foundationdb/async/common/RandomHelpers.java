@@ -20,8 +20,6 @@
 
 package com.apple.foundationdb.async.common;
 
-import com.apple.foundationdb.tuple.Tuple;
-
 import javax.annotation.Nonnull;
 import java.util.SplittableRandom;
 
@@ -32,12 +30,12 @@ public final class RandomHelpers {
 
     /**
      * Seed a {@link SplittableRandom} in a deterministic way using the primary key of a record.
-     * @param primaryKey something fairly unique
+     * @param someIdentity something fairly unique
      * @return a new {@link SplittableRandom}
      */
     @Nonnull
-    public static SplittableRandom random(@Nonnull final Tuple primaryKey) {
-        return new SplittableRandom(splitMixLong(primaryKey.hashCode()));
+    public static SplittableRandom random(@Nonnull final Object someIdentity) {
+        return new SplittableRandom(splitMixLong(someIdentity.hashCode()));
     }
 
     /**

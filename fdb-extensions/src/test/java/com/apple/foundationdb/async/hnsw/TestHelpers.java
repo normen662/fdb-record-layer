@@ -381,8 +381,9 @@ class TestHelpers {
         }
 
         return nodeFactory.create(primaryKey,
-                neighborsBuilder.build(), AffineOperator.identity().transform(createRandomHalfVector(random, numDimensions))
-        );
+                AffineOperator.identity().transform(createRandomHalfVector(random, numDimensions)),
+                null,
+                neighborsBuilder.build());
     }
 
     @Nonnull
@@ -397,8 +398,9 @@ class TestHelpers {
         }
 
         return nodeFactory.create(primaryKey,
-                neighborsBuilder.build(), AffineOperator.identity().transform(createRandomHalfVector(random, numDimensions))
-        );
+                AffineOperator.identity().transform(createRandomHalfVector(random, numDimensions)),
+                null,
+                neighborsBuilder.build());
     }
 
     @Nonnull

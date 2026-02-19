@@ -41,12 +41,12 @@ public class Locator {
 
     @Nonnull
     private final Supplier<Primitives> primitivesSupplier;
-    @Nonnull
-    private final Supplier<Search> searchSupplier;
+//    @Nonnull
+//    private final Supplier<Search> searchSupplier;
     @Nonnull
     private final Supplier<Insert> insertSupplier;
-    @Nonnull
-    private final Supplier<Delete> deleteSupplier;
+//    @Nonnull
+//    private final Supplier<Delete> deleteSupplier;
 
     /**
      * Constructs a new HNSW graph instance.
@@ -71,9 +71,9 @@ public class Locator {
         this.storageAdapter = new StorageAdapter(config, subspace, onWriteListener, onReadListener);
 
         this.primitivesSupplier = Suppliers.memoize(() -> new Primitives(this));
-        this.searchSupplier = Suppliers.memoize(() -> new Search(this));
+        //this.searchSupplier = Suppliers.memoize(() -> new Search(this));
         this.insertSupplier = Suppliers.memoize(() -> new Insert(this));
-        this.deleteSupplier = Suppliers.memoize(() -> new Delete(this));
+        //this.deleteSupplier = Suppliers.memoize(() -> new Delete(this));
     }
 
     @Nonnull
@@ -132,18 +132,18 @@ public class Locator {
         return primitivesSupplier.get();
     }
 
-    @Nonnull
-    Search search() {
-        return searchSupplier.get();
-    }
+//    @Nonnull
+//    Search search() {
+//        return searchSupplier.get();
+//    }
 
     @Nonnull
     Insert insert() {
         return insertSupplier.get();
     }
 
-    @Nonnull
-    Delete delete() {
-        return deleteSupplier.get();
-    }
+//    @Nonnull
+//    Delete delete() {
+//        return deleteSupplier.get();
+//    }
 }
