@@ -51,6 +51,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.apple.foundationdb.async.MoreAsyncUtil.filterIterable;
 import static com.apple.foundationdb.async.MoreAsyncUtil.limitIterable;
@@ -212,44 +213,47 @@ public class Insert {
                             MoreAsyncUtil.iterableOf(() ->
                                     primitives.centroidsOrderedByDistance(transaction, newVector), getExecutor());
 
-                    final AsyncIterable<Optional<ClusterInfoWithDistance>> clusterInfoOptionalsIterable =
+                    final AsyncIterable<Optional<ClusterMetadataWithDistance>> clusterMetadataOptionalsIterable =
                             mapIterablePipelined(getExecutor(), clusterCentroidEntriesByDistanceIterable,
                                     resultEntry ->
-                                            primitives.fetchClusterInfo(transaction,
+                                            primitives.fetchClusterMetadata(transaction,
                                                             StorageAdapter.clusterIdFromTuple(resultEntry.getPrimaryKey()))
-                                                    .thenApply(clusterInfo -> {
-                                                        if (clusterInfo.getState() == ClusterInfo.State.DRAINING) {
+                                                    .thenApply(clusterMetadata -> {
+                                                        if (clusterMetadata.getState() == ClusterMetadata.State.DRAINING) {
                                                             return Optional.empty();
                                                         }
                                                         final Transformed<RealVector> transformedCentroid =
                                                                 storageTransform.transform(Objects.requireNonNull(resultEntry.getVector()));
                                                         return Optional.of(
-                                                                new ClusterInfoWithDistance(clusterInfo,
+                                                                new ClusterMetadataWithDistance(clusterMetadata,
                                                                         transformedCentroid,
                                                                         resultEntry.getDistance()));
                                                     }),
                                     10);
 
-                    final AsyncIterable<ClusterInfoWithDistance> filteredClusterInfoIterable =
+                    final AsyncIterable<ClusterMetadataWithDistance> filteredClusterMetadataIterable =
                             MoreAsyncUtil.mapIterablePipelined(getExecutor(),
-                                    filterIterable(getExecutor(), clusterInfoOptionalsIterable, Optional::isPresent),
-                                    clusterInfoWithDistanceOptional ->
-                                            CompletableFuture.completedFuture(clusterInfoWithDistanceOptional
+                                    filterIterable(getExecutor(), clusterMetadataOptionalsIterable, Optional::isPresent),
+                                    clusterMetadataWithDistanceOptional ->
+                                            CompletableFuture.completedFuture(clusterMetadataWithDistanceOptional
                                                     .orElseThrow(() -> new IllegalStateException("optional must be present"))),
                                     10);
 
                     final AtomicInteger indexAtomic = new AtomicInteger(0);
+                    final AtomicReference<UUID> primaryClusterIdAtomic = new AtomicReference<>();
                     final AtomicDouble primaryDistanceAtomic = new AtomicDouble(Double.NaN);
 
-                    final AsyncIterable<ClusterInfoWithDistance> affectedNeighborhood =
-                            whileIterable(limitIterable(filteredClusterInfoIterable, 3,
+                    final AsyncIterable<ClusterMetadataWithDistance> affectedNeighborhood =
+                            whileIterable(limitIterable(filteredClusterMetadataIterable, 3,
                                             getExecutor()),
-                                    clusterInfoWithDistance -> {
+                                    clusterMetadataWithDistance -> {
                                         final int index = indexAtomic.getAndIncrement();
-                                        final double distance = clusterInfoWithDistance.getDistance();
+                                        final double distance = clusterMetadataWithDistance.getDistance();
 
                                         if (index == 0) {
                                             // first and nearest cluster -- always accept
+                                            primaryClusterIdAtomic.set(
+                                                    clusterMetadataWithDistance.getClusterMetadata().getId());
                                             primaryDistanceAtomic.set(distance);
                                             return true;
                                         }
@@ -272,28 +276,30 @@ public class Insert {
                     primitives.writeVectorMetadata(transaction, newVectorMetadata);
 
                     final AsyncIterable<Void> updatedNeighborhood = mapIterablePipelined(affectedNeighborhood,
-                            clusterInfoWithDistance -> {
-                                final ClusterInfo clusterInfo = clusterInfoWithDistance.getClusterInfo();
-                                final ClusterInfo newClusterInfo;
-                                if (clusterInfo.getState() == ClusterInfo.State.ACTIVE &&
-                                        clusterInfo.getNumVectors() >= config.getClusterMax()) {
+                            clusterMetadataWithDistance -> {
+                                final ClusterMetadata clusterMetadata = clusterMetadataWithDistance.getClusterMetadata();
+                                final ClusterMetadata newClusterMetadata;
+                                final UUID clusterId = clusterMetadata.getId();
+                                if (clusterMetadata.getState() == ClusterMetadata.State.ACTIVE &&
+                                        clusterMetadata.getNumVectors() >= config.getClusterMax()) {
                                     // create a split/merge task
                                     primitives.writeDeferredTask(transaction,
                                             SplitMergeTask.of(getLocator(), accessInfo, UUID.randomUUID(),
-                                                    clusterInfo.getId(), clusterInfoWithDistance.getCentroid()));
+                                                    clusterId, clusterMetadataWithDistance.getCentroid()));
 
-                                    newClusterInfo =
-                                            clusterInfo.withAdditionalVectors(ClusterInfo.State.SPLIT_MERGE,
+                                    newClusterMetadata =
+                                            clusterMetadata.withAdditionalVectors(ClusterMetadata.State.SPLIT_MERGE,
                                                     1);
                                 } else {
-                                    newClusterInfo =
-                                            clusterInfo.withAdditionalVectors(clusterInfo.getState(),
+                                    newClusterMetadata =
+                                            clusterMetadata.withAdditionalVectors(clusterMetadata.getState(),
                                                     1);
                                 }
 
-                                primitives.writeVectorReference(transaction, quantizer, clusterInfo.getId(),
-                                        new VectorReference(newVectorMetadata, transformedNewVector));
-                                primitives.writeClusterInfo(transaction, newClusterInfo);
+                                primitives.writeVectorReference(transaction, quantizer, clusterId,
+                                        new VectorReference(newVectorMetadata,
+                                                clusterId.equals(primaryClusterIdAtomic.get()), transformedNewVector));
+                                primitives.writeClusterMetadata(transaction, newClusterMetadata);
                                 return AsyncUtil.DONE;
                             },
                             10);

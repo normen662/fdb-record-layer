@@ -57,6 +57,22 @@ public interface Lens<C, A> {
         return set(c, newA);
     }
 
+    default <A2> Lens<C, A2> compose(@Nonnull final Lens<A, A2> downstream) {
+        return new Lens<>() {
+            @Nullable
+            @Override
+            public A2 get(@Nonnull final C c) {
+                return downstream.get(Lens.this.get(c));
+            }
+
+            @Nonnull
+            @Override
+            public C set(@Nullable final C c, @Nullable final A2 a2) {
+                return Lens.this.set(c, downstream.set(Lens.this.get(c), a2));
+            }
+        };
+    }
+
     @Nonnull
     static <T> Lens<T, T> identity() {
         return new Lens<>() {

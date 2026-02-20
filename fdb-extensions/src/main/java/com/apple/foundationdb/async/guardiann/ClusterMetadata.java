@@ -1,5 +1,5 @@
 /*
- * ClusterInfo.java
+ * ClusterMetadata.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -27,18 +27,18 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-class ClusterInfo {
+class ClusterMetadata {
     @Nonnull
     private final UUID id;
     private final int numVectors;
     @Nonnull
     private final State state;
 
-    public ClusterInfo(@Nonnull final UUID id, final int numVectors, final int stateCode) {
+    public ClusterMetadata(@Nonnull final UUID id, final int numVectors, final int stateCode) {
         this(id, numVectors, State.ofCode(stateCode));
     }
 
-    public ClusterInfo(@Nonnull final UUID id, final int numVectors, @Nonnull final State state) {
+    public ClusterMetadata(@Nonnull final UUID id, final int numVectors, @Nonnull final State state) {
         this.id = id;
         this.numVectors = numVectors;
         this.state = state;
@@ -59,8 +59,8 @@ class ClusterInfo {
     }
 
     @Nonnull
-    public ClusterInfo withAdditionalVectors(@Nonnull final State state, final int numVectorsAdded) {
-        return new ClusterInfo(getId(), getNumVectors() + numVectorsAdded, state);
+    public ClusterMetadata withAdditionalVectors(@Nonnull final State state, final int numVectorsAdded) {
+        return new ClusterMetadata(getId(), getNumVectors() + numVectorsAdded, state);
     }
 
     @Override
@@ -68,7 +68,7 @@ class ClusterInfo {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        final ClusterInfo cluster = (ClusterInfo)o;
+        final ClusterMetadata cluster = (ClusterMetadata)o;
         return Objects.equals(getId(), cluster.getId()) &&
                 getNumVectors() == cluster.getNumVectors() &&
                 getState() == cluster.getState();

@@ -1,5 +1,5 @@
 /*
- * ClusterInfoWithDistance.java
+ * ClusterMetadataWithDistance.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -26,25 +26,25 @@ import com.apple.foundationdb.linear.Transformed;
 import javax.annotation.Nonnull;
 import java.util.Objects;
 
-class ClusterInfoWithDistance {
+class ClusterMetadataWithDistance {
     @Nonnull
-    private final ClusterInfo clusterInfo;
+    private final ClusterMetadata clusterMetadata;
 
     @Nonnull
     private final Transformed<RealVector> centroid;
     private final double distance;
 
-    public ClusterInfoWithDistance(@Nonnull final ClusterInfo clusterInfo,
-                                   @Nonnull final Transformed<RealVector> centroid,
-                                   final double distance) {
+    public ClusterMetadataWithDistance(@Nonnull final ClusterMetadata clusterMetadata,
+                                       @Nonnull final Transformed<RealVector> centroid,
+                                       final double distance) {
         this.centroid = centroid;
         this.distance = distance;
-        this.clusterInfo = clusterInfo;
+        this.clusterMetadata = clusterMetadata;
     }
 
     @Nonnull
-    public ClusterInfo getClusterInfo() {
-        return clusterInfo;
+    public ClusterMetadata getClusterMetadata() {
+        return clusterMetadata;
     }
 
     @Nonnull
@@ -61,13 +61,13 @@ class ClusterInfoWithDistance {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        final ClusterInfoWithDistance that = (ClusterInfoWithDistance)o;
-        return  Objects.equals(getClusterInfo(), that.getClusterInfo()) &&
+        final ClusterMetadataWithDistance that = (ClusterMetadataWithDistance)o;
+        return  Objects.equals(getClusterMetadata(), that.getClusterMetadata()) &&
                 Objects.equals(getCentroid(), that.getCentroid());
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(getCentroid(), getClusterInfo());
+        return Objects.hash(getCentroid(), getClusterMetadata());
     }
 }

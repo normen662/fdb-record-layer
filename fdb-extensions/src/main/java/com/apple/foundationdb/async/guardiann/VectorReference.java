@@ -30,16 +30,24 @@ class VectorReference {
     @Nonnull
     private final VectorId id;
     @Nonnull
+    private final boolean isPrimaryCopy;
+    @Nonnull
     private final Transformed<RealVector> vector;
 
-    public VectorReference(@Nonnull final VectorId id, @Nonnull final Transformed<RealVector> vector) {
+    public VectorReference(@Nonnull final VectorId id, boolean isPrimaryCopy,
+                           @Nonnull final Transformed<RealVector> vector) {
         this.id = id;
+        this.isPrimaryCopy = isPrimaryCopy;
         this.vector = vector;
     }
 
     @Nonnull
     public VectorId getId() {
         return id;
+    }
+
+    public boolean isPrimaryCopy() {
+        return isPrimaryCopy;
     }
 
     @Nonnull

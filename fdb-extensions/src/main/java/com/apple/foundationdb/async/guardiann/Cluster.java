@@ -29,22 +29,22 @@ import java.util.Objects;
 
 class Cluster {
     @Nonnull
-    private final ClusterInfo clusterInfo;
+    private final ClusterMetadata clusterMetadata;
     @Nonnull
     private final Transformed<RealVector> centroid;
     @Nonnull
-    private final List<VectorReference> vectorEntries;
+    private final List<VectorReference> vectorReferences;
 
-    public Cluster(@Nonnull final ClusterInfo clusterInfo, @Nonnull final Transformed<RealVector> centroid,
-                   @Nonnull final List<VectorReference> vectorEntries) {
-        this.clusterInfo = clusterInfo;
+    public Cluster(@Nonnull final ClusterMetadata clusterMetadata, @Nonnull final Transformed<RealVector> centroid,
+                   @Nonnull final List<VectorReference> vectorReferences) {
+        this.clusterMetadata = clusterMetadata;
         this.centroid = centroid;
-        this.vectorEntries = vectorEntries;
+        this.vectorReferences = vectorReferences;
     }
 
     @Nonnull
-    public ClusterInfo getClusterInfo() {
-        return clusterInfo;
+    public ClusterMetadata getClusterMetadata() {
+        return clusterMetadata;
     }
 
     @Nonnull
@@ -53,8 +53,8 @@ class Cluster {
     }
 
     @Nonnull
-    public List<VectorReference> getVectorEntries() {
-        return vectorEntries;
+    public List<VectorReference> getVectorReferences() {
+        return vectorReferences;
     }
 
     @Override
@@ -63,13 +63,13 @@ class Cluster {
             return false;
         }
         final Cluster cluster = (Cluster)o;
-        return Objects.equals(getClusterInfo(), cluster.getClusterInfo()) &&
+        return Objects.equals(getClusterMetadata(), cluster.getClusterMetadata()) &&
                 Objects.equals(getCentroid(), cluster.getCentroid()) &&
-                Objects.equals(getVectorEntries(), cluster.getVectorEntries());
+                Objects.equals(getVectorReferences(), cluster.getVectorReferences());
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(getClusterInfo(), getCentroid(), getVectorEntries());
+        return Objects.hash(getClusterMetadata(), getCentroid(), getVectorReferences());
     }
 }

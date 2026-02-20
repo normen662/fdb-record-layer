@@ -46,9 +46,9 @@ public final class BoundedKMeans {
         // nothing
     }
 
-    public static final class Result<T> {
+    public static final class Result<C> {
         @Nonnull
-        private final List<T> clusterCentroids;
+        private final List<C> clusterCentroids;
         @Nonnull
         private final int[] clusterSizes;
         @Nonnull
@@ -57,7 +57,7 @@ public final class BoundedKMeans {
         private final double[] distances;
         private final double objective;
 
-        public Result(@Nonnull final List<T> clusterCentroids,
+        public Result(@Nonnull final List<C> clusterCentroids,
                       @Nonnull final int[] clusterSizes,
                       @Nonnull final int[] assignment,
                       @Nonnull final double[] distances,
@@ -70,7 +70,7 @@ public final class BoundedKMeans {
         }
 
         @Nonnull
-        public List<T> getClusterCentroids() {
+        public List<C> getClusterCentroids() {
             return clusterCentroids;
         }
 
@@ -121,11 +121,12 @@ public final class BoundedKMeans {
      * @param lambda strength of size balancing; 0 disables
      * @param sizePenalty penalty function; null disables
      */
-    public static <T> Result<T> fit(@Nonnull final SplittableRandom random, @Nonnull final Estimator estimator,
-                                    @Nonnull final Lens<T, RealVector> vectorLens,
-                                    @Nonnull final List<T> vectors, final int k, final int maxIterations,
-                                    final int maxRestarts, final double lambda, @Nullable final SizePenalty sizePenalty,
-                                    final boolean shuffleEachIteration) {
+    public static <V, C> Result<C> fit(@Nonnull final SplittableRandom random, @Nonnull final Estimator estimator,
+                                       @Nonnull final Lens<V, RealVector> vectorLens,
+                                       @Nonnull final Lens<C, RealVector> centroidLens,
+                                       @Nonnull final List<V> vectors, final int k, final int maxIterations,
+                                       final int maxRestarts, final double lambda, @Nullable final SizePenalty sizePenalty,
+                                       final boolean shuffleEachIteration) {
 
         Preconditions.checkArgument(k >= 2, "k must be >= 2");
         Preconditions.checkArgument(vectors.size() >= k, "vectors.size() must be >= k");
@@ -143,7 +144,7 @@ public final class BoundedKMeans {
             order[i] = i;
         }
 
-        Result<T> best = null;
+        Result<C> best = null;
 
         for (int r = 0; r <= maxRestarts; r++) {
             List<MutableDoubleRealVector> centroids = initKMeansPP(random, vectorLens, vectors, k, estimator);
@@ -151,7 +152,7 @@ public final class BoundedKMeans {
             Arrays.fill(assignment, -1);
             final int[] clusterSizes = new int[k];
 
-            for (int iter = 0; iter < maxIterations; iter++) {
+            for (int iteration = 0; iteration < maxIterations; iteration++) {
                 if (shuffleEachIteration) {
                     shuffleInPlace(random, order);
                 }
@@ -228,12 +229,12 @@ public final class BoundedKMeans {
                 objective += distances[i];
             }
 
-            final ImmutableList.Builder<T> centroidCopies = ImmutableList.builderWithExpectedSize(k);
+            final ImmutableList.Builder<C> centroidCopies = ImmutableList.builderWithExpectedSize(k);
             for (final MutableDoubleRealVector centroid : centroids) {
-                centroidCopies.add(vectorLens.wrap(centroid.toImmutable()));
+                centroidCopies.add(centroidLens.wrap(centroid.toImmutable()));
             }
 
-            final Result<T> candidate =
+            final Result<C> candidate =
                     new Result<>(centroidCopies.build(), clusterSizes.clone(), assignment.clone(),
                             distances.clone(), objective);
 
@@ -263,9 +264,9 @@ public final class BoundedKMeans {
      * with probability proportional to squared distance to nearest chosen centroid.
      */
     @Nonnull
-    private static <T> List<MutableDoubleRealVector> initKMeansPP(@Nonnull final SplittableRandom random,
-                                                                  @Nonnull final Lens<T, RealVector> vectorLens,
-                                                                  @Nonnull final List<T> vectors,
+    private static <V> List<MutableDoubleRealVector> initKMeansPP(@Nonnull final SplittableRandom random,
+                                                                  @Nonnull final Lens<V, RealVector> vectorLens,
+                                                                  @Nonnull final List<V> vectors,
                                                                   final int k,
                                                                   @Nonnull final Estimator estimator) {
         int n = vectors.size();
@@ -319,8 +320,8 @@ public final class BoundedKMeans {
      * Index of point whose minimum distance to any centroid is maximal.
      * Used to reseed empty clusters.
      */
-    private static <T> int farthestVectorIndex(@Nonnull final Lens<T, RealVector> vectorLens,
-                                               @Nonnull final List<T> vectors,
+    private static <V> int farthestVectorIndex(@Nonnull final Lens<V, RealVector> vectorLens,
+                                               @Nonnull final List<V> vectors,
                                                @Nonnull final List<MutableDoubleRealVector> centroids,
                                                @Nonnull final Estimator estimator) {
         double best = -1.0;
@@ -347,8 +348,8 @@ public final class BoundedKMeans {
     }
 
     @Nonnull
-    private static <T> RealVector getVector(@Nonnull final Lens<T, RealVector> vectorLens,
-                                            @Nonnull final List<T> vectors,
+    private static <V> RealVector getVector(@Nonnull final Lens<V, RealVector> vectorLens,
+                                            @Nonnull final List<V> vectors,
                                             final int index) {
         return vectorLens.getNonnull(vectors.get(index));
     }

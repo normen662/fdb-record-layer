@@ -150,8 +150,8 @@ public class Primitives {
     }
 
     @Nonnull
-    Subspace getClusterInfosSubspace() {
-        return getStorageAdapter().getClusterInfosSubspace();
+    Subspace getClusterMetadataSubspace() {
+        return getStorageAdapter().getClusterMetadataSubspace();
     }
 
     @Nonnull
@@ -160,8 +160,8 @@ public class Primitives {
     }
 
     @Nonnull
-    Subspace getVectorIdsSubspace() {
-        return getStorageAdapter().getVectorIdsSubspace();
+    Subspace getVectorMatadataSubspace() {
+        return getStorageAdapter().getVectorMetadataSubspace();
     }
 
     @Nonnull
@@ -281,7 +281,7 @@ public class Primitives {
     @Nonnull
     CompletableFuture<VectorMetadata> fetchVectorMetadata(@Nonnull final ReadTransaction readTransaction,
                                                           @Nonnull final Tuple primaryKey) {
-        final Subspace vectorStatesSubspace = getVectorIdsSubspace();
+        final Subspace vectorStatesSubspace = getVectorMatadataSubspace();
         final byte[] key = vectorStatesSubspace.pack(primaryKey);
 
         return readTransaction.get(key)
@@ -296,7 +296,7 @@ public class Primitives {
 
     void writeVectorMetadata(@Nonnull final Transaction transaction,
                              @Nonnull final VectorMetadata vectorMetadata) {
-        final Subspace vectorIdsSubspace = getVectorIdsSubspace();
+        final Subspace vectorIdsSubspace = getVectorMatadataSubspace();
         final byte[] key = vectorIdsSubspace.pack(vectorMetadata.getPrimaryKey());
         final byte[] value = StorageAdapter.valueTupleFromVectorMetadata(vectorMetadata).pack();
 
@@ -314,12 +314,12 @@ public class Primitives {
     }
 
     @Nonnull
-    CompletableFuture<ClusterInfoWithDistance> fetchClusterInfoWithDistance(@Nonnull final ReadTransaction readTransaction,
-                                                                            @Nonnull final UUID clusterId,
-                                                                            @Nonnull final Transformed<RealVector> centroid,
-                                                                            final double distance) {
-        return fetchClusterInfo(readTransaction, clusterId)
-                .thenApply(clusterState -> new ClusterInfoWithDistance(clusterState, centroid, distance));
+    CompletableFuture<ClusterMetadataWithDistance> fetchClusterMetadataWithDistance(@Nonnull final ReadTransaction readTransaction,
+                                                                                    @Nonnull final UUID clusterId,
+                                                                                    @Nonnull final Transformed<RealVector> centroid,
+                                                                                    final double distance) {
+        return fetchClusterMetadata(readTransaction, clusterId)
+                .thenApply(clusterState -> new ClusterMetadataWithDistance(clusterState, centroid, distance));
     }
 
     @Nonnull
@@ -336,31 +336,31 @@ public class Primitives {
                                             @Nonnull final StorageTransform storageTransform,
                                             @Nonnull final UUID clusterId,
                                             @Nonnull final Transformed<RealVector> centroid) {
-        return fetchClusterInfo(readTransaction, clusterId)
+        return fetchClusterMetadata(readTransaction, clusterId)
                 .thenCombine(fetchVectorReferences(readTransaction, storageTransform, clusterId),
-                        (clusterInfo, vectorReferences) ->
-                                new Cluster(clusterInfo, centroid, vectorReferences));
+                        (clusterMetadata, vectorReferences) ->
+                                new Cluster(clusterMetadata, centroid, vectorReferences));
     }
 
     @Nonnull
-    CompletableFuture<ClusterInfo> fetchClusterInfo(@Nonnull final ReadTransaction readTransaction,
-                                                    @Nonnull final UUID clusterId) {
-        final byte[] key = getClusterInfosSubspace().pack(Tuple.from(clusterId));
+    CompletableFuture<ClusterMetadata> fetchClusterMetadata(@Nonnull final ReadTransaction readTransaction,
+                                                            @Nonnull final UUID clusterId) {
+        final byte[] key = getClusterMetadataSubspace().pack(Tuple.from(clusterId));
         return readTransaction.get(key)
                 .thenApply(valueBytes -> {
                     getOnReadListener().onKeyValueRead(-1, key, valueBytes);
                     if (valueBytes == null) {
                         return null;
                     }
-                    return StorageAdapter.clusterInfoFromTuple(Tuple.fromBytes(valueBytes));
+                    return StorageAdapter.clusterMetadataFromTuple(Tuple.fromBytes(valueBytes));
                 });
     }
 
-    void writeClusterInfo(@Nonnull final Transaction transaction,
-                          @Nonnull final ClusterInfo clusterInfo) {
-        final Subspace clusterInfosSubspace = getClusterInfosSubspace();
-        final byte[] key = clusterInfosSubspace.pack(Tuple.from(clusterInfo.getId()));
-        final byte[] value = StorageAdapter.valueTupleFromClusterInfo(clusterInfo).pack();
+    void writeClusterMetadata(@Nonnull final Transaction transaction,
+                              @Nonnull final ClusterMetadata clusterMetadata) {
+        final Subspace clusterMetadataSubspace = getClusterMetadataSubspace();
+        final byte[] key = clusterMetadataSubspace.pack(Tuple.from(clusterMetadata.getId()));
+        final byte[] value = StorageAdapter.valueTupleFromClusterMetadata(clusterMetadata).pack();
 
         getOnWriteListener().onKeyValueWritten(-1, key, value);
         transaction.set(key, value);

@@ -20,17 +20,21 @@
 
 package com.apple.foundationdb.kmeans;
 
+import com.apple.foundationdb.async.common.RandomHelpers;
 import com.apple.foundationdb.linear.DoubleRealVector;
 import com.apple.foundationdb.linear.Estimator;
 import com.apple.foundationdb.linear.Metric;
 import com.apple.foundationdb.linear.MutableDoubleRealVector;
 import com.apple.foundationdb.linear.RealVector;
+import com.apple.foundationdb.linear.RealVectorTest;
 import com.apple.foundationdb.util.Lens;
 import com.apple.test.RandomSeedSource;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
 import java.io.BufferedWriter;
@@ -46,6 +50,7 @@ import java.util.SplittableRandom;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class BoundedKMeansTest {
+    private static final Logger logger = LoggerFactory.getLogger(BoundedKMeansTest.class);
 
     @TempDir
     Path tempDir;
@@ -65,26 +70,26 @@ class BoundedKMeansTest {
         final RealVector m0 = new DoubleRealVector(new double[] {-5.0, 0.0});
         final RealVector m1 = new DoubleRealVector(new double[] {+5.0, 0.0});
 
-        int nPer = 300;
-        double sigma = 0.9;
+        int nPer = 3000;
+        double sigma = 3.0d;
 
-        List<RealVector> pts = Lists.newArrayListWithCapacity(2 * nPer);
+        List<RealVector> vectors = Lists.newArrayListWithCapacity(2 * nPer);
         for (int i = 0; i < nPer; i++) {
-            pts.add(gaussian2D(rnd, m0, sigma));
+            vectors.add(gaussian2D(rnd, m0, sigma));
         }
         for (int i = 0; i < nPer; i++) {
-            pts.add(gaussian2D(rnd, m1, sigma));
+            vectors.add(gaussian2D(rnd, m1, sigma));
         }
 
         // Shuffle so ordering doesn't accidentally help/hurt (also exercises shuffle path).
-        Collections.shuffle(pts, new Random(rnd.nextLong()));
+        Collections.shuffle(vectors, new Random(rnd.nextLong()));
 
         final Estimator estimator = Estimator.ofMetric(Metric.EUCLIDEAN_METRIC);
         final BoundedKMeans.Result<RealVector> res = BoundedKMeans.fit(rnd, estimator,
-                Lens.identity(), pts, 2, 15, 3, 0.0, null,
-                true);
+                Lens.identity(), Lens.identity(), vectors, 2, 15, 3, 0.0,
+                null, true);
 
-        assertThat(res.getAssignment().length).isEqualTo(pts.size());
+        assertThat(res.getAssignment().length).isEqualTo(vectors.size());
         assertThat(res.getClusterCentroids().size()).isEqualTo(2);
         assertThat(res.getClusterSizes().length).isEqualTo(2);
 
@@ -110,11 +115,11 @@ class BoundedKMeansTest {
         assertThat(bestMatch).isLessThan(2.0d);
 
         // Objective sanity: should be much better than a trivial baseline that uses same centroid twice.
-        double baseline = baselineObjectiveSameCentroidTwice(pts);
+        double baseline = baselineObjectiveSameCentroidTwice(vectors);
         assertThat(res.getObjective()).isLessThan(baseline * 0.65);
 
 //        System.out.println(tempDir);
-//        dumpVectors(tempDir, "vectors", pts);
+//        dumpVectors(tempDir, "vectors", vectors);
 //        dumpVectors(tempDir, "centroids", res.getClusterCentroids());
     }
 
@@ -135,26 +140,28 @@ class BoundedKMeansTest {
                 new DoubleRealVector(new double[] { +6.0d, -2.0d })
         );
 
-        final int nPer = 240; // total 720 points
-        final double sigma = 1.0;
+        final int nPer = 2000;
+        final double sigma = 3.0;
 
-        List<RealVector> pts = Lists.newArrayListWithCapacity(3 * nPer);
+        List<RealVector> vectors = Lists.newArrayListWithCapacity(3 * nPer);
         for (final RealVector m : means) {
             for (int i = 0; i < nPer; i++) {
-                pts.add(gaussian2D(rnd, m, sigma));
+                vectors.add(gaussian2D(rnd, m, sigma));
             }
         }
-        Collections.shuffle(pts, new Random(rnd.nextLong()));
+        Collections.shuffle(vectors, new Random(rnd.nextLong()));
 
+        final int k = 3;
         final Estimator estimator = Estimator.ofMetric(Metric.EUCLIDEAN_METRIC);
         final BoundedKMeans.Result<RealVector> res = BoundedKMeans.fit(rnd, estimator,
-                Lens.identity(), pts, 3, 20, 3, 0.08, BoundedKMeans.overflowQuadraticPenalty(),
+                Lens.identity(), Lens.identity(), vectors, k, 20, 3, 0.08,
+                BoundedKMeans.overflowQuadraticPenalty(),
                 true);
 
-        assertThat(res.getClusterCentroids().size()).isEqualTo(3);
-        assertThat(res.getClusterSizes().length).isEqualTo(3);
+        assertThat(res.getClusterCentroids().size()).isEqualTo(k);
+        assertThat(res.getClusterSizes().length).isEqualTo(k);
 
-        for (int c = 0; c < 3; c++) {
+        for (int c = 0; c < k; c++) {
             assertThat(res.getClusterSizes()[c]).isGreaterThan(0);
         }
 
@@ -165,8 +172,70 @@ class BoundedKMeansTest {
         assertThat(max).isLessThanOrEqualTo(min * 2);
 
         System.out.println(tempDir);
-        dumpVectors(tempDir, "vectors", pts);
+        dumpVectors(tempDir, "vectors", vectors);
         dumpVectors(tempDir, "centroids", res.getClusterCentroids());
+    }
+
+    @ParameterizedTest
+    @RandomSeedSource({0x0fdbL, 0x5ca1eL, 123456L, 78910L, 1123581321345589L})
+    void threeBlobsWithSoftBalancingProducesReasonableSizesHighNumDimensions(final long seed) {
+        final Random random = new Random(seed);
+        final SplittableRandom splittableRandom = new SplittableRandom(seed);
+
+        final int numDimensions = 512;
+
+        final List<RealVector> means = ImmutableList.of(
+                RealVectorTest.createRandomDoubleVector(random, numDimensions),
+                RealVectorTest.createRandomDoubleVector(random, numDimensions),
+                RealVectorTest.createRandomDoubleVector(random, numDimensions)
+        );
+
+        final int nPer = 2000;
+        final double sigma = 3.0;
+
+        List<RealVector> vectors = Lists.newArrayListWithCapacity(3 * nPer);
+        for (final RealVector m : means) {
+            for (int i = 0; i < nPer; i++) {
+                vectors.add(gaussianND(splittableRandom, m, sigma));
+            }
+        }
+        Collections.shuffle(vectors, random);
+
+        final int k = 3;
+        final Estimator estimator = Estimator.ofMetric(Metric.EUCLIDEAN_METRIC);
+        final BoundedKMeans.Result<RealVector> res = BoundedKMeans.fit(splittableRandom, estimator,
+                Lens.identity(), Lens.identity(), vectors, k, 20, 3, 0.08,
+                BoundedKMeans.overflowQuadraticPenalty(), true);
+
+        assertThat(res.getClusterCentroids().size()).isEqualTo(k);
+        assertThat(res.getClusterSizes().length).isEqualTo(k);
+
+        for (int c = 0; c < k; c++) {
+            assertThat(res.getClusterSizes()[c]).isGreaterThan(0);
+        }
+
+        // With equal generating sizes, results should be roughly balanced.
+        // Allow some slack because k-means is not constrained and data is random.
+        int min = Arrays.stream(res.getClusterSizes()).min().orElseThrow();
+        int max = Arrays.stream(res.getClusterSizes()).max().orElseThrow();
+        assertThat(max).isLessThanOrEqualTo(min * 2);
+
+        logger.info("cluster sizes = {}", res.getClusterSizes());
+    }
+
+    @Nonnull
+    static RealVector gaussianND(@Nonnull final SplittableRandom random,
+                                 @Nonnull final RealVector mean,
+                                 double sigma) {
+        final RandomHelpers.GaussianSampler sampler = new RandomHelpers.GaussianSampler(random);
+        final int d = mean.getNumDimensions();
+        double[] v = new double[d];
+        for (int i = 0; i < d; i++) {
+            double z = sampler.nextGaussian();  // N(0,1)
+            v[i] = mean.getComponent(i) + sigma * z;
+        }
+
+        return new DoubleRealVector(v);
     }
 
     @Nonnull

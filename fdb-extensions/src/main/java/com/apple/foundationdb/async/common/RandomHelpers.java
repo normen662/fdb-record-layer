@@ -63,4 +63,39 @@ public final class RandomHelpers {
         x = x ^ (x >>> 31);
         return x;
     }
+
+    public static final class GaussianSampler {
+
+        private final SplittableRandom random;
+        // Cached second sample (because each call produces 2 normals)
+        private boolean hasSpare = false;
+        private double spare;
+
+        public GaussianSampler(final SplittableRandom random) {
+            this.random = random;
+        }
+
+        public double nextGaussian() {
+            if (hasSpare) {
+                hasSpare = false;
+                return spare;
+            }
+
+            double u;
+            double v;
+            double s;
+            do {
+                u = 2.0 * random.nextDouble() - 1.0; // [-1, 1]
+                v = 2.0 * random.nextDouble() - 1.0; // [-1, 1]
+                s = u * u + v * v;
+            } while (s >= 1.0 || s == 0.0);
+
+            double mul = Math.sqrt(-2.0 * Math.log(s) / s);
+
+            spare = v * mul;
+            hasSpare = true;
+
+            return u * mul;
+        }
+    }
 }
