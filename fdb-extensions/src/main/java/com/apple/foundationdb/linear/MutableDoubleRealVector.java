@@ -68,6 +68,12 @@ public class MutableDoubleRealVector extends DoubleRealVector {
     }
 
     @Nonnull
+    @Override
+    public MutableDoubleRealVector toMutable() {
+        return this;
+    }
+
+    @Nonnull
     public DoubleRealVector toImmutable() {
         return new DoubleRealVector(getData().clone());
     }
@@ -93,42 +99,42 @@ public class MutableDoubleRealVector extends DoubleRealVector {
 
     @Nonnull
     @Override
-    public RealVector normalize() {
+    public MutableDoubleRealVector normalize() {
         RealVectorPrimitives.normalizeInto(this, getData());
         return this;
     }
 
     @Nonnull
     @Override
-    public RealVector add(@Nonnull final RealVector other) {
+    public MutableDoubleRealVector add(@Nonnull final RealVector other) {
         RealVectorPrimitives.addInto(this, other, getData());
         return this;
     }
 
     @Nonnull
     @Override
-    public RealVector add(final double scalar) {
+    public MutableDoubleRealVector add(final double scalar) {
         RealVectorPrimitives.addInto(this, scalar, getData());
         return this;
     }
 
     @Nonnull
     @Override
-    public RealVector subtract(@Nonnull final RealVector other) {
+    public MutableDoubleRealVector subtract(@Nonnull final RealVector other) {
         RealVectorPrimitives.subtractInto(this, other, getData());
         return this;
     }
 
     @Nonnull
     @Override
-    public RealVector subtract(final double scalar) {
+    public MutableDoubleRealVector subtract(final double scalar) {
         RealVectorPrimitives.subtractInto(this, scalar, getData());
         return this;
     }
 
     @Nonnull
     @Override
-    public RealVector multiply(final double scalar) {
+    public MutableDoubleRealVector multiply(final double scalar) {
         RealVectorPrimitives.multiplyInto(this, scalar, getData());
         return this;
     }

@@ -56,4 +56,21 @@ public interface Lens<C, A> {
         }
         return set(c, newA);
     }
+
+    @Nonnull
+    static <T> Lens<T, T> identity() {
+        return new Lens<>() {
+            @Nonnull
+            @Override
+            public T get(@Nonnull final T t) {
+                return t;
+            }
+
+            @Nonnull
+            @Override
+            public T set(@Nullable final T t, @Nullable final T t2) {
+                return Objects.requireNonNull(t2);
+            }
+        };
+    }
 }

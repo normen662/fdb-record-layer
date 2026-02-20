@@ -47,31 +47,46 @@ public final class BoundedKMeans {
     }
 
     public static final class Result<T> {
-        public final List<T> clusterCentroids;
-        public final int[] clusterSizes;
-        public final int[] assignment;
-        public final double objective;
+        @Nonnull
+        private final List<T> clusterCentroids;
+        @Nonnull
+        private final int[] clusterSizes;
+        @Nonnull
+        private final int[] assignment;
+        @Nonnull
+        private final double[] distances;
+        private final double objective;
 
         public Result(@Nonnull final List<T> clusterCentroids,
                       @Nonnull final int[] clusterSizes,
                       @Nonnull final int[] assignment,
+                      @Nonnull final double[] distances,
                       final double objective) {
             this.clusterCentroids = ImmutableList.copyOf(clusterCentroids);
             this.assignment = assignment;
             this.clusterSizes = clusterSizes;
+            this.distances = distances;
             this.objective = objective;
         }
 
+        @Nonnull
         public List<T> getClusterCentroids() {
             return clusterCentroids;
         }
 
+        @Nonnull
         public int[] getClusterSizes() {
             return clusterSizes;
         }
 
+        @Nonnull
         public int[] getAssignment() {
             return assignment;
+        }
+
+        @Nonnull
+        public double[] getDistances() {
+            return distances;
         }
 
         public double getObjective() {
@@ -206,9 +221,11 @@ public final class BoundedKMeans {
             }
 
             // Objective: sum of distances (NOT including size penalty) to compare maxRestarts fairly.
+            final double[] distances = new double[n];
             double objective = 0.0;
             for (int i = 0; i < n; i++) {
-                objective += estimator.distance(getVector(vectorLens, vectors, i), centroids.get(assignment[i]));
+                distances[i] = estimator.distance(getVector(vectorLens, vectors, i), centroids.get(assignment[i]));
+                objective += distances[i];
             }
 
             final ImmutableList.Builder<T> centroidCopies = ImmutableList.builderWithExpectedSize(k);
@@ -217,7 +234,8 @@ public final class BoundedKMeans {
             }
 
             final Result<T> candidate =
-                    new Result<>(centroidCopies.build(), clusterSizes.clone(), assignment.clone(), objective);
+                    new Result<>(centroidCopies.build(), clusterSizes.clone(), assignment.clone(),
+                            distances.clone(), objective);
 
             if (best == null || candidate.getObjective() < best.getObjective()) {
                 best = candidate;

@@ -49,4 +49,15 @@ public interface Estimator {
      */
     double distance(@Nonnull RealVector query,
                     @Nonnull RealVector storedVector);
+
+    @Nonnull
+    static Estimator ofMetric(@Nonnull final Metric metric) {
+        return (vector1, vector2) -> {
+            final double distance = metric.distance(vector1, vector2);
+            if (!Double.isFinite(distance)) {
+                throw new IllegalArgumentException("vector has an L2 norm of infinite, not a number, or 0");
+            }
+            return distance;
+        };
+    }
 }
