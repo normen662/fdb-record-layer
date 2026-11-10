@@ -23,6 +23,7 @@ plugins {
     alias(libs.plugins.jmh)
 }
 
+ext.antlrPackageName = 'com.apple.foundationdb.relational.generated'
 apply from: rootProject.file('gradle/antlr.gradle')
 apply from: rootProject.file('gradle/proto.gradle')
 apply from: rootProject.file('gradle/publishing.gradle')

@@ -86,6 +86,7 @@ run/
 
 # Token files required for parsing Antlr files correctly in the IDE
 fdb-relational-core/src/main/antlr/*.tokens
+fdb-record-layer-core/src/main/antlr/*.tokens
 
 # Output during CI build processes
 /changed_files.txt

@@ -18,11 +18,19 @@
  * limitations under the License.
  */
 
+// Every project that applies this script chooses the package of its generated parsers by setting
+// `ext.antlrPackageName` first. The package must contain a `generated` segment: checkstyle, PMD, and SpotBugs skip
+// generated code by that path segment (see gradle/check.gradle and gradle/codequality/spotbugs_exclude.xml).
+if (!project.ext.has('antlrPackageName')) {
+    throw new GradleException("${project.path} must set ext.antlrPackageName before applying gradle/antlr.gradle")
+}
+final String antlrPackageName = project.ext.antlrPackageName
+
 apply plugin: 'antlr'
 
 generateGrammarSource {
     outputDirectory = layout.buildDirectory.dir('generated-src/antlr/main').get().asFile
-    packageName = 'com.apple.foundationdb.relational.generated'
+    packageName = antlrPackageName
     maxHeapSize = "128m"
     arguments += ['-listener','-visitor', '-long-messages']
 }
@@ -35,7 +43,7 @@ sourceSets.configureEach {
 // Copy the generated `*.tokens` files into `src/main/antlr/` so other grammars can reference them as a vocabulary.
 // For configuration cache compatibility, the directory providers are captured at configuration time and the copy uses
 // an injected `FileSystemOperations` service rather than `Project.copy()`.
-def antlrTokensSource = layout.buildDirectory.dir('generated-src/antlr/main/com/apple/foundationdb/relational/generated/')
+def antlrTokensSource = layout.buildDirectory.dir("generated-src/antlr/main/${antlrPackageName.replace('.', '/')}/")
 def antlrTokensDest = layout.projectDirectory.dir('src/main/antlr')
 
 abstract class AntlrTokenCopier {

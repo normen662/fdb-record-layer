@@ -27,6 +27,9 @@ plugins {
     alias(libs.plugins.shadow)
 }
 apply from: rootProject.file('gradle/proto.gradle')
+// The FRL-IR grammars in src/main/antlr are compiled into this package (see gradle/antlr.gradle).
+ext.antlrPackageName = 'com.apple.foundationdb.record.ir.generated'
+apply from: rootProject.file('gradle/antlr.gradle')
 // Publish a jar of the test fixtures (see gradle/publishing.gradle)
 ext.publishTestFixturesJar = true
 apply from: rootProject.file('gradle/publishing.gradle')
@@ -41,6 +44,9 @@ dependencies {
     compileOnly(libs.jsr305)
     compileOnly(libs.autoService)
     annotationProcessor(libs.autoService)
+    // The ANTLR tool generates the FRL-IR parsers at build time; the generated code needs only the runtime.
+    antlr(libs.antlr)
+    implementation(libs.antlr.runtime)
 
     testImplementation project(':fdb-test-utils')
     testImplementation(libs.bundles.test.impl)
@@ -70,6 +76,13 @@ dependencies {
     testFixturesImplementation(libs.protobuf.util)
     testFixturesCompileOnly(libs.jsr305)
     testFixturesAnnotationProcessor(libs.autoService)
+}
+
+// Gradle's ANTLR plugin makes `api` extend the `antlr` configuration (AntlrPlugin in the Gradle distribution), which
+// would publish the ANTLR tool and its transitive dependencies as compile dependencies of this library. Generated
+// parsers need only antlr4-runtime, which is declared as an implementation dependency above.
+configurations.named('api') { Configuration api ->
+    api.setExtendsFrom(api.getExtendsFrom().findAll { it.name != 'antlr' })
 }
 
 sourceSets {

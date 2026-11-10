@@ -26,6 +26,7 @@ plugins {
 }
 
 apply from: rootProject.file('gradle/publishing.gradle')
+ext.antlrPackageName = 'com.apple.foundationdb.relational.generated'
 apply from: rootProject.file('gradle/antlr.gradle')
 
 // Don't build a zip assembly, just the tar one.

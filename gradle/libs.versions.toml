@@ -74,6 +74,7 @@ spotbugs = "4.10.4"
 # Main dependencies
 
 antlr = { module = "org.antlr:antlr4", version.ref = "antlr" }
+antlr-runtime = { module = "org.antlr:antlr4-runtime", version.ref = "antlr" }
 autoService = { module = "com.google.auto.service:auto-service", version.ref = "autoService" }
 autoService-development = { module = "com.google.auto.service:auto-service", version.ref = "autoService-development" }
 fdbJava = { module = "org.foundationdb:fdb-java", version.ref = "fdb" }
