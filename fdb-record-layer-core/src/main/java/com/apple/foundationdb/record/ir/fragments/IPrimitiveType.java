@@ -18,9 +18,10 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.types;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Suppliers;
 
 import javax.annotation.Nonnull;
@@ -42,11 +43,12 @@ public final class IPrimitiveType implements IType {
      * Creates a primitive type.
      *
      * @param kind which primitive type this is
-     * @param isNullable whether values of this type can be null
+     * @param isNullable whether values of this type can be null; {@code void} cannot be nullable, as it has no values
      */
     public IPrimitiveType(@Nonnull final Kind kind, final boolean isNullable) {
         this.kind = Objects.requireNonNull(kind);
         this.isNullable = isNullable;
+        Preconditions.checkArgument(kind != Kind.VOID || !isNullable, "void cannot be nullable");
     }
 
     /**
@@ -60,6 +62,11 @@ public final class IPrimitiveType implements IType {
     @Override
     public boolean isNullable() {
         return isNullable;
+    }
+
+    @Override
+    public boolean isVoid() {
+        return kind == Kind.VOID;
     }
 
     @Nonnull

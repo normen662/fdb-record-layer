@@ -20,15 +20,15 @@
 
 package com.apple.foundationdb.record.ir;
 
+import com.apple.foundationdb.record.ir.fragments.IArrayType;
+import com.apple.foundationdb.record.ir.fragments.IEnumType;
+import com.apple.foundationdb.record.ir.fragments.IFunctionType;
+import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
+import com.apple.foundationdb.record.ir.fragments.IRecordType;
+import com.apple.foundationdb.record.ir.fragments.IStreamType;
+import com.apple.foundationdb.record.ir.fragments.IType;
+import com.apple.foundationdb.record.ir.fragments.IVectorType;
 import com.apple.foundationdb.record.ir.generated.FrlIrLexer;
-import com.apple.foundationdb.record.ir.types.IArrayType;
-import com.apple.foundationdb.record.ir.types.IEnumType;
-import com.apple.foundationdb.record.ir.types.IFunctionType;
-import com.apple.foundationdb.record.ir.types.IPrimitiveType;
-import com.apple.foundationdb.record.ir.types.IRecordType;
-import com.apple.foundationdb.record.ir.types.IStreamType;
-import com.apple.foundationdb.record.ir.types.IType;
-import com.apple.foundationdb.record.ir.types.IVectorType;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -230,6 +230,9 @@ class FrlIrTypeParsingTest {
             "enum<>", "enum<RED>", "enum<RED = x>", "enum E<RED = 0>",
             // malformed functions
             "function<>", "(int) ->", "(int,) -> int", "int -> int",
+            // void is only a result type, and it is never nullable
+            "void?", "()?", "[void]", "array<()>", "record<void>", "record<x: void>", "stream<void>",
+            "(void) -> int", "(int, ()) -> int", "function<void, int>",
             // a block comment must be closed
             "/* not closed int",
     })

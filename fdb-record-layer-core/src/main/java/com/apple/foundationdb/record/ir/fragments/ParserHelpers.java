@@ -18,7 +18,7 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.types;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
 import com.google.common.base.Preconditions;
@@ -30,7 +30,7 @@ import java.util.regex.Pattern;
 /**
  * Helpers for the spelling of FRL-IR text that both reading and writing it need. Keeping both directions here keeps
  * them consistent, so that text written from a type reads back as an equal type. The helpers work on strings only, so
- * the types can use them without depending on the parser.
+ * the fragments can use them without depending on the parser.
  *
  * <p>As in Swift, a name, such as the name of a record field or an enum value, is written as is if it is an identifier
  * that is not a keyword, and between backticks otherwise. The keywords here must be those of {@code FrlIrLexer.g4}: a
@@ -43,7 +43,8 @@ public final class ParserHelpers {
     @Nonnull
     private static final ImmutableSet<String> KEYWORDS = ImmutableSet.of(
             "boolean", "int", "bigint", "half", "float", "double", "string", "bytes", "uuid", "version", "void",
-            "record", "array", "stream", "vector", "enum", "function", "func", "in");
+            "record", "array", "stream", "vector", "enum", "function", "func", "extern", "in", "let", "true", "false",
+            "nil");
 
     @Nonnull
     private static final Pattern IDENTIFIER = Pattern.compile("[a-zA-Z_][a-zA-Z_0-9]*");

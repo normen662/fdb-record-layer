@@ -22,10 +22,10 @@ package com.apple.foundationdb.record.ir.cascades;
 
 import com.apple.foundationdb.record.RecordCoreException;
 import com.apple.foundationdb.record.TestRecords1Proto;
-import com.apple.foundationdb.record.ir.types.IFunctionType;
-import com.apple.foundationdb.record.ir.types.IGenericType;
-import com.apple.foundationdb.record.ir.types.IPrimitiveType;
-import com.apple.foundationdb.record.ir.types.IType;
+import com.apple.foundationdb.record.ir.fragments.IFunctionType;
+import com.apple.foundationdb.record.ir.fragments.IGenericType;
+import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
+import com.apple.foundationdb.record.ir.fragments.IType;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.params.ParameterizedTest;

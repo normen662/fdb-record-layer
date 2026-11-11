@@ -53,9 +53,16 @@ VECTOR   : 'vector';
 ENUM     : 'enum';
 FUNCTION : 'function';
 
-// Definitions.
-FUNC : 'func';
-IN   : 'in';
+// Definitions and statements. `extern` declares a function that the runtime provides.
+FUNC   : 'func';
+EXTERN : 'extern';
+IN     : 'in';
+LET    : 'let';
+
+// Literals that are keywords. `nil` is the null of every nullable type, as in Swift.
+TRUE  : 'true';
+FALSE : 'false';
+NIL   : 'nil';
 
 LT       : '<';
 GT       : '>';
@@ -74,6 +81,24 @@ ARROW    : '->';
 MINUS    : '-';
 
 INTEGER_LITERAL : [0-9]+;
+
+// As in Swift, a floating-point literal has digits on both sides of its point, an exponent, or both: `1.5`, `2e10`,
+// `1.5e-3`.
+FLOATING_LITERAL
+    : [0-9]+ '.' [0-9]+ EXPONENT?
+    | [0-9]+ EXPONENT
+    ;
+
+fragment EXPONENT : [eE] [+-]? [0-9]+;
+
+// A string between double quotes, on one line, with the escape sequences of Swift: `\0`, `\\`, `\t`, `\n`, `\r`, `\"`,
+// `\'`, and `\u{1F600}` for a Unicode scalar of one to eight hexadecimal digits.
+STRING_LITERAL : '"' (~["\\\r\n] | ESCAPE_SEQUENCE)* '"';
+
+fragment ESCAPE_SEQUENCE
+    : '\\' [0\\tnr"']
+    | '\\u{' [0-9a-fA-F]+ '}'
+    ;
 
 IDENTIFIER : [a-zA-Z_] [a-zA-Z_0-9]*;
 

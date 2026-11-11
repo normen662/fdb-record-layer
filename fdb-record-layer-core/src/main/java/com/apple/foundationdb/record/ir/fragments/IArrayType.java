@@ -18,9 +18,10 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.types;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Suppliers;
 
 import javax.annotation.Nonnull;
@@ -43,11 +44,12 @@ public final class IArrayType implements IType {
      * Creates an array type.
      *
      * @param isNullable whether values of this type can be null
-     * @param elementType the type of the elements
+     * @param elementType the type of the elements, which cannot be {@code void}
      */
     public IArrayType(final boolean isNullable, @Nonnull final IType elementType) {
         this.isNullable = isNullable;
         this.elementType = Objects.requireNonNull(elementType);
+        Preconditions.checkArgument(!elementType.isVoid(), "void is only a result type");
     }
 
     @Override

@@ -20,11 +20,12 @@
 
 package com.apple.foundationdb.record.ir;
 
+import com.apple.foundationdb.record.ir.fragments.IFunctionDeclaration;
+import com.apple.foundationdb.record.ir.fragments.IFunctionType;
+import com.apple.foundationdb.record.ir.fragments.IProgram;
+import com.apple.foundationdb.record.ir.fragments.IType;
 import com.apple.foundationdb.record.ir.generated.FrlIrLexer;
 import com.apple.foundationdb.record.ir.generated.FrlIrParser;
-import com.apple.foundationdb.record.ir.program.IFunctionDefinition;
-import com.apple.foundationdb.record.ir.program.IProgram;
-import com.apple.foundationdb.record.ir.types.IType;
 import com.google.common.collect.ImmutableSet;
 import org.antlr.v4.runtime.BaseErrorListener;
 import org.antlr.v4.runtime.CharStreams;
@@ -76,8 +77,9 @@ public final class FrlIrParsing {
 
     /**
      * Parses a single type in the scope of the given type parameters. A program is the only entry point of the grammar,
-     * so the type is parsed as the type of the parameter of a function with these type parameters. The type stands on
-     * lines of its own, so that a line comment at its end does not swallow the rest of the function.
+     * so the type is parsed as the result type of the function type of a parameter of a declared function with these
+     * type parameters: a result type, because that is the one place where {@code void} is a type. The type stands on
+     * lines of its own, so that a line comment at its end does not swallow the rest of the declaration.
      *
      * @param text the type in FRL-IR syntax
      * @param typeParameters the names of the type parameters in scope
@@ -89,8 +91,14 @@ public final class FrlIrParsing {
         final String typeParameterClause = typeParameters.isEmpty()
                 ? ""
                 : typeParameters.stream().collect(Collectors.joining(", ", "<", ">"));
-        final IProgram program = parseProgram("func f" + typeParameterClause + "(x:\n" + text + "\n) { }");
-        return ((IFunctionDefinition)program.statements().get(0)).parameters().get(0).type();
+        final IProgram program = parseProgram("extern func f" + typeParameterClause + "(x: () ->\n" + text + "\n)");
+        final IFunctionDeclaration declaration = (IFunctionDeclaration)program.statements().get(0);
+        final IFunctionType wrapper = (IFunctionType)declaration.parameters().get(0).type();
+        // a `?` that the type cannot take, as in `int??` or `stream<int>?`, makes the wrapping function type nullable
+        if (wrapper.isNullable()) {
+            throw new IllegalArgumentException("the text is not a type");
+        }
+        return wrapper.resultType();
     }
 
     /**

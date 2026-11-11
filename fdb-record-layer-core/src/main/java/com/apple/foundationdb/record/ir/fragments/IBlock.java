@@ -18,21 +18,22 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.program;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
-import com.apple.foundationdb.record.ir.fragment.IFragment;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nonnull;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
- * The body of a function definition or a closure: a sequence of statements, separated by line breaks or semicolons. This
- * is a placeholder that carries the statements; what a block means is yet to be designed.
+ * The body of a function definition or a closure: a sequence of statements, separated by line breaks or semicolons. The
+ * value of a block is the value of its last statement if that statement is an expression, as in a Kotlin lambda; a
+ * block whose last statement is not an expression, or that has no statements, has no value.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IBlock implements IFragment {
@@ -56,6 +57,28 @@ public final class IBlock implements IFragment {
     @Nonnull
     public List<IStatement> statements() {
         return statements;
+    }
+
+    /**
+     * {@return the expression whose value is the value of this block: its last statement, if that is an expression}
+     */
+    @Nonnull
+    public Optional<IExpression> value() {
+        return statements.isEmpty() || !(statements.get(statements.size() - 1) instanceof IExpression value)
+                ? Optional.empty()
+                : Optional.of(value);
+    }
+
+    /**
+     * Returns whether this block can implement a function or a closure of the given result type. A {@code void}
+     * function discards the value of its body, if there is one; any other function returns it, so the value must be of
+     * the result type.
+     *
+     * @param resultType the result type of the function or the closure
+     * @return {@code true} if the result type is {@code void}, or if this block has a value of that type
+     */
+    public boolean isBodyOf(@Nonnull final IType resultType) {
+        return resultType.isVoid() || value().map(IExpression::type).filter(resultType::equals).isPresent();
     }
 
     @Override

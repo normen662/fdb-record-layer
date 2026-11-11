@@ -21,42 +21,58 @@
 package com.apple.foundationdb.record.ir;
 
 import com.apple.foundationdb.annotation.API;
-import com.apple.foundationdb.record.ir.fragment.IFragment;
+import com.apple.foundationdb.half.Half;
+import com.apple.foundationdb.record.ir.fragments.IArrayType;
+import com.apple.foundationdb.record.ir.fragments.IAssignment;
+import com.apple.foundationdb.record.ir.fragments.IBlock;
+import com.apple.foundationdb.record.ir.fragments.IClosure;
+import com.apple.foundationdb.record.ir.fragments.IEnumType;
+import com.apple.foundationdb.record.ir.fragments.IExpression;
+import com.apple.foundationdb.record.ir.fragments.IFragment;
+import com.apple.foundationdb.record.ir.fragments.IFunctionCall;
+import com.apple.foundationdb.record.ir.fragments.IFunctionDeclaration;
+import com.apple.foundationdb.record.ir.fragments.IFunctionDefinition;
+import com.apple.foundationdb.record.ir.fragments.IFunctionReference;
+import com.apple.foundationdb.record.ir.fragments.IFunctionType;
+import com.apple.foundationdb.record.ir.fragments.IGenericType;
+import com.apple.foundationdb.record.ir.fragments.ILiteral;
+import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
+import com.apple.foundationdb.record.ir.fragments.IProgram;
+import com.apple.foundationdb.record.ir.fragments.IRecordType;
+import com.apple.foundationdb.record.ir.fragments.IStatement;
+import com.apple.foundationdb.record.ir.fragments.IStreamType;
+import com.apple.foundationdb.record.ir.fragments.IType;
+import com.apple.foundationdb.record.ir.fragments.IVariableReference;
+import com.apple.foundationdb.record.ir.fragments.IVectorType;
+import com.apple.foundationdb.record.ir.fragments.ParserHelpers;
 import com.apple.foundationdb.record.ir.generated.FrlIrParser;
 import com.apple.foundationdb.record.ir.generated.FrlIrParserBaseVisitor;
-import com.apple.foundationdb.record.ir.program.IBlock;
-import com.apple.foundationdb.record.ir.program.IClosure;
-import com.apple.foundationdb.record.ir.program.IFunctionDefinition;
-import com.apple.foundationdb.record.ir.program.IProgram;
-import com.apple.foundationdb.record.ir.program.IStatement;
-import com.apple.foundationdb.record.ir.types.IArrayType;
-import com.apple.foundationdb.record.ir.types.IEnumType;
-import com.apple.foundationdb.record.ir.types.IFunctionType;
-import com.apple.foundationdb.record.ir.types.IGenericType;
-import com.apple.foundationdb.record.ir.types.IPrimitiveType;
-import com.apple.foundationdb.record.ir.types.IRecordType;
-import com.apple.foundationdb.record.ir.types.IStreamType;
-import com.apple.foundationdb.record.ir.types.IType;
-import com.apple.foundationdb.record.ir.types.IVectorType;
-import com.apple.foundationdb.record.ir.types.ParserHelpers;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nonnull;
-import java.util.Collection;
+import javax.annotation.Nullable;
+import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
- * Builds the fragments of an FRL-IR program from its parse tree: every visit method returns the fragment of the
- * construct it visits, an {@link IProgram} for a program, an {@link IBlock} for a block, an {@link IType} for a type,
- * and so on.
+ * Builds the fragments of an FRL-IR program from its parse tree: {@link #visitProgram} builds the {@link IProgram} of a
+ * program, and the visit methods for types build the {@link IType} that a type denotes.
  *
- * <p>The visitor keeps the {@link Scope} of the construct it is in. A function definition declares its name in the
- * enclosing scope and its type parameters in a scope of its own, a block opens a scope for what its statements declare,
- * and leaving a construct returns to the enclosing scope. A name in a type is a type only if it is a type parameter in
- * scope, so a misspelled type is an error. A visitor holds the scope of one traversal, so each parse uses a new
- * visitor.</p>
+ * <p>The visitor keeps the {@link Scope} of the construct it is in. A function definition declares its type parameters
+ * and its parameters in a scope of their own, a block opens a scope for what its statements declare, and leaving a
+ * construct returns to the enclosing scope. A name in a type is a type only if it is a type parameter in scope, so a
+ * misspelled type is an error. A visitor holds the scope of one traversal, so each parse uses a new visitor.</p>
+ *
+ * <p>Statements are typed as they are built. The visitor first infers a statement: it declares what the statement
+ * declares, and it adds the statement's equations to the {@code TypeInference} of the statement's scope. It then
+ * solves the inference and builds the fragments from the solved types. The statements of a closure join the inference
+ * of the statement that the closure is in, so they are built only once that statement is solved; every other
+ * statement, including every statement of a function body, is solved and built on its own. A statement and an
+ * expression thus produce something to build later rather than a fragment, so they are visited by visitors of their
+ * own, one method for each alternative of the grammar.</p>
  */
 @API(API.Status.EXPERIMENTAL)
 public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
@@ -71,51 +87,92 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     @Nonnull
     @Override
     public IProgram visitProgram(@Nonnull final FrlIrParser.ProgramContext ctx) {
-        return new IProgram(statements(ctx.statements()));
-    }
-
-    @Nonnull
-    @Override
-    public IBlock visitBlock(@Nonnull final FrlIrParser.BlockContext ctx) {
-        return inNewScope(ImmutableList.of(), () -> new IBlock(statements(ctx.statements())));
+        return new IProgram(statements(ctx.statements(), null).builder().get());
     }
 
     /**
-     * Builds the statements of a program or a block. Programs and blocks share the rule for their statements, and so
-     * the code that builds them.
+     * Infers the statements of a program, a block, or a closure. If the last statement is an expression, the expected
+     * type of the value of the statements is its context, and its type is the type of the value.
      */
     @Nonnull
-    private ImmutableList<IStatement> statements(@Nonnull final FrlIrParser.StatementsContext ctx) {
-        return ctx.statement()
-                .stream()
-                .map(statement -> (IStatement)visit(statement))
-                .collect(ImmutableList.toImmutableList());
+    private PendingStatements statements(@Nonnull final FrlIrParser.StatementsContext ctx,
+                                         @Nullable final TypeInference.Term expectedValue) {
+        final List<FrlIrParser.StatementContext> statementContexts = ctx.statement();
+        final ImmutableList.Builder<Supplier<IStatement>> builders = ImmutableList.builder();
+        TypeInference.Term valueType = null;
+        if (!statementContexts.isEmpty()) {
+            final int last = statementContexts.size() - 1;
+            for (final FrlIrParser.StatementContext statementContext : statementContexts.subList(0, last)) {
+                builders.add(statement(statementContext, null).builder());
+            }
+            final PendingStatement lastStatement = statement(statementContexts.get(last), expectedValue);
+            builders.add(lastStatement.builder());
+            valueType = lastStatement.valueType();
+        }
+        final ImmutableList<Supplier<IStatement>> pending = builders.build();
+        return new PendingStatements(() -> pending.stream()
+                .map(Supplier::get)
+                .collect(ImmutableList.toImmutableList()), valueType);
     }
 
     /**
-     * Builds a function definition. Its name is declared in the enclosing scope, so that its body and the statements
-     * after it see the function. Its type parameters are declared in a scope of their own, which the signature and the
-     * body share.
+     * Infers a statement. A statement of a closure joins the inference of the statement that the closure is in, which
+     * its scope carries. Any other statement gets a scope with an inference of its own, and it is inferred, solved, and
+     * built right away.
      */
     @Nonnull
-    @Override
-    public IFunctionDefinition visitFunctionDefinition(@Nonnull final FrlIrParser.FunctionDefinitionContext ctx) {
+    private PendingStatement statement(@Nonnull final FrlIrParser.StatementContext ctx,
+                                       @Nullable final TypeInference.Term expectedValue) {
+        if (scope.inference() != null) {
+            return new StatementInferenceVisitor(expectedValue).visit(ctx);
+        }
+        final TypeInference statementInference = new TypeInference();
+        return inScope(scope.enterStatement(statementInference), () -> {
+            final PendingStatement pending = new StatementInferenceVisitor(expectedValue).visit(ctx);
+            statementInference.solve();
+            final IStatement statement = pending.builder().get();
+            return new PendingStatement(() -> statement, pending.valueType());
+        });
+    }
+
+    /**
+     * Builds a function definition. Its type parameters and its parameters are declared in the scope of the function,
+     * which its body is nested in. The function is declared in the enclosing scope as soon as its signature is known,
+     * before its body is built, so that the body and the statements after the definition can call it. The scope of the
+     * function has no inference, so the statements of the body are typed one by one, also inside a closure, and the
+     * type parameters of the function stay inside it.
+     */
+    @Nonnull
+    private IFunctionDefinition functionDefinition(@Nonnull final FrlIrParser.FunctionDefinitionContext ctx) {
         final String name = name(ctx.identifier());
-        scope.declareFunction(name);
-        final ImmutableList<IGenericType> typeParameters = ctx.typeParameters() == null
-                ? ImmutableList.of()
-                : ctx.typeParameters().identifier().stream()
-                        .map(identifier -> new IGenericType(name(identifier), false))
-                        .collect(ImmutableList.toImmutableList());
-        return inNewScope(typeParameters, () -> {
-            final ImmutableList<IFunctionDefinition.Parameter> parameters = ctx.parameter()
-                    .stream()
-                    .map(this::visitParameter)
-                    .collect(ImmutableList.toImmutableList());
-            final IType resultType = ctx.type() == null
-                    ? new IPrimitiveType(IPrimitiveType.Kind.VOID, false)
-                    : type(ctx.type());
-            return new IFunctionDefinition(name, typeParameters, parameters, resultType, visitBlock(ctx.block()));
+        final ImmutableList<IGenericType> typeParameters = typeParameters(ctx.typeParameters());
+        final Scope enclosingScope = scope;
+        return inScope(scope.enterFunction(typeParameters), () -> {
+            final ImmutableList<IFunctionDefinition.Parameter> parameters = parameters(ctx.parameter());
+            final IType resultType = ctx.type() == null ? voidType() : type(ctx.type());
+            enclosingScope.declareFunction(name, typeParameters, functionType(parameters, resultType));
+            parameters.forEach(parameter -> scope.declareVariable(parameter.name(), TypeInference.known(parameter.type())));
+            final PendingStatements body = inScope(scope.enterBlock(), () -> statements(ctx.block().statements(),
+                    resultType.isVoid() ? null : TypeInference.known(resultType)));
+            return new IFunctionDefinition(name, typeParameters, parameters, resultType, new IBlock(body.builder().get()));
+        });
+    }
+
+    /**
+     * Builds a function declaration and declares the function in the enclosing scope.
+     */
+    @Nonnull
+    private IFunctionDeclaration functionDeclaration(@Nonnull final FrlIrParser.FunctionDeclarationContext ctx) {
+        final String name = name(ctx.identifier());
+        final ImmutableList<IGenericType> typeParameters = typeParameters(ctx.typeParameters());
+        final Scope enclosingScope = scope;
+        return inScope(scope.enterFunction(typeParameters), () -> {
+            final ImmutableList<IFunctionDefinition.Parameter> parameters = parameters(ctx.parameter());
+            final IType resultType = ctx.type() == null ? voidType() : type(ctx.type());
+            final IFunctionDeclaration declaration =
+                    new IFunctionDeclaration(name, typeParameters, parameters, resultType);
+            enclosingScope.declareFunction(name, typeParameters, functionType(parameters, resultType));
+            return declaration;
         });
     }
 
@@ -125,44 +182,179 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         return new IFunctionDefinition.Parameter(name(ctx.identifier()), type(ctx.type()));
     }
 
+    @Nonnull
+    private ImmutableList<IGenericType> typeParameters(@Nullable final FrlIrParser.TypeParametersContext ctx) {
+        return ctx == null
+                ? ImmutableList.of()
+                : ctx.identifier().stream()
+                        .map(identifier -> new IGenericType(name(identifier), false))
+                        .collect(ImmutableList.toImmutableList());
+    }
+
+    @Nonnull
+    private ImmutableList<IFunctionDefinition.Parameter> parameters(
+            @Nonnull final List<FrlIrParser.ParameterContext> ctx) {
+        return ctx.stream().map(this::visitParameter).collect(ImmutableList.toImmutableList());
+    }
+
+    @Nonnull
+    private static IFunctionType functionType(@Nonnull final List<IFunctionDefinition.Parameter> parameters,
+                                              @Nonnull final IType resultType) {
+        return new IFunctionType(false, parameters.stream()
+                .map(IFunctionDefinition.Parameter::type)
+                .collect(ImmutableList.toImmutableList()), resultType);
+    }
+
+    //
+    // Expressions
+    //
+
     /**
-     * Builds a closure, whose signature and statements share a scope of their own. No statement contains a closure yet,
-     * so no program reaches this so far.
+     * Infers the type of an expression, a primary expression followed by calls, each of which calls the result of the
+     * one before it. The expected type, if there is one, is the context of the expression: the type stated for a
+     * variable, the type of a parameter, or the result type of a body.
+     *
+     * @param mismatch the message of the exception if the expression cannot have the expected type
      */
     @Nonnull
-    @Override
-    public IClosure visitClosure(@Nonnull final FrlIrParser.ClosureContext ctx) {
-        return inNewScope(ImmutableList.of(), () -> {
-            final FrlIrParser.ClosureSignatureContext signature = ctx.closureSignature();
-            final ImmutableList<IClosure.Parameter> parameters = signature == null
-                    ? ImmutableList.of()
-                    : closureParameters(signature.closureParameterClause());
-            final Optional<IType> resultType = signature == null
-                    ? Optional.empty()
-                    : Optional.ofNullable(signature.type()).map(this::type);
-            return new IClosure(parameters, resultType, new IBlock(statements(ctx.statements())));
+    private Inferred infer(@Nonnull final FrlIrParser.ExpressionContext ctx,
+                           @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
+        final List<FrlIrParser.CallSuffixContext> callSuffixes = ctx.callSuffix();
+        if (callSuffixes.isEmpty()) {
+            return new ExpressionInferenceVisitor(expected, mismatch).visit(ctx.primaryExpression());
+        }
+        // a callee has no context of its own: its type follows from the arguments and the context of the call
+        Inferred expression = new ExpressionInferenceVisitor(null, mismatch).visit(ctx.primaryExpression());
+        final int last = callSuffixes.size() - 1;
+        for (final FrlIrParser.CallSuffixContext callSuffix : callSuffixes.subList(0, last)) {
+            expression = inferCall(expression, callSuffix, null, mismatch);
+        }
+        return inferCall(expression, callSuffixes.get(last), expected, mismatch);
+    }
+
+    /**
+     * Infers the type of a call: the callee must be a function of the types of the arguments, and the result type of
+     * that function is the type of the call. The callee, and the expected type of the call, are unified with the
+     * function type before the arguments are inferred, so that a closure among the arguments has the type of its
+     * parameter as its context.
+     */
+    @Nonnull
+    private Inferred inferCall(@Nonnull final Inferred callee, @Nonnull final FrlIrParser.CallSuffixContext ctx,
+                               @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
+        final TypeInference inference = inference();
+        final String argumentMismatch =
+                "a call must call a function that is not nullable with arguments of the types of its parameters";
+        final ImmutableList<TypeInference.Term> parameterTypes = ctx.expression()
+                .stream()
+                .map(argument -> inference.unknown())
+                .collect(ImmutableList.toImmutableList());
+        final TypeInference.Term resultType = inference.unknown();
+        inference.unify(callee.type(), inference.function(parameterTypes, resultType), argumentMismatch);
+        if (expected != null) {
+            inference.unify(resultType, expected, mismatch);
+        }
+        final ImmutableList.Builder<Inferred> arguments = ImmutableList.builder();
+        for (int i = 0; i < parameterTypes.size(); i++) {
+            arguments.add(infer(ctx.expression(i), parameterTypes.get(i), argumentMismatch));
+        }
+        final ImmutableList<Inferred> inferredArguments = arguments.build();
+        return new Inferred(resultType, () -> new IFunctionCall(callee.builder().get(), inferredArguments.stream()
+                .map(argument -> argument.builder().get())
+                .collect(ImmutableList.toImmutableList())));
+    }
+
+    /**
+     * Returns the type of a literal: a new inference variable that only a type the literal can denote can satisfy. Its
+     * value is created for that type once the type is known.
+     */
+    @Nonnull
+    private Inferred literal(@Nonnull final TypeInference.LiteralKind kind,
+                             @Nonnull final Function<IType, Object> valueOfType) {
+        final TypeInference.Term type = inference().literal(kind);
+        return new Inferred(type, () -> {
+            final IType resolvedType = TypeInference.resolve(type);
+            return new ILiteral(valueOfType.apply(resolvedType), resolvedType);
         });
     }
 
+    /**
+     * Returns the value of a numeric literal as a value of the type that the literal has.
+     */
     @Nonnull
-    private ImmutableList<IClosure.Parameter> closureParameters(
-            @Nonnull final FrlIrParser.ClosureParameterClauseContext ctx) {
-        if (ctx instanceof FrlIrParser.ParenthesizedClosureParametersContext clause) {
-            return clause.closureParameter()
-                    .stream()
-                    .map(this::visitClosureParameter)
-                    .collect(ImmutableList.toImmutableList());
+    private static Object numericValue(@Nonnull final String text, @Nonnull final IType type) {
+        // the constraint of a numeric literal only allows numeric primitive types
+        final IPrimitiveType.Kind kind = ((IPrimitiveType)type).kind();
+        final Object value;
+        try {
+            value = switch (kind) {
+                case INT -> Integer.valueOf(text);
+                case BIGINT -> Long.valueOf(text);
+                // decimal to float to half rounds twice, which can differ from rounding once at a rounding midpoint
+                case HALF -> Half.valueOf(Float.parseFloat(text));
+                case FLOAT -> Float.valueOf(text);
+                case DOUBLE -> Double.valueOf(text);
+                default -> throw new IllegalStateException("a numeric literal must have a numeric type");
+            };
+        } catch (final NumberFormatException e) {
+            throw new IllegalArgumentException("a literal must be in the range of its type", e);
         }
-        return ((FrlIrParser.BareClosureParametersContext)ctx).identifier()
-                .stream()
-                .map(identifier -> new IClosure.Parameter(name(identifier), Optional.empty()))
-                .collect(ImmutableList.toImmutableList());
+        Preconditions.checkArgument(!isInfinite(value), "a literal must be in the range of its type");
+        return value;
     }
 
+    private static boolean isInfinite(@Nonnull final Object value) {
+        return (value instanceof Half half && half.isInfinite())
+                || (value instanceof Float floatValue && floatValue.isInfinite())
+                || (value instanceof Double doubleValue && doubleValue.isInfinite());
+    }
+
+    /**
+     * Returns the string that a string literal denotes: the text between the quotes, with every escape sequence
+     * replaced by the character it stands for. The lexer guarantees the form of the escape sequences.
+     */
     @Nonnull
-    @Override
-    public IClosure.Parameter visitClosureParameter(@Nonnull final FrlIrParser.ClosureParameterContext ctx) {
-        return new IClosure.Parameter(name(ctx.identifier()), Optional.ofNullable(ctx.type()).map(this::type));
+    private static String stringValue(@Nonnull final String text) {
+        final StringBuilder value = new StringBuilder();
+        int i = 1;
+        while (i < text.length() - 1) {
+            final char c = text.charAt(i);
+            if (c != '\\') {
+                value.append(c);
+                i++;
+            } else if (text.charAt(i + 1) == 'u') {
+                final int end = text.indexOf('}', i);
+                value.appendCodePoint(unicodeScalar(text.substring(i + 3, end)));
+                i = end + 1;
+            } else {
+                value.append(escapedCharacter(text.charAt(i + 1)));
+                i += 2;
+            }
+        }
+        return value.toString();
+    }
+
+    private static char escapedCharacter(final char escaped) {
+        return switch (escaped) {
+            case '0' -> '\0';
+            case 't' -> '\t';
+            case 'n' -> '\n';
+            case 'r' -> '\r';
+            // the lexer leaves \\, \", and \', which stand for the character after the backslash
+            default -> escaped;
+        };
+    }
+
+    /**
+     * Returns the code point that the hexadecimal digits of a Unicode escape sequence denote, the digits between the
+     * braces after the backslash and the {@code u}. As in Swift, there are one to eight digits, and the code point is a
+     * Unicode scalar value: a code point that is not a surrogate.
+     */
+    private static int unicodeScalar(@Nonnull final String digits) {
+        final long codePoint = digits.length() <= 8 ? Long.parseLong(digits, 16) : -1L;
+        Preconditions.checkArgument(codePoint >= 0 && codePoint <= Character.MAX_CODE_POINT
+                        && (codePoint < Character.MIN_SURROGATE || codePoint > Character.MAX_SURROGATE),
+                "an escape sequence \\u{...} must have one to eight hexadecimal digits of a Unicode scalar value");
+        return (int)codePoint;
     }
 
     //
@@ -194,7 +386,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     @Nonnull
     @Override
     public IPrimitiveType visitUnitType(@Nonnull final FrlIrParser.UnitTypeContext ctx) {
-        return new IPrimitiveType(IPrimitiveType.Kind.VOID, false);
+        return voidType();
     }
 
     /**
@@ -271,7 +463,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     @Nonnull
     @Override
     public IPrimitiveType visitVoidType(@Nonnull final FrlIrParser.VoidTypeContext ctx) {
-        return new IPrimitiveType(IPrimitiveType.Kind.VOID, false);
+        return voidType();
     }
 
     @Nonnull
@@ -304,23 +496,32 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         return new IArrayType(false, type(ctx.type()));
     }
 
+    /**
+     * Creates a vector type. The cast cannot fail: every alternative of the rule for the element type builds a
+     * primitive type.
+     */
     @Nonnull
     @Override
     public IVectorType visitVectorType(@Nonnull final FrlIrParser.VectorTypeContext ctx) {
-        return new IVectorType(false, visitVectorElementType(ctx.vectorElementType()).kind(),
+        return new IVectorType(false, ((IPrimitiveType)visit(ctx.vectorElementType())).kind(),
                 Integer.parseInt(ctx.INTEGER_LITERAL().getText()));
     }
 
     @Nonnull
     @Override
-    public IPrimitiveType visitVectorElementType(@Nonnull final FrlIrParser.VectorElementTypeContext ctx) {
-        if (ctx.HALF() != null) {
-            return new IPrimitiveType(IPrimitiveType.Kind.HALF, false);
-        }
-        if (ctx.FLOAT() != null) {
-            return new IPrimitiveType(IPrimitiveType.Kind.FLOAT, false);
-        }
-        // the grammar leaves `double` as the only remaining element type
+    public IPrimitiveType visitHalfVectorElementType(@Nonnull final FrlIrParser.HalfVectorElementTypeContext ctx) {
+        return new IPrimitiveType(IPrimitiveType.Kind.HALF, false);
+    }
+
+    @Nonnull
+    @Override
+    public IPrimitiveType visitFloatVectorElementType(@Nonnull final FrlIrParser.FloatVectorElementTypeContext ctx) {
+        return new IPrimitiveType(IPrimitiveType.Kind.FLOAT, false);
+    }
+
+    @Nonnull
+    @Override
+    public IPrimitiveType visitDoubleVectorElementType(@Nonnull final FrlIrParser.DoubleVectorElementTypeContext ctx) {
         return new IPrimitiveType(IPrimitiveType.Kind.DOUBLE, false);
     }
 
@@ -381,15 +582,35 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Builds a fragment in a new scope that declares the given type parameters, and returns to the current scope
-     * afterwards, also if building fails.
+     * Returns the result type of a function definition or a closure that produces no value.
      */
     @Nonnull
-    private <F extends IFragment> F inNewScope(@Nonnull final Collection<IGenericType> typeParameters,
-                                               @Nonnull final Supplier<F> fragmentBuilder) {
-        scope = scope.enter(typeParameters);
+    private static IPrimitiveType voidType() {
+        return new IPrimitiveType(IPrimitiveType.Kind.VOID, false);
+    }
+
+    /**
+     * Returns the inference that types the expressions of the current scope. Expressions occur only in statements, and
+     * the scope of every statement has an inference.
+     */
+    @Nonnull
+    private TypeInference inference() {
+        final TypeInference inference = scope.inference();
+        if (inference == null) {
+            throw new IllegalStateException("an expression is inferred only as part of a statement");
+        }
+        return inference;
+    }
+
+    /**
+     * Runs a step in a scope nested in the current one, and returns to the current scope afterwards, also if the step
+     * fails.
+     */
+    @Nonnull
+    private <R> R inScope(@Nonnull final Scope nestedScope, @Nonnull final Supplier<R> step) {
+        scope = nestedScope;
         try {
-            return fragmentBuilder.get();
+            return step.get();
         } finally {
             scope = scope.exit();
         }
@@ -401,5 +622,296 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     @Nonnull
     private static String name(@Nonnull final FrlIrParser.IdentifierContext ctx) {
         return ParserHelpers.readName(ctx.getText());
+    }
+
+    //
+    // The visitors of statements and expressions, whose fragments are built once their inference is solved
+    //
+
+    /**
+     * Infers a statement, one method for each alternative of the {@code statement} rule.
+     */
+    private final class StatementInferenceVisitor extends FrlIrParserBaseVisitor<PendingStatement> {
+        /**
+         * The expected type of the value of the statement, if the statement is the last one of a body whose value has
+         * an expected type.
+         */
+        @Nullable
+        private final TypeInference.Term expectedValue;
+
+        private StatementInferenceVisitor(@Nullable final TypeInference.Term expectedValue) {
+            this.expectedValue = expectedValue;
+        }
+
+        @Nonnull
+        @Override
+        public PendingStatement visitDefinitionStatement(@Nonnull final FrlIrParser.DefinitionStatementContext ctx) {
+            final IFunctionDefinition definition = functionDefinition(ctx.functionDefinition());
+            return new PendingStatement(() -> definition, null);
+        }
+
+        @Nonnull
+        @Override
+        public PendingStatement visitDeclarationStatement(@Nonnull final FrlIrParser.DeclarationStatementContext ctx) {
+            final IFunctionDeclaration declaration = functionDeclaration(ctx.functionDeclaration());
+            return new PendingStatement(() -> declaration, null);
+        }
+
+        /**
+         * Infers an assignment. The variable is declared after its expression is inferred, so the expression cannot
+         * refer to it, and the type of the variable is the type of the expression.
+         */
+        @Nonnull
+        @Override
+        public PendingStatement visitAssignmentStatement(@Nonnull final FrlIrParser.AssignmentStatementContext ctx) {
+            final FrlIrParser.AssignmentContext assignment = ctx.assignment();
+            final Inferred value = infer(assignment.expression(),
+                    assignment.type() == null ? null : TypeInference.known(type(assignment.type())),
+                    "the expression of an assignment must be of the type stated for the variable");
+            final String name = name(assignment.identifier());
+            scope.declareVariable(name, value.type());
+            return new PendingStatement(() -> new IAssignment(name, value.builder().get()), null);
+        }
+
+        @Nonnull
+        @Override
+        public PendingStatement visitExpressionStatement(@Nonnull final FrlIrParser.ExpressionStatementContext ctx) {
+            final Inferred value = infer(ctx.expression(), expectedValue,
+                    "the value of a body must be of the result type of its function or closure");
+            return new PendingStatement(() -> value.builder().get(), value.type());
+        }
+    }
+
+    /**
+     * Infers a primary expression, one method for each alternative of the {@code primaryExpression} and the
+     * {@code literal} rules.
+     */
+    private final class ExpressionInferenceVisitor extends FrlIrParserBaseVisitor<Inferred> {
+        /**
+         * The type that the context of the expression requires, if any.
+         */
+        @Nullable
+        private final TypeInference.Term expected;
+        /**
+         * The message of the exception if the expression cannot have the expected type.
+         */
+        @Nonnull
+        private final String mismatch;
+
+        private ExpressionInferenceVisitor(@Nullable final TypeInference.Term expected,
+                                           @Nonnull final String mismatch) {
+            this.expected = expected;
+            this.mismatch = mismatch;
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitLiteralExpression(@Nonnull final FrlIrParser.LiteralExpressionContext ctx) {
+            return fit(visit(ctx.literal()));
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitIntegerLiteral(@Nonnull final FrlIrParser.IntegerLiteralContext ctx) {
+            final String text = (ctx.MINUS() == null ? "" : "-") + ctx.INTEGER_LITERAL().getText();
+            return literal(TypeInference.LiteralKind.INTEGER, type -> numericValue(text, type));
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitFloatingLiteral(@Nonnull final FrlIrParser.FloatingLiteralContext ctx) {
+            final String text = (ctx.MINUS() == null ? "" : "-") + ctx.FLOATING_LITERAL().getText();
+            return literal(TypeInference.LiteralKind.FLOATING, type -> numericValue(text, type));
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitStringLiteral(@Nonnull final FrlIrParser.StringLiteralContext ctx) {
+            final String value = stringValue(ctx.STRING_LITERAL().getText());
+            return literal(TypeInference.LiteralKind.STRING, type -> value);
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitTrueLiteral(@Nonnull final FrlIrParser.TrueLiteralContext ctx) {
+            return literal(TypeInference.LiteralKind.BOOLEAN, type -> Boolean.TRUE);
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitFalseLiteral(@Nonnull final FrlIrParser.FalseLiteralContext ctx) {
+            return literal(TypeInference.LiteralKind.BOOLEAN, type -> Boolean.FALSE);
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitNilLiteral(@Nonnull final FrlIrParser.NilLiteralContext ctx) {
+            return literal(TypeInference.LiteralKind.NIL, type -> null);
+        }
+
+        /**
+         * Infers the type of a name. A variable has the type it was declared with. A reference to a function has the
+         * type of the function, in which new inference variables stand for the type parameters of the function; what
+         * they are solved as becomes the type arguments of the reference.
+         *
+         * <p>A variable that a closure declares can have a type that the inference of the closure's statement has not
+         * determined yet. A function nested in the closure is typed by inferences of its own, so it can use such a
+         * variable only once the type is known.</p>
+         */
+        @Nonnull
+        @Override
+        public Inferred visitNameExpression(@Nonnull final FrlIrParser.NameExpressionContext ctx) {
+            final TypeInference inference = inference();
+            final String name = name(ctx.identifier());
+            final Scope.Binding binding = scope.lookupValue(name)
+                    .orElseThrow(() -> new IllegalArgumentException("unknown name"));
+            if (binding instanceof Scope.VariableBinding variable) {
+                final TypeInference.Term type;
+                if (variable.owner() == null || variable.owner() == inference) {
+                    type = variable.type();
+                } else {
+                    Preconditions.checkArgument(TypeInference.isResolved(variable.type()),
+                            "a function nested in a closure can use a variable of the closure only once its type is known");
+                    type = TypeInference.known(TypeInference.resolve(variable.type()));
+                }
+                return fit(new Inferred(type, () -> new IVariableReference(name, TypeInference.resolve(type))));
+            }
+            final Scope.FunctionBinding function = (Scope.FunctionBinding)binding;
+            final TypeInference.Instantiation instantiation =
+                    inference.instantiate(function.typeParameters(), function.type());
+            // an instantiated function type resolves to a function type
+            return fit(new Inferred(instantiation.type(), () -> new IFunctionReference(name,
+                    instantiation.typeArguments()
+                            .stream()
+                            .map(TypeInference::resolve)
+                            .collect(ImmutableList.toImmutableList()), (IFunctionType)TypeInference.resolve(instantiation.type()))));
+        }
+
+        /**
+         * Infers the type of a closure. A parameter type or a result type that the closure does not state is a new
+         * inference variable. The closure's function type is unified with the expected type before the body is
+         * inferred, so that the context determines the types that the closure leaves out and the body sees them; the
+         * closure does not need {@link #fit} afterwards. The scope of the closure inherits the inference of the
+         * statement that the closure is in, so the body joins it. A result type that neither the closure nor the
+         * context states becomes the type of the value of the body, or {@code void} if the body has no value.
+         */
+        @Nonnull
+        @Override
+        public Inferred visitClosureExpression(@Nonnull final FrlIrParser.ClosureExpressionContext ctx) {
+            final TypeInference inference = inference();
+            final FrlIrParser.ClosureContext closure = ctx.closure();
+            return inScope(scope.enterBlock(), () -> {
+                final FrlIrParser.ClosureSignatureContext signature = closure.closureSignature();
+                final ImmutableList<ClosureParameter> parameters = signature == null
+                        ? ImmutableList.of()
+                        : new ClosureParameterInferenceVisitor().visit(signature.closureParameterClause());
+                final IType statedResultType = signature == null || signature.type() == null
+                        ? null
+                        : type(signature.type());
+                final TypeInference.Term resultType = statedResultType == null
+                        ? inference.unknown()
+                        : TypeInference.known(statedResultType);
+                final TypeInference.Term type = inference.function(parameters.stream()
+                        .map(ClosureParameter::type)
+                        .collect(ImmutableList.toImmutableList()), resultType);
+                if (expected != null) {
+                    inference.unify(type, expected, mismatch);
+                }
+                parameters.forEach(parameter -> scope.declareVariable(parameter.name(), parameter.type()));
+                final boolean discardsValue = statedResultType != null && statedResultType.isVoid();
+                final PendingStatements body = inScope(scope.enterBlock(),
+                        () -> statements(closure.statements(), discardsValue ? null : resultType));
+                if (statedResultType == null && body.valueType() == null) {
+                    inference.unify(resultType, TypeInference.known(voidType()),
+                            "the body of a closure must end with an expression of its result type unless that is void");
+                }
+                return new Inferred(type, () -> new IClosure(parameters.stream()
+                        .map(parameter -> new IClosure.Parameter(parameter.name(),
+                                TypeInference.resolve(parameter.type())))
+                        .collect(ImmutableList.toImmutableList()), TypeInference.resolve(resultType),
+                        new IBlock(body.builder().get())));
+            });
+        }
+
+        /**
+         * Requires the type of an expression to be the expected type, if there is one.
+         */
+        @Nonnull
+        private Inferred fit(@Nonnull final Inferred inferred) {
+            if (expected != null) {
+                inference().unify(inferred.type(), expected, mismatch);
+            }
+            return inferred;
+        }
+    }
+
+    /**
+     * Returns the parameters of a closure, one method for each alternative of the {@code closureParameterClause} rule.
+     * A parameter that does not state its type has a new inference variable as its type.
+     */
+    private final class ClosureParameterInferenceVisitor
+            extends FrlIrParserBaseVisitor<ImmutableList<ClosureParameter>> {
+        @Nonnull
+        @Override
+        public ImmutableList<ClosureParameter> visitParenthesizedClosureParameters(
+                @Nonnull final FrlIrParser.ParenthesizedClosureParametersContext ctx) {
+            final TypeInference inference = inference();
+            return ctx.closureParameter()
+                    .stream()
+                    .map(parameter -> new ClosureParameter(name(parameter.identifier()), parameter.type() == null
+                            ? inference.unknown()
+                            : TypeInference.known(type(parameter.type()))))
+                    .collect(ImmutableList.toImmutableList());
+        }
+
+        @Nonnull
+        @Override
+        public ImmutableList<ClosureParameter> visitBareClosureParameters(
+                @Nonnull final FrlIrParser.BareClosureParametersContext ctx) {
+            final TypeInference inference = inference();
+            return ctx.identifier()
+                    .stream()
+                    .map(identifier -> new ClosureParameter(name(identifier), inference.unknown()))
+                    .collect(ImmutableList.toImmutableList());
+        }
+    }
+
+    /**
+     * An expression whose type is being inferred: its type as a term of the inference of its statement, and how to
+     * build the expression once the statement is solved and its types are known.
+     *
+     * @param type the type of the expression
+     * @param builder builds the expression; it must be called only after the inference is solved
+     */
+    private record Inferred(@Nonnull TypeInference.Term type, @Nonnull Supplier<IExpression> builder) {
+    }
+
+    /**
+     * A statement whose types are being inferred, and how to build it once they are known.
+     *
+     * @param builder builds the statement; it must be called only after the inference is solved
+     * @param valueType the type of the statement's value if the statement is an expression, and {@code null} otherwise
+     */
+    private record PendingStatement(@Nonnull Supplier<IStatement> builder, @Nullable TypeInference.Term valueType) {
+    }
+
+    /**
+     * Statements whose types are being inferred, and how to build them once they are known.
+     *
+     * @param builder builds the statements; it must be called only after the inference is solved
+     * @param valueType the type of the value of the statements, the value of the last one if it is an expression, and
+     *        {@code null} if they have no value
+     */
+    private record PendingStatements(@Nonnull Supplier<ImmutableList<IStatement>> builder,
+                                     @Nullable TypeInference.Term valueType) {
+    }
+
+    /**
+     * A parameter of a closure whose type is being inferred.
+     *
+     * @param name the name of the parameter
+     * @param type the type of the parameter, an inference variable if the closure does not state it
+     */
+    private record ClosureParameter(@Nonnull String name, @Nonnull TypeInference.Term type) {
     }
 }

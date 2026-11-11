@@ -18,7 +18,7 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.fragment;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
 
@@ -50,9 +50,10 @@ public interface IFragment {
      * have equal hash codes in every run of every JVM. A fragment computes it with
      * {@link java.util.Objects#hash(Object...)} from a string constant that names the kind of fragment, followed by
      * the parts in the order of their declaration. Strings, numbers, booleans, lists, and optionals contribute their
-     * own hash codes, whose algorithms the Java SE API specifies. Fragments contribute theirs, which this method
-     * specifies. An enum constant contributes the hash code of its FRL-IR keyword: {@link Enum#hashCode()} is the
-     * identity hash code, which differs between runs.
+     * own hash codes, whose algorithms the Java SE API specifies; a {@link com.apple.foundationdb.half.Half}
+     * contributes its 16-bit pattern, which is its hash code. Fragments contribute theirs, which this method specifies.
+     * An enum constant contributes the hash code of its FRL-IR keyword: {@link Enum#hashCode()} is the identity hash
+     * code, which differs between runs.
      *
      * @return the hash code of this fragment
      */

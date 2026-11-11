@@ -18,10 +18,9 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.types;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
-import com.apple.foundationdb.record.ir.fragment.IFragment;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
@@ -117,7 +116,7 @@ public final class IRecordType implements IType {
         /**
          * Creates a field.
          *
-         * @param type the type of the field
+         * @param type the type of the field, which cannot be {@code void}
          * @param name the name of the field, if it has one
          * @param number the number of the field in the stored record, if it is known; only a named field can have one
          */
@@ -128,6 +127,7 @@ public final class IRecordType implements IType {
             this.number = Objects.requireNonNull(number);
             name.ifPresent(ParserHelpers::checkWritableName);
             Preconditions.checkArgument(name.isPresent() || number.isEmpty(), "a field number requires a field name");
+            Preconditions.checkArgument(!type.isVoid(), "void is only a result type");
         }
 
         /**

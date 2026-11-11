@@ -1,5 +1,5 @@
 /*
- * IFunctionDefinition.java
+ * IClosure.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -18,12 +18,10 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.program;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
-import com.apple.foundationdb.record.ir.fragment.IFragment;
-import com.apple.foundationdb.record.ir.types.IGenericType;
-import com.apple.foundationdb.record.ir.types.IType;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 
@@ -33,16 +31,14 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
- * A function definition, {@code func map<T, U>(xs: [T], f: (T) -> U): [U] { }}. This is a placeholder that carries the
- * signature and the body; what a definition means is yet to be designed. A function definition is also a statement, so
- * functions can be nested, as in Swift; a nested function sees the type parameters of the functions it is nested in.
+ * A closure, {@code { (x: int, y: int) -> bigint in x }}: an expression whose value is a function, and whose type is the
+ * function type of its parameter types and its result type, {@code (int, int) -> bigint}. The value of its body is its
+ * result, as for a function definition. The text of a closure can leave out its types, {@code { x, y in x }}; the
+ * fragment holds the types that were inferred for them. Unlike a function definition, a closure has no name and no type
+ * parameters of its own.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IFunctionDefinition implements IStatement {
-    @Nonnull
-    private final String name;
-    @Nonnull
-    private final ImmutableList<IGenericType> typeParameters;
+public final class IClosure implements IExpression {
     @Nonnull
     private final ImmutableList<Parameter> parameters;
     @Nonnull
@@ -50,42 +46,26 @@ public final class IFunctionDefinition implements IStatement {
     @Nonnull
     private final IBlock body;
     @Nonnull
+    private final IFunctionType type;
+    @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
     /**
-     * Creates a function definition.
+     * Creates a closure.
      *
-     * @param name the name of the function
-     * @param typeParameters the type parameters of a generic function, in order, and empty otherwise; the type
-     *        parameters that the signature and the body refer to are these objects
      * @param parameters the parameters in order
-     * @param resultType the result type, which is {@code void} if the definition does not state one
-     * @param body the block that implements the function
+     * @param resultType the result type
+     * @param body the block that implements the closure, see {@link IBlock#isBodyOf}
      */
-    public IFunctionDefinition(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
-                               @Nonnull final List<Parameter> parameters, @Nonnull final IType resultType,
-                               @Nonnull final IBlock body) {
-        this.name = Objects.requireNonNull(name);
-        this.typeParameters = ImmutableList.copyOf(typeParameters);
+    public IClosure(@Nonnull final List<Parameter> parameters, @Nonnull final IType resultType,
+                    @Nonnull final IBlock body) {
         this.parameters = ImmutableList.copyOf(parameters);
         this.resultType = Objects.requireNonNull(resultType);
         this.body = Objects.requireNonNull(body);
-    }
-
-    /**
-     * {@return the name of the function}
-     */
-    @Nonnull
-    public String name() {
-        return name;
-    }
-
-    /**
-     * {@return the type parameters of a generic function, in order, and an empty list otherwise}
-     */
-    @Nonnull
-    public List<IGenericType> typeParameters() {
-        return typeParameters;
+        this.type = new IFunctionType(false,
+                this.parameters.stream().map(Parameter::type).collect(ImmutableList.toImmutableList()), resultType);
+        Preconditions.checkArgument(body.isBodyOf(resultType),
+                "the body of a closure must end with an expression of its result type unless that is void");
     }
 
     /**
@@ -97,7 +77,7 @@ public final class IFunctionDefinition implements IStatement {
     }
 
     /**
-     * {@return the result type, which is {@code void} if the definition does not state one}
+     * {@return the result type}
      */
     @Nonnull
     public IType resultType() {
@@ -105,11 +85,22 @@ public final class IFunctionDefinition implements IStatement {
     }
 
     /**
-     * {@return the block that implements the function}
+     * {@return the block that implements the closure}
      */
     @Nonnull
     public IBlock body() {
         return body;
+    }
+
+    /**
+     * Returns the type of the closure, the function type of its parameter types and its result type.
+     *
+     * @return the type of the closure
+     */
+    @Nonnull
+    @Override
+    public IFunctionType type() {
+        return type;
     }
 
     @Override
@@ -117,8 +108,7 @@ public final class IFunctionDefinition implements IStatement {
         if (this == other) {
             return true;
         }
-        return other instanceof IFunctionDefinition that && name.equals(that.name)
-                && typeParameters.equals(that.typeParameters) && parameters.equals(that.parameters)
+        return other instanceof IClosure that && parameters.equals(that.parameters)
                 && resultType.equals(that.resultType) && body.equals(that.body);
     }
 
@@ -128,18 +118,18 @@ public final class IFunctionDefinition implements IStatement {
     }
 
     private int computeHashCode() {
-        return Objects.hash("function definition", name, typeParameters, parameters, resultType, body);
+        return Objects.hash("closure", parameters, resultType, body);
     }
 
     @Nonnull
     @Override
     public String toString() {
-        return "IFunctionDefinition[name=" + name + ", typeParameters=" + typeParameters + ", parameters="
-                + parameters + ", resultType=" + resultType + ", body=" + body + "]";
+        return "IClosure[parameters=" + parameters + ", resultType=" + resultType + ", body=" + body + "]";
     }
 
     /**
-     * A parameter of a function definition, {@code x: int}. Parameters always state their type.
+     * A parameter of a closure, {@code x: int}. The text may leave out the type, {@code x}, as in Swift; the parameter
+     * then has the type that was inferred for it.
      */
     public static final class Parameter implements IFragment {
         @Nonnull
@@ -153,11 +143,12 @@ public final class IFunctionDefinition implements IStatement {
          * Creates a parameter.
          *
          * @param name the name of the parameter
-         * @param type the type of the parameter
+         * @param type the type of the parameter, which cannot be {@code void}
          */
         public Parameter(@Nonnull final String name, @Nonnull final IType type) {
             this.name = Objects.requireNonNull(name);
             this.type = Objects.requireNonNull(type);
+            Preconditions.checkArgument(!type.isVoid(), "void is only a result type");
         }
 
         /**
@@ -190,7 +181,7 @@ public final class IFunctionDefinition implements IStatement {
         }
 
         private int computeHashCode() {
-            return Objects.hash("function definition parameter", name, type);
+            return Objects.hash("closure parameter", name, type);
         }
 
         @Nonnull

@@ -1,5 +1,5 @@
 /*
- * IStreamType.java
+ * IVariableReference.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -18,10 +18,9 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.types;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Suppliers;
 
 import javax.annotation.Nonnull;
@@ -29,43 +28,41 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
- * The type of a stream of values, {@code stream<record<id: bigint>>}. A stream is a relation, and a relation is never
- * null, so stream types are never nullable.
+ * A reference to a variable: the variable of an assignment, or a parameter of a function definition or a closure. A
+ * reference names the nearest variable of that name in scope.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IStreamType implements IType {
+public final class IVariableReference implements IExpression {
     @Nonnull
-    private final IType elementType;
+    private final String name;
+    @Nonnull
+    private final IType type;
     @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
     /**
-     * Creates a stream type.
+     * Creates a reference to a variable.
      *
-     * @param elementType the type of the values in the stream
+     * @param name the name of the variable
+     * @param type the type of the variable
      */
-    public IStreamType(@Nonnull final IType elementType) {
-        this.elementType = Objects.requireNonNull(elementType);
+    public IVariableReference(@Nonnull final String name, @Nonnull final IType type) {
+        this.name = Objects.requireNonNull(name);
+        this.type = Objects.requireNonNull(type);
     }
 
     /**
-     * {@return the type of the values in the stream}
+     * {@return the name of the variable}
      */
     @Nonnull
-    public IType elementType() {
-        return elementType;
-    }
-
-    @Override
-    public boolean isNullable() {
-        return false;
+    public String name() {
+        return name;
     }
 
     @Nonnull
     @Override
-    public IStreamType withNullability(final boolean isNullable) {
-        Preconditions.checkArgument(!isNullable, "a stream type cannot be nullable");
-        return this;
+    public IType type() {
+        return type;
     }
 
     @Override
@@ -73,7 +70,7 @@ public final class IStreamType implements IType {
         if (this == other) {
             return true;
         }
-        return other instanceof IStreamType that && elementType.equals(that.elementType);
+        return other instanceof IVariableReference that && name.equals(that.name) && type.equals(that.type);
     }
 
     @Override
@@ -82,12 +79,12 @@ public final class IStreamType implements IType {
     }
 
     private int computeHashCode() {
-        return Objects.hash("stream type", elementType);
+        return Objects.hash("variable reference", name, type);
     }
 
     @Nonnull
     @Override
     public String toString() {
-        return "stream<" + elementType + ">";
+        return "IVariableReference[name=" + name + ", type=" + type + "]";
     }
 }

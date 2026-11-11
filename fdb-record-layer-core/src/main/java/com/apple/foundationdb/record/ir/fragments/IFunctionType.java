@@ -18,9 +18,10 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.types;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 
@@ -32,7 +33,7 @@ import java.util.stream.Collectors;
 
 /**
  * A function type, {@code (int, string) -> bigint} or equivalently {@code function<int, string, bigint>}: the parameter
- * types followed by the result type.
+ * types followed by the result type. The result type is the one place where a type can be {@code void}.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IFunctionType implements IType {
@@ -48,7 +49,7 @@ public final class IFunctionType implements IType {
      * Creates a function type.
      *
      * @param isNullable whether values of this type can be null
-     * @param parameterTypes the types of the parameters in order
+     * @param parameterTypes the types of the parameters in order, none of which can be {@code void}
      * @param resultType the type of the result
      */
     public IFunctionType(final boolean isNullable, @Nonnull final List<IType> parameterTypes,
@@ -56,6 +57,8 @@ public final class IFunctionType implements IType {
         this.isNullable = isNullable;
         this.parameterTypes = ImmutableList.copyOf(parameterTypes);
         this.resultType = Objects.requireNonNull(resultType);
+        Preconditions.checkArgument(this.parameterTypes.stream().noneMatch(IType::isVoid),
+                "void is only a result type");
     }
 
     @Override

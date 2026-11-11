@@ -18,10 +18,9 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.types;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
-import com.apple.foundationdb.record.ir.fragment.IFragment;
 
 import javax.annotation.Nonnull;
 
@@ -51,4 +50,15 @@ public sealed interface IType extends IFragment permits IPrimitiveType, IRecordT
      */
     @Nonnull
     IType withNullability(boolean isNullable);
+
+    /**
+     * Returns whether this type is {@code void}, the result type of a function or a closure that produces no value.
+     * {@code void} is a type only in that place: the fragments reject it as the type of a parameter, a field, an
+     * element, or a variable, and they reject {@code void?}.
+     *
+     * @return {@code true} if this type is {@code void}
+     */
+    default boolean isVoid() {
+        return false;
+    }
 }

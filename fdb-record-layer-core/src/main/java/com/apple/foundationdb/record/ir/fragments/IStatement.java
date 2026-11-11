@@ -1,5 +1,5 @@
 /*
- * package-info.java
+ * IStatement.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -18,8 +18,16 @@
  * limitations under the License.
  */
 
+package com.apple.foundationdb.record.ir.fragments;
+
+import com.apple.foundationdb.annotation.API;
+
 /**
- * The base of the objects of FRL-IR. It is a package of its own so that the types and the program can both build on it
- * without depending on each other, on the parser, or on the planner.
+ * A statement in a block or a program: a function definition, a function declaration, an assignment, or an expression.
+ * An expression on its own is evaluated for its effect, and as the last statement of a block it is the value of the
+ * block.
  */
-package com.apple.foundationdb.record.ir.fragment;
+@API(API.Status.EXPERIMENTAL)
+public sealed interface IStatement extends IFragment
+        permits IFunctionDefinition, IFunctionDeclaration, IAssignment, IExpression {
+}

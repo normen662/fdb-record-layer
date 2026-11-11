@@ -18,10 +18,9 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.program;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
-import com.apple.foundationdb.record.ir.fragment.IFragment;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 

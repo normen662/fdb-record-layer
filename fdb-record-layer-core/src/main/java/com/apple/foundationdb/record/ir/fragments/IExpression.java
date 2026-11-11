@@ -1,5 +1,5 @@
 /*
- * IStatement.java
+ * IExpression.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -18,15 +18,27 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.program;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
-import com.apple.foundationdb.record.ir.fragment.IFragment;
+
+import javax.annotation.Nonnull;
 
 /**
- * A statement in a block. This is a placeholder: a function definition is the only kind of statement so far, and the
- * others are yet to be designed.
+ * An expression: a literal, a reference to a variable or a function, a call, or a closure. Every expression has a type,
+ * and the fragments are typed when they are built: the type of a literal is the one inferred from its context, and the
+ * type of a reference to a generic function is the one for its inferred type arguments. Every expression is also a
+ * statement.
  */
 @API(API.Status.EXPERIMENTAL)
-public sealed interface IStatement extends IFragment permits IFunctionDefinition {
+public sealed interface IExpression extends IStatement
+        permits ILiteral, IVariableReference, IFunctionReference, IFunctionCall, IClosure {
+
+    /**
+     * Returns the type of the value of this expression.
+     *
+     * @return the type of this expression
+     */
+    @Nonnull
+    IType type();
 }

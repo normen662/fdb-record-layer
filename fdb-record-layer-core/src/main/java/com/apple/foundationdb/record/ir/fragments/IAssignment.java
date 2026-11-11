@@ -1,5 +1,5 @@
 /*
- * IGenericType.java
+ * IAssignment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -18,9 +18,10 @@
  * limitations under the License.
  */
 
-package com.apple.foundationdb.record.ir.types;
+package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Suppliers;
 
 import javax.annotation.Nonnull;
@@ -28,48 +29,46 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
- * A type parameter of a generic function, e.g. {@code T} in {@code func id<T>(x: T): T}. The type it stands for is
- * known only where the function is used. Only a scope that declares the type parameter gives the name a meaning.
- * Equality compares the name and the nullability, so the type parameters {@code T} of two different functions are
- * equal.
+ * An assignment, {@code let x = f(1)}: a statement that names the value of an expression. The variable is immutable,
+ * and its type is the type of the expression. A type stated in the text, {@code let x: bigint = 42}, only guides the
+ * inference of the expression's type, which it then equals, so the assignment does not keep it. An expression of type
+ * {@code void} has no value to name.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IGenericType implements IType {
+public final class IAssignment implements IStatement {
     @Nonnull
     private final String name;
-    private final boolean isNullable;
+    @Nonnull
+    private final IExpression expression;
     @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
     /**
-     * Creates a type parameter.
+     * Creates an assignment.
      *
-     * @param name the name of the type parameter
-     * @param isNullable whether values of this type can be null
+     * @param name the name of the variable
+     * @param expression the expression whose value the variable names, which cannot be of type {@code void}
      */
-    public IGenericType(@Nonnull final String name, final boolean isNullable) {
+    public IAssignment(@Nonnull final String name, @Nonnull final IExpression expression) {
         this.name = Objects.requireNonNull(name);
-        this.isNullable = isNullable;
-        ParserHelpers.checkWritableName(name);
+        this.expression = Objects.requireNonNull(expression);
+        Preconditions.checkArgument(!expression.type().isVoid(), "void is only a result type");
     }
 
     /**
-     * {@return the name of the type parameter}
+     * {@return the name of the variable}
      */
     @Nonnull
     public String name() {
         return name;
     }
 
-    @Override
-    public boolean isNullable() {
-        return isNullable;
-    }
-
+    /**
+     * {@return the expression whose value the variable names; its type is the type of the variable}
+     */
     @Nonnull
-    @Override
-    public IGenericType withNullability(final boolean isNullable) {
-        return new IGenericType(name, isNullable);
+    public IExpression expression() {
+        return expression;
     }
 
     @Override
@@ -77,7 +76,7 @@ public final class IGenericType implements IType {
         if (this == other) {
             return true;
         }
-        return other instanceof IGenericType that && name.equals(that.name) && isNullable == that.isNullable;
+        return other instanceof IAssignment that && name.equals(that.name) && expression.equals(that.expression);
     }
 
     @Override
@@ -86,12 +85,12 @@ public final class IGenericType implements IType {
     }
 
     private int computeHashCode() {
-        return Objects.hash("generic type", name, isNullable);
+        return Objects.hash("assignment", name, expression);
     }
 
     @Nonnull
     @Override
     public String toString() {
-        return ParserHelpers.writeName(name) + ParserHelpers.nullableSuffix(isNullable);
+        return "IAssignment[name=" + name + ", expression=" + expression + "]";
     }
 }
