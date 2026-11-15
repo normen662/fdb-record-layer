@@ -135,6 +135,18 @@ class ScopeTest {
     }
 
     @Test
+    void lookupFunctionSkipsVariablesOfName() {
+        final Scope outer = Scope.root();
+        outer.declareFunction(IDENTITY);
+        final Scope inner = outer.enterBlock();
+        inner.declareVariable("f", INT_TERM);
+        // a dot call calls a function, so a variable of the name hides the function only from other lookups
+        assertThat(inner.lookupFunction("f")).contains(new Scope.FunctionBinding(IDENTITY));
+        assertThat(inner.lookupValue("f")).contains(new Scope.VariableBinding(INT_TERM, null));
+        assertThat(Scope.root().lookupFunction("f")).isEmpty();
+    }
+
+    @Test
     void declareNameTwiceInOneScopeFails() {
         final Scope scope = Scope.root();
         scope.declareVariable("x", INT_TERM);

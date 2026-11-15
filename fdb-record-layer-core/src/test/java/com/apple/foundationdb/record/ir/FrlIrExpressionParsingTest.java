@@ -26,6 +26,7 @@ import com.apple.foundationdb.record.ir.fragments.IAssignment;
 import com.apple.foundationdb.record.ir.fragments.IBlock;
 import com.apple.foundationdb.record.ir.fragments.IClosure;
 import com.apple.foundationdb.record.ir.fragments.IExpression;
+import com.apple.foundationdb.record.ir.fragments.IExternType;
 import com.apple.foundationdb.record.ir.fragments.IFunction;
 import com.apple.foundationdb.record.ir.fragments.IFunctionCall;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDeclaration;
@@ -36,9 +37,12 @@ import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.ILiteral;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IStatement;
+import com.apple.foundationdb.record.ir.fragments.IStreamType;
 import com.apple.foundationdb.record.ir.fragments.IType;
+import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
 import com.apple.foundationdb.record.ir.fragments.IVariableReference;
 import com.google.common.collect.ImmutableList;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -325,6 +329,145 @@ class FrlIrExpressionParsingTest {
         assertThat(lastExpression(text)).isEqualTo(expected);
     }
 
+    @Nonnull
+    static Stream<Arguments> dotCallsAndTrailingClosures() {
+        final String inc = "extern func inc(x: int): int\n";
+        final IFunctionDeclaration incFunction =
+                declaration("inc", ImmutableList.of(), ImmutableList.of(parameter("x", INT)), INT);
+        final IFunctionCall incOfIncOfOne = new IFunctionCall(reference(incFunction), ImmutableList.of(
+                new IFunctionCall(reference(incFunction), ImmutableList.of(new ILiteral(1, INT)))));
+        final IFunctionType intToInt = function(ImmutableList.of(INT), INT);
+        final IFunctionDeclaration fold = declaration("fold", ImmutableList.of(),
+                ImmutableList.of(parameter("x", INT), parameter("f", intToInt)), INT);
+        final IClosure.Parameter y = new IClosure.Parameter("y", INT);
+        return Stream.of(
+                // a dot call calls the function with the expression before the dot as its first argument
+                Arguments.of(inc + "let e = 1.inc()",
+                        new IFunctionCall(reference(incFunction), ImmutableList.of(new ILiteral(1, INT)))),
+                Arguments.of(inc + "let e = 1.inc().inc()", incOfIncOfOne),
+                Arguments.of("extern func f(x: int, y: bigint): string\nlet e = 1.f(2)",
+                        new IFunctionCall(reference(declaration("f", ImmutableList.of(),
+                                ImmutableList.of(parameter("x", INT), parameter("y", BIGINT)), STRING)),
+                                ImmutableList.of(new ILiteral(1, INT), new ILiteral(2L, BIGINT)))),
+                // the context of the call reaches the first argument through the type parameter
+                Arguments.of(ID + "let e: bigint = 42.id()",
+                        new IFunctionCall(reference(ID_FUNCTION, ImmutableList.of(BIGINT),
+                                function(ImmutableList.of(BIGINT), BIGINT)),
+                                ImmutableList.of(new ILiteral(42L, BIGINT)))),
+                // a dot call can start a line, also after a blank line or a comment
+                Arguments.of(inc + "let e = 1\n    .inc()\n\n    // and once more\n    .inc()", incOfIncOfOne),
+                // the sign belongs to the literal, and a floating-point literal keeps its point
+                Arguments.of(inc + "let e = -1.inc()",
+                        new IFunctionCall(reference(incFunction), ImmutableList.of(new ILiteral(-1, INT)))),
+                Arguments.of("extern func floor(x: double): int\nlet e = 1.5.floor()",
+                        new IFunctionCall(reference(declaration("floor", ImmutableList.of(),
+                                ImmutableList.of(parameter("x", DOUBLE)), INT)),
+                                ImmutableList.of(new ILiteral(1.5, DOUBLE)))),
+                // a trailing closure is the last argument, and without other arguments the parentheses can go
+                Arguments.of("extern func fold(x: int, f: (int) -> int): int\nlet e = fold(1) { y in y }",
+                        new IFunctionCall(reference(fold), ImmutableList.of(new ILiteral(1, INT),
+                                closure(ImmutableList.of(y), INT, new IVariableReference("y", INT))))),
+                Arguments.of("extern func run(f: () -> int): int\nlet e = run { 42 }",
+                        new IFunctionCall(reference(declaration("run", ImmutableList.of(),
+                                ImmutableList.of(parameter("f", function(ImmutableList.of(), INT))), INT)),
+                                ImmutableList.of(closure(ImmutableList.of(), INT, new ILiteral(42, INT))))),
+                Arguments.of("extern func fold(x: int, f: (int) -> int): int\n"
+                                + "let e = fold(fold(1) { y in y }) { z in z }",
+                        new IFunctionCall(reference(fold), ImmutableList.of(
+                                new IFunctionCall(reference(fold), ImmutableList.of(new ILiteral(1, INT),
+                                        closure(ImmutableList.of(y), INT, new IVariableReference("y", INT)))),
+                                closure(ImmutableList.of(new IClosure.Parameter("z", INT)), INT,
+                                        new IVariableReference("z", INT))))),
+                // a dot call can take arguments and a trailing closure
+                Arguments.of("extern func combine(x: int, y: int, f: (int, int) -> int): int\n"
+                                + "let e = 1.combine(2) { a, b in a }",
+                        new IFunctionCall(reference(declaration("combine", ImmutableList.of(),
+                                ImmutableList.of(parameter("x", INT), parameter("y", INT),
+                                        parameter("f", function(ImmutableList.of(INT, INT), INT))), INT)),
+                                ImmutableList.of(new ILiteral(1, INT), new ILiteral(2, INT),
+                                        closure(ImmutableList.of(new IClosure.Parameter("a", INT),
+                                                new IClosure.Parameter("b", INT)), INT,
+                                                new IVariableReference("a", INT))))),
+                // the trailing closure of a generic function takes its types from the other arguments
+                Arguments.of("extern func map<T, U>(x: T, f: (T) -> U): U\nlet e = 1.map { x in x }",
+                        new IFunctionCall(reference(declaration("map", ImmutableList.of(T, U),
+                                        ImmutableList.of(parameter("x", T),
+                                                parameter("f", function(ImmutableList.of(T), U))), U),
+                                ImmutableList.of(INT, INT), function(ImmutableList.of(INT, intToInt), INT)),
+                                ImmutableList.of(new ILiteral(1, INT), closure(ImmutableList.of(
+                                        new IClosure.Parameter("x", INT)), INT, new IVariableReference("x", INT))))),
+                // anything of a function type takes a trailing closure
+                Arguments.of("let k = { (f: () -> int) -> int in f() }\nlet e = k { 1 }",
+                        new IFunctionCall(new IVariableReference("k", function(ImmutableList.of(
+                                function(ImmutableList.of(), INT)), INT)),
+                                ImmutableList.of(closure(ImmutableList.of(), INT, new ILiteral(1, INT))))),
+                // a dot call looks up functions only, so a variable of the name does not hide the function
+                Arguments.of("extern func next(x: int): int\nlet e = { (next: int) in next.next() }",
+                        closure(ImmutableList.of(new IClosure.Parameter("next", INT)), INT,
+                                new IFunctionCall(reference(declaration("next", ImmutableList.of(),
+                                        ImmutableList.of(parameter("x", INT)), INT)),
+                                        ImmutableList.of(new IVariableReference("next", INT))))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("dotCallsAndTrailingClosures")
+    void parseProgramDotCallOrTrailingClosureIsCall(@Nonnull final String text, @Nonnull final IExpression expected) {
+        assertThat(lastExpression(text)).isEqualTo(expected);
+    }
+
+    @Test
+    void parseProgramDotCallChainTypesLeftToRight() {
+        final String text = """
+                extern type row
+                extern func scan(): stream<row>
+                extern func filter<T>(upstream: stream<T>, predicate: (T) -> boolean): stream<T>
+                extern func map<T, R>(upstream: stream<T>, result: (T) -> R): stream<R>
+                extern func isGood(r: row): boolean
+                extern func score(r: row): int
+                let e = scan()
+                    .filter { r in r.isGood() }
+                    .map { r in r.score() }""";
+        final IType row = new IExternType(new ITypeDeclaration("row", ImmutableList.of(), null), false);
+        final IGenericType r = new IGenericType("R", false);
+        final IFunctionDeclaration scan =
+                declaration("scan", ImmutableList.of(), ImmutableList.of(), new IStreamType(row));
+        final IFunctionDeclaration filter = declaration("filter", ImmutableList.of(T),
+                ImmutableList.of(parameter("upstream", new IStreamType(T)),
+                        parameter("predicate", function(ImmutableList.of(T), BOOLEAN))), new IStreamType(T));
+        final IFunctionDeclaration map = declaration("map", ImmutableList.of(T, r),
+                ImmutableList.of(parameter("upstream", new IStreamType(T)),
+                        parameter("result", function(ImmutableList.of(T), r))), new IStreamType(r));
+        final IFunctionDeclaration isGood =
+                declaration("isGood", ImmutableList.of(), ImmutableList.of(parameter("r", row)), BOOLEAN);
+        final IFunctionDeclaration score =
+                declaration("score", ImmutableList.of(), ImmutableList.of(parameter("r", row)), INT);
+        final IClosure.Parameter rowParameter = new IClosure.Parameter("r", row);
+        final IVariableReference rowReference = new IVariableReference("r", row);
+        final IFunctionCall filtered = new IFunctionCall(reference(filter, ImmutableList.of(row),
+                function(ImmutableList.of(new IStreamType(row), function(ImmutableList.of(row), BOOLEAN)),
+                        new IStreamType(row))),
+                ImmutableList.of(new IFunctionCall(reference(scan), ImmutableList.of()),
+                        closure(ImmutableList.of(rowParameter), BOOLEAN,
+                                new IFunctionCall(reference(isGood), ImmutableList.of(rowReference)))));
+        // each call has the type of its row as the context of its closure, so `r.isGood()` and `r.score()` resolve
+        assertThat(lastExpression(text)).isEqualTo(new IFunctionCall(reference(map, ImmutableList.of(row, INT),
+                function(ImmutableList.of(new IStreamType(row), function(ImmutableList.of(row), INT)),
+                        new IStreamType(INT))),
+                ImmutableList.of(filtered, closure(ImmutableList.of(rowParameter), INT,
+                        new IFunctionCall(reference(score), ImmutableList.of(rowReference))))));
+    }
+
+    @Test
+    void parseProgramClosureOnNextLineIsStatementOfItsOwn() {
+        final List<IStatement> statements =
+                parseProgram("extern func run(f: () -> int): int\nlet e = run\n{ 42 }").statements();
+        // a trailing closure stays on the line of what it calls, so `let e = run` ends with its line
+        assertThat(statements).hasSize(3);
+        assertThat(statements.get(1)).isEqualTo(new IAssignment("e", reference(declaration("run",
+                ImmutableList.of(), ImmutableList.of(parameter("f", function(ImmutableList.of(), INT))), INT))));
+        assertThat(statements.get(2)).isEqualTo(closure(ImmutableList.of(), INT, new ILiteral(42, INT)));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
             // a name must be in scope
@@ -389,6 +532,20 @@ class FrlIrExpressionParsingTest {
             "let e = \"open",
             "let e = 1.",
             "let e = .5",
+            // without arguments or a trailing closure, a dot is not a call: that form is left to the fields of records
+            "extern func inc(x: int): int\nlet e = 1.inc",
+            // a dot call calls a function in scope, not a variable of function type
+            "let e = 1.inc()",
+            "let inc = { (x: int) -> int in x }\nlet e = 1.inc()",
+            // a statement cannot start with a dot, and the name stays on the line of the dot
+            "extern func inc(x: int): int\nlet e = 1;.inc()",
+            "extern func inc(x: int): int\nlet e = 1.\ninc()",
+            // a dot call needs the arguments of all the other parameters
+            "extern func f(x: int, y: int): int\nlet e = 1.f()",
+            // a trailing closure is an argument like any other: it must be of the type of the last parameter
+            "extern func inc(x: int): int\nlet e = inc { 1 }",
+            // a call has one trailing closure at most; a second one calls the result of the call
+            "extern func fold(x: int, f: (int) -> int): int\nlet e = fold(1) { y in y } { z in z }",
     })
     void parseProgramInvalidExpressionFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);

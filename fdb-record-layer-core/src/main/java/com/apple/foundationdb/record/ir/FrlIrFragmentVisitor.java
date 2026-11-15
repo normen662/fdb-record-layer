@@ -82,6 +82,13 @@ import java.util.function.Supplier;
 @API(API.Status.EXPERIMENTAL)
 public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
+    /**
+     * The message of the exception if a callee is not a function of the types of the arguments of a call.
+     */
+    @Nonnull
+    private static final String ARGUMENT_MISMATCH =
+            "a call must call a function that is not nullable with arguments of the types of its parameters";
+
     @Nonnull
     private Scope scope = Scope.root();
 
@@ -264,57 +271,106 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     //
 
     /**
-     * Infers the type of an expression, a primary expression followed by calls, each of which calls the result of the
-     * one before it. The expected type, if there is one, is the context of the expression: the type stated for a
-     * variable, the type of a parameter, or the result type of a body.
+     * Infers the type of an expression, a primary expression followed by postfixes, each of which applies to the
+     * expression before it: a call, a trailing closure, or a dot call. The expected type, if there is one, is the
+     * context of the expression: the type stated for a variable, the type of a parameter, or the result type of a body.
+     * It is the context of the last postfix, the one whose result the expression is.
      *
      * @param mismatch the message of the exception if the expression cannot have the expected type
      */
     @Nonnull
     private Inferred infer(@Nonnull final FrlIrParser.ExpressionContext ctx,
                            @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
-        final List<FrlIrParser.CallSuffixContext> callSuffixes = ctx.callSuffix();
-        if (callSuffixes.isEmpty()) {
+        final List<FrlIrParser.PostfixContext> postfixes = ctx.postfix();
+        if (postfixes.isEmpty()) {
             return new ExpressionInferenceVisitor(expected, mismatch).visit(ctx.primaryExpression());
         }
-        // a callee has no context of its own: its type follows from the arguments and the context of the call
+        // what a postfix applies to has no context of its own: its type follows from the call
         Inferred expression = new ExpressionInferenceVisitor(null, mismatch).visit(ctx.primaryExpression());
-        final int last = callSuffixes.size() - 1;
-        for (final FrlIrParser.CallSuffixContext callSuffix : callSuffixes.subList(0, last)) {
-            expression = inferCall(expression, callSuffix, null, mismatch);
+        final int last = postfixes.size() - 1;
+        for (int i = 0; i <= last; i++) {
+            expression = new PostfixInferenceVisitor(expression, i == last ? expected : null, mismatch)
+                    .visit(postfixes.get(i));
         }
-        return inferCall(expression, callSuffixes.get(last), expected, mismatch);
+        return expression;
     }
 
     /**
      * Infers the type of a call: the callee must be a function of the types of the arguments, and the result type of
      * that function is the type of the call. The callee, and the expected type of the call, are unified with the
-     * function type before the arguments are inferred, so that a closure among the arguments has the type of its
-     * parameter as its context.
+     * function type before the arguments are inferred, so that a closure among the arguments, a trailing closure
+     * included, has the type of its parameter as its context.
+     *
+     * @param arguments the arguments in order, each of which is inferred given the type of its parameter
      */
     @Nonnull
-    private Inferred inferCall(@Nonnull final Inferred callee, @Nonnull final FrlIrParser.CallSuffixContext ctx,
+    private Inferred inferCall(@Nonnull final Inferred callee,
+                               @Nonnull final List<Function<TypeInference.Term, Inferred>> arguments,
                                @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
         final TypeInference inference = inference();
-        final String argumentMismatch =
-                "a call must call a function that is not nullable with arguments of the types of its parameters";
-        final ImmutableList<TypeInference.Term> parameterTypes = ctx.expression()
-                .stream()
+        final ImmutableList<TypeInference.Term> parameterTypes = arguments.stream()
                 .map(argument -> inference.unknown())
                 .collect(ImmutableList.toImmutableList());
         final TypeInference.Term resultType = inference.unknown();
-        inference.unify(callee.type(), inference.function(parameterTypes, resultType), argumentMismatch);
+        inference.unify(callee.type(), inference.function(parameterTypes, resultType), ARGUMENT_MISMATCH);
         if (expected != null) {
             inference.unify(resultType, expected, mismatch);
         }
-        final ImmutableList.Builder<Inferred> arguments = ImmutableList.builder();
+        final ImmutableList.Builder<Inferred> inferredArguments = ImmutableList.builder();
         for (int i = 0; i < parameterTypes.size(); i++) {
-            arguments.add(infer(ctx.expression(i), parameterTypes.get(i), argumentMismatch));
+            inferredArguments.add(arguments.get(i).apply(parameterTypes.get(i)));
         }
-        final ImmutableList<Inferred> inferredArguments = arguments.build();
-        return new Inferred(resultType, () -> new IFunctionCall(callee.builder().get(), inferredArguments.stream()
+        final ImmutableList<Inferred> builtArguments = inferredArguments.build();
+        return new Inferred(resultType, () -> new IFunctionCall(callee.builder().get(), builtArguments.stream()
                 .map(argument -> argument.builder().get())
                 .collect(ImmutableList.toImmutableList())));
+    }
+
+    /**
+     * Returns the arguments between the parentheses of a call, each of which is inferred with the type of its parameter
+     * as its context.
+     */
+    @Nonnull
+    private ImmutableList<Function<TypeInference.Term, Inferred>> arguments(
+            @Nullable final FrlIrParser.ArgumentsContext ctx) {
+        return ctx == null
+                ? ImmutableList.of()
+                : ctx.expression()
+                        .stream()
+                        .<Function<TypeInference.Term, Inferred>>map(argument ->
+                                parameterType -> infer(argument, parameterType, ARGUMENT_MISMATCH))
+                        .collect(ImmutableList.toImmutableList());
+    }
+
+    /**
+     * Returns the trailing closure of a call as its last argument, which, like every closure, has the type of its
+     * parameter as its context before its body is inferred.
+     */
+    @Nonnull
+    private ImmutableList<Function<TypeInference.Term, Inferred>> trailingClosure(
+            @Nullable final FrlIrParser.ClosureContext ctx) {
+        return ctx == null
+                ? ImmutableList.of()
+                : ImmutableList.of(parameterType ->
+                        new ExpressionInferenceVisitor(parameterType, ARGUMENT_MISMATCH).inferClosure(ctx));
+    }
+
+    /**
+     * Returns the type of a reference to a function, in which new inference variables stand for the type parameters of
+     * the function; what they are solved as becomes the type arguments of the reference. The reference refers to the
+     * function that the name stands for where the reference is.
+     */
+    @Nonnull
+    private Inferred functionReference(@Nonnull final Scope.FunctionBinding function) {
+        final TypeInference.Instantiation instantiation =
+                inference().instantiate(function.typeParameters(), function.type());
+        // an instantiated function type resolves to a function type
+        return new Inferred(instantiation.type(), () -> new IFunctionReference(function.function(),
+                instantiation.typeArguments()
+                        .stream()
+                        .map(TypeInference::resolve)
+                        .collect(ImmutableList.toImmutableList()),
+                (IFunctionType)TypeInference.resolve(instantiation.type())));
     }
 
     /**
@@ -848,32 +904,27 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                 }
                 return fit(new Inferred(type, () -> new IVariableReference(name, TypeInference.resolve(type))));
             }
-            final Scope.FunctionBinding function = (Scope.FunctionBinding)binding;
-            final TypeInference.Instantiation instantiation =
-                    inference.instantiate(function.typeParameters(), function.type());
-            // the reference refers to the function that the name stands for here; an instantiated function type
-            // resolves to a function type
-            return fit(new Inferred(instantiation.type(), () -> new IFunctionReference(function.function(),
-                    instantiation.typeArguments()
-                            .stream()
-                            .map(TypeInference::resolve)
-                            .collect(ImmutableList.toImmutableList()),
-                    (IFunctionType)TypeInference.resolve(instantiation.type()))));
+            return fit(functionReference((Scope.FunctionBinding)binding));
         }
 
-        /**
-         * Infers the type of a closure. A parameter type or a result type that the closure does not state is a new
-         * inference variable. The closure's function type is unified with the expected type before the body is
-         * inferred, so that the context determines the types that the closure leaves out and the body sees them; the
-         * closure does not need {@link #fit} afterwards. The scope of the closure inherits the inference of the
-         * statement that the closure is in, so the body joins it. A result type that neither the closure nor the
-         * context states becomes the type of the value of the body, or {@code void} if the body has no value.
-         */
         @Nonnull
         @Override
         public Inferred visitClosureExpression(@Nonnull final FrlIrParser.ClosureExpressionContext ctx) {
+            return inferClosure(ctx.closure());
+        }
+
+        /**
+         * Infers the type of a closure, also of a trailing closure. A parameter type or a result type that the closure
+         * does not state is a new inference variable. The closure's function type is unified with the expected type
+         * before the body is inferred, so that the context determines the types that the closure leaves out and the
+         * body sees them; the closure does not need {@link #fit} afterwards. The scope of the closure inherits the
+         * inference of the statement that the closure is in, so the body joins it. A result type that neither the
+         * closure nor the context states becomes the type of the value of the body, or {@code void} if the body has no
+         * value.
+         */
+        @Nonnull
+        private Inferred inferClosure(@Nonnull final FrlIrParser.ClosureContext closure) {
             final TypeInference inference = inference();
-            final FrlIrParser.ClosureContext closure = ctx.closure();
             return inScope(scope.enterBlock(), () -> {
                 final FrlIrParser.ClosureSignatureContext signature = closure.closureSignature();
                 final ImmutableList<ClosureParameter> parameters = signature == null
@@ -916,6 +967,73 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                 inference().unify(inferred.type(), expected, mismatch);
             }
             return inferred;
+        }
+    }
+
+    /**
+     * Infers a postfix of an expression, one method for each alternative of the {@code postfix} rule. Every postfix is a
+     * call: a call of the expression before it, with its arguments and its trailing closure, or a dot call of a function
+     * whose first argument is the expression before it.
+     */
+    private final class PostfixInferenceVisitor extends FrlIrParserBaseVisitor<Inferred> {
+        /**
+         * The expression that the postfix applies to.
+         */
+        @Nonnull
+        private final Inferred before;
+        /**
+         * The type that the context of the call requires, if any.
+         */
+        @Nullable
+        private final TypeInference.Term expected;
+        /**
+         * The message of the exception if the call cannot have the expected type.
+         */
+        @Nonnull
+        private final String mismatch;
+
+        private PostfixInferenceVisitor(@Nonnull final Inferred before, @Nullable final TypeInference.Term expected,
+                                        @Nonnull final String mismatch) {
+            this.before = before;
+            this.expected = expected;
+            this.mismatch = mismatch;
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitCallPostfix(@Nonnull final FrlIrParser.CallPostfixContext ctx) {
+            return inferCall(before, ImmutableList.<Function<TypeInference.Term, Inferred>>builder()
+                    .addAll(arguments(ctx.arguments()))
+                    .addAll(trailingClosure(ctx.closure()))
+                    .build(), expected, mismatch);
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitTrailingClosurePostfix(@Nonnull final FrlIrParser.TrailingClosurePostfixContext ctx) {
+            return inferCall(before, trailingClosure(ctx.closure()), expected, mismatch);
+        }
+
+        /**
+         * Infers a dot call, {@code x.f(1)}, which calls the function {@code f} with {@code x} as its first argument. The
+         * name is looked up among the functions only, so that a variable of the name does not hide the function.
+         * {@code x} is inferred before the function is known, so its type gets no context from the function's first
+         * parameter until it is unified with that parameter.
+         */
+        @Nonnull
+        @Override
+        public Inferred visitDotCallPostfix(@Nonnull final FrlIrParser.DotCallPostfixContext ctx) {
+            final Scope.FunctionBinding function = scope.lookupFunction(name(ctx.identifier()))
+                    .orElseThrow(() -> new IllegalArgumentException("unknown function"));
+            final Function<TypeInference.Term, Inferred> receiver = parameterType -> {
+                inference().unify(before.type(), parameterType, ARGUMENT_MISMATCH);
+                return before;
+            };
+            return inferCall(functionReference(function), ImmutableList.<Function<TypeInference.Term, Inferred>>builder()
+                    .add(receiver)
+                    .addAll(arguments(ctx.arguments()))
+                    .addAll(trailingClosure(ctx.closure()))
+                    .build(), expected, mismatch);
         }
     }
 

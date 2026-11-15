@@ -30,9 +30,12 @@ options { tokenVocab=FrlIrLexer; }
 // rules below allow NL* at exactly those places: a statement split across lines stays one statement. Where a statement
 // could end, a line break ends it; rules for statements that can end in more than one place must therefore not allow NL*
 // there. The one place within a construct where a line break is never allowed is before the `?` of a nullable type,
-// which stays on the line of its type, as in Swift. The parameters of a closure without parentheses, `{ x, y in }`, may
-// break before a `,`, `->`, or `in` although `x` alone could end a statement; none of the three can start a statement,
-// so the parser still tells the parameters from the statements.
+// which stays on the line of its type, as in Swift. Two places allow a line break although a statement could end
+// before it, because what follows cannot start a statement, so the parser still tells the statements apart:
+// - the parameters of a closure without parentheses, `{ x, y in }`, may break before a `,`, `->`, or `in`;
+// - a dot call may start a line, so that a chain of calls can put one call on each line (see `postfix`).
+// The opposite holds for the `(` of a call and for a trailing closure: both stay on the line of what they call, since
+// after `let x = f` a line break ends the statement, and a closure on the next line is a statement of its own.
 //
 
 //
@@ -300,7 +303,7 @@ assignment
 //
 
 expression
-    : primaryExpression callSuffix*
+    : primaryExpression postfix*
     ;
 
 // A name is a variable, a parameter, or a function.
@@ -310,10 +313,26 @@ primaryExpression
     | closure       # closureExpression
     ;
 
-// The arguments of a call. Anything of a function type can be called, `f(1)(2)` and `{ (x: int) in x }(1)` included. As
-// in Swift, the `(` stays on the line of what it calls: after `let x = f`, a line break ends the statement, and since no
-// statement starts with `(`, a `(` on the next line is an error.
-callSuffix
+// The postfixes of an expression apply from left to right, each to the expression before it.
+// - A call, `f(1)`. Anything of a function type can be called, `f(1)(2)` and `{ (x: int) in x }(1)` included.
+// - A trailing closure, as in Swift: a closure after the arguments is the last argument, `fold(0) { a, x in a }` is
+//   `fold(0, { a, x in a })`, and without other arguments the parentheses can go, `run { 42 }` is `run({ 42 })`.
+// - A dot call: `x.f(1)` calls the function `f` with `x` as its first argument, `f(x, 1)`, and it can take a trailing
+//   closure too, `xs.map { x in x }`. The name after the `.` is looked up among the functions only, so that a variable
+//   cannot hide a function there. Without arguments or a trailing closure, `x.f` is not a call; that form is left to
+//   the fields of records.
+// A dot call may start a line, which continues the expression of the line before. The `(` of a call and a trailing
+// closure stay on the line of what they call. As in Swift, a call has one trailing closure at most. The sign of a
+// literal belongs to the literal, so `-1.f()` is `f(-1)`, unlike in Swift. Statements with a condition, once FRL-IR has
+// them, will take no trailing closure in the condition: there, a `{` starts the body, and a closure argument goes into
+// the parentheses, `if xs.contains({ x in x > 1 }) { }`.
+postfix
+    : arguments closure?                                    # callPostfix
+    | closure                                               # trailingClosurePostfix
+    | NL* DOT identifier (arguments closure? | closure)     # dotCallPostfix
+    ;
+
+arguments
     : LPAREN NL* (expression (NL* COMMA NL* expression)* NL*)? RPAREN
     ;
 

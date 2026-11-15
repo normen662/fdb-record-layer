@@ -314,6 +314,22 @@ final class Scope {
     }
 
     /**
+     * Returns the function of the given name that is declared in this scope or, if there is none, in the nearest
+     * enclosing scope that declares one. Unlike {@link #lookupValue}, the lookup skips variables of the name: a dot call,
+     * {@code x.f(1)}, calls a function, so a variable {@code f} must not hide the function there.
+     *
+     * @param name the name of the function
+     * @return the function, or empty if no function of this name is in scope
+     */
+    @Nonnull
+    Optional<FunctionBinding> lookupFunction(@Nonnull final String name) {
+        if (values.get(name) instanceof FunctionBinding function) {
+            return Optional.of(function);
+        }
+        return enclosing == null ? Optional.empty() : enclosing.lookupFunction(name);
+    }
+
+    /**
      * What the name of a value stands for: a variable or a function.
      */
     sealed interface Binding permits VariableBinding, FunctionBinding {

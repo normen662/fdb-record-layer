@@ -83,6 +83,7 @@ QUESTION : '?';
 ARROW    : '->';
 MINUS    : '-';
 AT       : '@';
+DOT      : '.';
 
 INTEGER_LITERAL : [0-9]+;
 
