@@ -29,11 +29,12 @@ import javax.annotation.Nonnull;
  * interchangeable exactly when they are equal.
  *
  * <p>Types are immutable values. {@link Object#toString() toString()} renders a type in FRL-IR syntax, and parsing that
- * text yields an equal type, provided the type parameters it mentions ({@link IGenericType}) are in scope.</p>
+ * text yields an equal type, provided the type parameters ({@link IGenericType}) and the extern types
+ * ({@link IExternType}) it mentions are in scope.</p>
  */
 @API(API.Status.EXPERIMENTAL)
 public sealed interface IType extends IFragment permits IPrimitiveType, IRecordType, IArrayType, IVectorType, IEnumType,
-        IFunctionType, IStreamType, IGenericType {
+        IFunctionType, IStreamType, IGenericType, IExternType {
 
     /**
      * Returns whether values of this type can be null.

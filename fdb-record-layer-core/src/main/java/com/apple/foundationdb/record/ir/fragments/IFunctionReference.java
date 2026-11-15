@@ -21,6 +21,7 @@
 package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 
@@ -30,15 +31,17 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
- * A reference to a function definition, as the callee of a call, {@code f} in {@code f(1)}, or as a value of function
- * type, {@code f} in {@code let g = f}. A reference to a generic function fixes its type arguments, which are inferred
- * from where the reference is used: in {@code id(42)} for {@code func id<T>(x: T): T}, the reference is to {@code id}
- * with the type argument {@code int}, and its type is {@code (int) -> int}.
+ * A reference to a function, as the callee of a call, {@code f} in {@code f(1)}, or as a value of function type,
+ * {@code f} in {@code let g = f}. The name of a function is resolved once, while parsing, and the reference refers to
+ * the {@link IFunction} that the name stood for there: the definition that lowering compiles, or the declaration that
+ * says what to call. A reference to a generic function fixes its type arguments, which are inferred from where the
+ * reference is used: in {@code id(42)} for {@code func id<T>(x: T): T}, the reference is to {@code id} with the type
+ * argument {@code int}, and its type is {@code (int) -> int}.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IFunctionReference implements IExpression {
     @Nonnull
-    private final String name;
+    private final IFunction function;
     @Nonnull
     private final ImmutableList<IType> typeArguments;
     @Nonnull
@@ -49,16 +52,26 @@ public final class IFunctionReference implements IExpression {
     /**
      * Creates a reference to a function.
      *
-     * @param name the name of the function
+     * @param function the function that the reference refers to
      * @param typeArguments the types for the type parameters of the function, in order, and empty if the function is not
      *        generic
      * @param type the type of the function for these type arguments
      */
-    public IFunctionReference(@Nonnull final String name, @Nonnull final List<IType> typeArguments,
+    public IFunctionReference(@Nonnull final IFunction function, @Nonnull final List<IType> typeArguments,
                               @Nonnull final IFunctionType type) {
-        this.name = Objects.requireNonNull(name);
+        this.function = Objects.requireNonNull(function);
         this.typeArguments = ImmutableList.copyOf(typeArguments);
         this.type = Objects.requireNonNull(type);
+        Preconditions.checkArgument(this.typeArguments.size() == function.typeParameters().size(),
+                "a reference to a function has a type argument for each type parameter of the function");
+    }
+
+    /**
+     * {@return the function that the reference refers to}
+     */
+    @Nonnull
+    public IFunction function() {
+        return function;
     }
 
     /**
@@ -66,7 +79,7 @@ public final class IFunctionReference implements IExpression {
      */
     @Nonnull
     public String name() {
-        return name;
+        return function.name();
     }
 
     /**
@@ -88,7 +101,7 @@ public final class IFunctionReference implements IExpression {
         if (this == other) {
             return true;
         }
-        return other instanceof IFunctionReference that && name.equals(that.name)
+        return other instanceof IFunctionReference that && function.equals(that.function)
                 && typeArguments.equals(that.typeArguments) && type.equals(that.type);
     }
 
@@ -98,12 +111,12 @@ public final class IFunctionReference implements IExpression {
     }
 
     private int computeHashCode() {
-        return Objects.hash("function reference", name, typeArguments, type);
+        return Objects.hash("function reference", function, typeArguments, type);
     }
 
     @Nonnull
     @Override
     public String toString() {
-        return "IFunctionReference[name=" + name + ", typeArguments=" + typeArguments + ", type=" + type + "]";
+        return "IFunctionReference[name=" + name() + ", typeArguments=" + typeArguments + ", type=" + type + "]";
     }
 }

@@ -50,8 +50,9 @@ public interface IFragment {
      * have equal hash codes in every run of every JVM. A fragment computes it with
      * {@link java.util.Objects#hash(Object...)} from a string constant that names the kind of fragment, followed by
      * the parts in the order of their declaration. Strings, numbers, booleans, lists, and optionals contribute their
-     * own hash codes, whose algorithms the Java SE API specifies; a {@link com.apple.foundationdb.half.Half}
-     * contributes its 16-bit pattern, which is its hash code. Fragments contribute theirs, which this method specifies.
+     * own hash codes, whose algorithms the Java SE API specifies, and a part that is absent, {@code null}, contributes
+     * 0; a {@link com.apple.foundationdb.half.Half} contributes its 16-bit pattern, which is its hash code. Fragments
+     * contribute theirs, which this method specifies.
      * An enum constant contributes the hash code of its FRL-IR keyword: {@link Enum#hashCode()} is the identity hash
      * code, which differs between runs.
      *

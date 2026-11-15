@@ -26,6 +26,7 @@ import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Supplier;
@@ -33,10 +34,11 @@ import java.util.function.Supplier;
 /**
  * A function declaration, {@code extern func lookup(key: bigint): string?}: the signature of a function that the
  * runtime provides, like an external function in MLIR. Calls and references treat a declared function like a defined
- * one; it just has no body.
+ * one; it just has no body. Its annotations, and those of its {@linkplain #packageStatement() package}, tell a target
+ * what to call.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IFunctionDeclaration implements IStatement {
+public final class IFunctionDeclaration implements IFunction {
     @Nonnull
     private final String name;
     @Nonnull
@@ -46,10 +48,14 @@ public final class IFunctionDeclaration implements IStatement {
     @Nonnull
     private final IType resultType;
     @Nonnull
+    private final ImmutableList<IAnnotationFragment> annotations;
+    @Nullable
+    private final IPackageStatement packageStatement;
+    @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
     /**
-     * Creates a function declaration.
+     * Creates a function declaration without annotations, in a program without a package.
      *
      * @param name the name of the function
      * @param typeParameters the type parameters of a generic function, in order, and empty otherwise
@@ -59,10 +65,30 @@ public final class IFunctionDeclaration implements IStatement {
     public IFunctionDeclaration(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
                                 @Nonnull final List<IFunctionDefinition.Parameter> parameters,
                                 @Nonnull final IType resultType) {
+        this(name, typeParameters, parameters, resultType, ImmutableList.of(), null);
+    }
+
+    /**
+     * Creates a function declaration.
+     *
+     * @param name the name of the function
+     * @param typeParameters the type parameters of a generic function, in order, and empty otherwise
+     * @param parameters the parameters in order, with distinct names
+     * @param resultType the result type, which is {@code void} if the declaration does not state one
+     * @param annotations the annotations of the declaration, in order
+     * @param packageStatement the package of the program that declares the function, or {@code null} if the program
+     *        has none
+     */
+    public IFunctionDeclaration(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
+                                @Nonnull final List<IFunctionDefinition.Parameter> parameters,
+                                @Nonnull final IType resultType, @Nonnull final List<IAnnotationFragment> annotations,
+                                @Nullable final IPackageStatement packageStatement) {
         this.name = Objects.requireNonNull(name);
         this.typeParameters = ImmutableList.copyOf(typeParameters);
         this.parameters = ImmutableList.copyOf(parameters);
         this.resultType = Objects.requireNonNull(resultType);
+        this.annotations = ImmutableList.copyOf(annotations);
+        this.packageStatement = packageStatement;
         Preconditions.checkArgument(this.parameters.stream().map(IFunctionDefinition.Parameter::name).distinct().count()
                 == this.parameters.size(), "the parameters of a function must have distinct names");
     }
@@ -71,6 +97,7 @@ public final class IFunctionDeclaration implements IStatement {
      * {@return the name of the function}
      */
     @Nonnull
+    @Override
     public String name() {
         return name;
     }
@@ -79,6 +106,7 @@ public final class IFunctionDeclaration implements IStatement {
      * {@return the type parameters of a generic function, in order, and an empty list otherwise}
      */
     @Nonnull
+    @Override
     public List<IGenericType> typeParameters() {
         return typeParameters;
     }
@@ -87,6 +115,7 @@ public final class IFunctionDeclaration implements IStatement {
      * {@return the parameters in order}
      */
     @Nonnull
+    @Override
     public List<IFunctionDefinition.Parameter> parameters() {
         return parameters;
     }
@@ -95,8 +124,26 @@ public final class IFunctionDeclaration implements IStatement {
      * {@return the result type, which is {@code void} if the declaration does not state one}
      */
     @Nonnull
+    @Override
     public IType resultType() {
         return resultType;
+    }
+
+    /**
+     * {@return the annotations of the declaration, in order}
+     */
+    @Nonnull
+    @Override
+    public List<IAnnotationFragment> annotations() {
+        return annotations;
+    }
+
+    /**
+     * {@return the package of the program that declares the function, or {@code null} if the program has none}
+     */
+    @Nullable
+    public IPackageStatement packageStatement() {
+        return packageStatement;
     }
 
     @Override
@@ -106,7 +153,8 @@ public final class IFunctionDeclaration implements IStatement {
         }
         return other instanceof IFunctionDeclaration that && name.equals(that.name)
                 && typeParameters.equals(that.typeParameters) && parameters.equals(that.parameters)
-                && resultType.equals(that.resultType);
+                && resultType.equals(that.resultType) && annotations.equals(that.annotations)
+                && Objects.equals(packageStatement, that.packageStatement);
     }
 
     @Override
@@ -115,13 +163,15 @@ public final class IFunctionDeclaration implements IStatement {
     }
 
     private int computeHashCode() {
-        return Objects.hash("function declaration", name, typeParameters, parameters, resultType);
+        return Objects.hash("function declaration", name, typeParameters, parameters, resultType, annotations,
+                packageStatement);
     }
 
     @Nonnull
     @Override
     public String toString() {
         return "IFunctionDeclaration[name=" + name + ", typeParameters=" + typeParameters + ", parameters="
-                + parameters + ", resultType=" + resultType + "]";
+                + parameters + ", resultType=" + resultType + ", annotations=" + annotations + ", packageStatement="
+                + packageStatement + "]";
     }
 }

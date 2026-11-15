@@ -20,10 +20,12 @@
 
 package com.apple.foundationdb.record.ir;
 
+import com.apple.foundationdb.record.ir.fragments.IAnnotationFragment;
 import com.apple.foundationdb.record.ir.fragments.IArrayType;
 import com.apple.foundationdb.record.ir.fragments.IAssignment;
 import com.apple.foundationdb.record.ir.fragments.IBlock;
 import com.apple.foundationdb.record.ir.fragments.IClosure;
+import com.apple.foundationdb.record.ir.fragments.IExternType;
 import com.apple.foundationdb.record.ir.fragments.IFunctionCall;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDeclaration;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDefinition;
@@ -31,11 +33,14 @@ import com.apple.foundationdb.record.ir.fragments.IFunctionReference;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.ILiteral;
+import com.apple.foundationdb.record.ir.fragments.IPackageStatement;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IProgram;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
 import com.apple.foundationdb.record.ir.fragments.IStatement;
+import com.apple.foundationdb.record.ir.fragments.IStreamType;
 import com.apple.foundationdb.record.ir.fragments.IType;
+import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
 import com.apple.foundationdb.record.ir.fragments.IVariableReference;
 import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Test;
@@ -53,8 +58,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Tests for parsing FRL-IR programs: the program, statement, function definition, and function declaration productions
- * of the grammar, and the fragments that {@link FrlIrFragmentVisitor} builds from them.
+ * Tests for parsing FRL-IR programs: the program, statement, function definition, function declaration, type
+ * declaration, package, and annotation productions of the grammar, and the fragments that {@link FrlIrFragmentVisitor}
+ * builds from them.
  */
 class FrlIrProgramParsingTest {
     private static final IType INT = new IPrimitiveType(IPrimitiveType.Kind.INT, false);
@@ -195,11 +201,10 @@ class FrlIrProgramParsingTest {
 
     @Test
     void parseProgramDeclaredFunctionCanBeCalled() {
-        assertThat(parseProgram("extern func f(x: bigint): string\nlet s = f(42)").statements()).containsExactly(
-                new IFunctionDeclaration("f", ImmutableList.of(),
-                        ImmutableList.of(new IFunctionDefinition.Parameter("x", BIGINT)), STRING),
-                new IAssignment("s", new IFunctionCall(new IFunctionReference("f", ImmutableList.of(),
-                        new IFunctionType(false, ImmutableList.of(BIGINT), STRING)),
+        final IFunctionDeclaration f = new IFunctionDeclaration("f", ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinition.Parameter("x", BIGINT)), STRING);
+        assertThat(parseProgram("extern func f(x: bigint): string\nlet s = f(42)").statements()).containsExactly(f,
+                new IAssignment("s", new IFunctionCall(new IFunctionReference(f, ImmutableList.of(), f.type()),
                         ImmutableList.of(new ILiteral(42L, BIGINT)))));
     }
 
@@ -363,23 +368,148 @@ class FrlIrProgramParsingTest {
     }
 
     @Test
-    void parseProgramFunctionBodyCallsFunctionItself() {
+    void parseProgramReferenceRefersToDefinition() {
         final IProgram program = parseProgram("""
                 func f(n: bigint): bigint {
-                    let m = f(n)
+                    let m = n
                     m
                 }
                 f(42)""");
-        final IFunctionReference f = new IFunctionReference("f", ImmutableList.of(),
-                new IFunctionType(false, ImmutableList.of(BIGINT), BIGINT));
-        assertThat(program.statements()).containsExactly(
-                new IFunctionDefinition("f", ImmutableList.of(),
-                        ImmutableList.of(new IFunctionDefinition.Parameter("n", BIGINT)), BIGINT,
-                        new IBlock(ImmutableList.of(new IAssignment("m", new IFunctionCall(f,
-                                ImmutableList.of(new IVariableReference("n", BIGINT)))),
-                                new IVariableReference("m", BIGINT)))),
+        final IFunctionDefinition f = new IFunctionDefinition("f", ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinition.Parameter("n", BIGINT)), BIGINT,
+                new IBlock(ImmutableList.of(new IAssignment("m", new IVariableReference("n", BIGINT)),
+                        new IVariableReference("m", BIGINT))));
+        assertThat(program.statements()).containsExactly(f,
                 // a call on its own is a statement
-                new IFunctionCall(f, ImmutableList.of(new ILiteral(42L, BIGINT))));
+                new IFunctionCall(new IFunctionReference(f, ImmutableList.of(), f.type()),
+                        ImmutableList.of(new ILiteral(42L, BIGINT))));
+        // the name is resolved once, while parsing: the reference holds the definition of the program
+        final IFunctionCall call = (IFunctionCall)program.statements().get(1);
+        assertThat(((IFunctionReference)call.callee()).function()).isSameAs(program.statements().get(0));
+    }
+
+    @Test
+    void parseProgramReferenceRefersToInnermostDefinition() {
+        final IProgram program = parseProgram("""
+                func f(): int { 1 }
+                func g(): int {
+                    func f(): int { 2 }
+                    f()
+                }""");
+        final IFunctionDefinition innerF = new IFunctionDefinition("f", ImmutableList.of(), ImmutableList.of(), INT,
+                new IBlock(ImmutableList.of(new ILiteral(2, INT))));
+        final IFunctionDefinition g = (IFunctionDefinition)program.statements().get(1);
+        assertThat(g.body().statements()).containsExactly(innerF,
+                new IFunctionCall(new IFunctionReference(innerF, ImmutableList.of(), innerF.type()),
+                        ImmutableList.of()));
+    }
+
+    @Test
+    void parseProgramExternTypeIsTypeOfItsDeclaration() {
+        final IProgram program = parseProgram("""
+                extern type range
+                extern func bounds(range: range, other: range?): [record<low: range, high: range?>]
+                extern func merge(ranges: stream<range>, combine: (range, range) -> range): stream<range>""");
+        final ITypeDeclaration rangeDeclaration = new ITypeDeclaration("range", ImmutableList.of(), null);
+        final IExternType range = new IExternType(rangeDeclaration, false);
+        assertThat(program.statements()).containsExactly(rangeDeclaration,
+                new IFunctionDeclaration("bounds", ImmutableList.of(),
+                        ImmutableList.of(new IFunctionDefinition.Parameter("range", range),
+                                new IFunctionDefinition.Parameter("other", range.withNullability(true))),
+                        new IArrayType(false, new IRecordType(false, ImmutableList.of(
+                                IRecordType.Field.of(range, "low"),
+                                IRecordType.Field.of(range.withNullability(true), "high"))))),
+                new IFunctionDeclaration("merge", ImmutableList.of(),
+                        ImmutableList.of(new IFunctionDefinition.Parameter("ranges", new IStreamType(range)),
+                                new IFunctionDefinition.Parameter("combine",
+                                        new IFunctionType(false, ImmutableList.of(range, range), range))),
+                        new IStreamType(range)));
+    }
+
+    @Test
+    void parseProgramValueOfExternTypePassesBetweenFunctions() {
+        final IProgram program = parseProgram("""
+                extern type range
+                extern func everything(): range
+                extern func count(r: range): bigint
+                let r = everything()
+                let n = count(r)""");
+        final IExternType range = new IExternType(new ITypeDeclaration("range", ImmutableList.of(), null), false);
+        assertThat(program.statements().get(3)).isEqualTo(new IAssignment("r", new IFunctionCall(
+                new IFunctionReference((IFunctionDeclaration)program.statements().get(1), ImmutableList.of(),
+                        new IFunctionType(false, ImmutableList.of(), range)), ImmutableList.of())));
+        assertThat(((IAssignment)program.statements().get(4)).expression().type()).isEqualTo(BIGINT);
+    }
+
+    @Test
+    void parseProgramPackageAndAnnotationsAreKeptAsWritten() {
+        final IProgram program = parseProgram("""
+                @java("com.apple.foundationdb.record.ir")
+                @swift(module: "RecordLayerIR")
+                package abc
+
+                @java(class:
+                    "com.apple.foundationdb.record.TupleRange")
+                extern type range
+                @java(method: "scanRecords") extern func scan(range: range): bigint
+                @inline func id(x: int): int { x }""");
+        final IPackageStatement abc = new IPackageStatement("abc", ImmutableList.of(
+                annotation("java", new IAnnotationFragment.Argument(null, "com.apple.foundationdb.record.ir")),
+                annotation("swift", new IAnnotationFragment.Argument("module", "RecordLayerIR"))));
+        final ITypeDeclaration range = new ITypeDeclaration("range", ImmutableList.of(annotation("java",
+                new IAnnotationFragment.Argument("class", "com.apple.foundationdb.record.TupleRange"))), abc);
+        assertThat(program.packageStatement()).contains(abc);
+        // the declarations of the program record its package
+        assertThat(program.statements()).containsExactly(abc, range,
+                new IFunctionDeclaration("scan", ImmutableList.of(),
+                        ImmutableList.of(new IFunctionDefinition.Parameter("range", new IExternType(range, false))),
+                        BIGINT, ImmutableList.of(annotation("java",
+                                new IAnnotationFragment.Argument("method", "scanRecords"))), abc),
+                new IFunctionDefinition("id", ImmutableList.of(), ImmutableList.of(
+                        new IFunctionDefinition.Parameter("x", INT)), INT,
+                        new IBlock(ImmutableList.of(new IVariableReference("x", INT))),
+                        ImmutableList.of(new IAnnotationFragment("inline", ImmutableList.of()))));
+    }
+
+    @Test
+    void parseProgramWithoutPackageHasNoPackage() {
+        assertThat(parseProgram("extern type range").packageStatement()).isEmpty();
+        assertThat(parseProgram("extern type range").statements())
+                .containsExactly(new ITypeDeclaration("range", ImmutableList.of(), null));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "extern type range\npackage abc",            // the package statement is the first statement
+            "package abc\npackage def",                  // a program belongs to one package at most
+            "func f() {\n    package abc\n}",            // also not in a function body
+            "let e = { package abc }",                   // or in a closure
+            "package",                                   // a package has a name
+            "package abc def",
+            "@java(42) package abc",                     // an annotation argument is a string
+            "@java(class \"a.B\") extern type range",    // a label is followed by a colon
+            "@java(\"a.B\")\nlet x = 1",                 // only declarations are annotated
+            "@java(\"a.B\")",
+    })
+    void parseProgramInvalidPackageOrAnnotationFails(@Nonnull final String text) {
+        assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "extern type range\nextern type range",              // a scope declares a type name only once
+            "extern func f(r: range)\nextern type range",        // a type is in scope from its declaration on
+            "func f() { extern type t }\nextern func g(x: t)",   // and only in its block
+            "extern type range<T>",                              // an extern type has no type parameters
+            "extern type",                                       // an extern type has a name
+            "extern type int",
+            "extern type range\nlet r: range = 42",              // a literal cannot be of an extern type
+            "extern type range\nlet r: range? = 42",
+            // two extern types are different types
+            "extern type r\nextern type s\nextern func f(x: r)\nextern func g(): s\nf(g())",
+    })
+    void parseProgramInvalidExternTypeFails(@Nonnull final String text) {
+        assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @ParameterizedTest
@@ -396,6 +526,8 @@ class FrlIrProgramParsingTest {
             "func f() { }\nfunc f() { }",                // there is no overloading
             "func f(x: int, x: int) { }",                // the parameters have distinct names
             "let y = f(1)\nfunc f(x: int): int { x }",   // a function is in scope from its definition on
+            "func f(n: int): int { f(n) }",              // so it cannot call itself: FRL-IR has no recursion
+            "func f() { func g() { f() } }",             // not even from a nested function
             "func f() { let x = 1 }\nlet y = x",         // a variable is in scope only in its block
             "func f(x: int) { }\nf\n(1)",                // a `(` on the next line cannot start a statement
             "func outer<T>() { func inner<T>() { } }",   // a type parameter must not hide one of an enclosing function
@@ -422,5 +554,11 @@ class FrlIrProgramParsingTest {
     private static IFunctionDefinition function(@Nonnull final String name,
                                                 @Nonnull final List<IStatement> statements) {
         return new IFunctionDefinition(name, ImmutableList.of(), ImmutableList.of(), VOID, new IBlock(statements));
+    }
+
+    @Nonnull
+    private static IAnnotationFragment annotation(@Nonnull final String name,
+                                                  @Nonnull final IAnnotationFragment.Argument argument) {
+        return new IAnnotationFragment(name, ImmutableList.of(argument));
     }
 }

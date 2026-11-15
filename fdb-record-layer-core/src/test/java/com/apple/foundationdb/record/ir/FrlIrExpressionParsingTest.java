@@ -26,10 +26,13 @@ import com.apple.foundationdb.record.ir.fragments.IAssignment;
 import com.apple.foundationdb.record.ir.fragments.IBlock;
 import com.apple.foundationdb.record.ir.fragments.IClosure;
 import com.apple.foundationdb.record.ir.fragments.IExpression;
+import com.apple.foundationdb.record.ir.fragments.IFunction;
 import com.apple.foundationdb.record.ir.fragments.IFunctionCall;
+import com.apple.foundationdb.record.ir.fragments.IFunctionDeclaration;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDefinition;
 import com.apple.foundationdb.record.ir.fragments.IFunctionReference;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
+import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.ILiteral;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IStatement;
@@ -67,6 +70,15 @@ class FrlIrExpressionParsingTest {
     private static final String ID = "extern func id<T>(x: T): T\n";
     private static final String PAIR = "extern func pair<T>(a: T, b: T)\n";
     private static final String APPLY = "extern func apply<T, U>(g: (T) -> U, x: T): U\n";
+
+    private static final IGenericType T = new IGenericType("T", false);
+    private static final IGenericType U = new IGenericType("U", false);
+    private static final IFunctionDeclaration ID_FUNCTION =
+            declaration("id", ImmutableList.of(T), ImmutableList.of(parameter("x", T)), T);
+    private static final IFunctionDeclaration PAIR_FUNCTION =
+            declaration("pair", ImmutableList.of(T), ImmutableList.of(parameter("a", T), parameter("b", T)), VOID);
+    private static final IFunctionDeclaration APPLY_FUNCTION = declaration("apply", ImmutableList.of(T, U),
+            ImmutableList.of(parameter("g", function(ImmutableList.of(T), U)), parameter("x", T)), U);
 
     @Nonnull
     static Stream<Arguments> literals() {
@@ -111,59 +123,64 @@ class FrlIrExpressionParsingTest {
     static Stream<Arguments> calls() {
         final IFunctionType intToInt = function(ImmutableList.of(INT), INT);
         final IFunctionType bigintToBigint = function(ImmutableList.of(BIGINT), BIGINT);
+        final IGenericType nullableT = new IGenericType("T", true);
+        final IFunctionDeclaration fromNullable =
+                declaration("f", ImmutableList.of(T), ImmutableList.of(parameter("x", nullableT)), T);
         return Stream.of(
                 // a parameter is the context of its argument
                 Arguments.of("extern func f(x: bigint): int\nlet e = f(42)",
-                        new IFunctionCall(reference("f", function(ImmutableList.of(BIGINT), INT)),
+                        new IFunctionCall(reference(declaration("f", ImmutableList.of(),
+                                ImmutableList.of(parameter("x", BIGINT)), INT)),
                                 ImmutableList.of(new ILiteral(42L, BIGINT)))),
                 // the type arguments of a generic function are inferred from the arguments, and from the context of
                 // the call
                 Arguments.of(ID + "let e = id(42)",
-                        new IFunctionCall(reference("id", ImmutableList.of(INT), intToInt),
+                        new IFunctionCall(reference(ID_FUNCTION, ImmutableList.of(INT), intToInt),
                                 ImmutableList.of(new ILiteral(42, INT)))),
                 Arguments.of(ID + "let e: bigint = id(42)",
-                        new IFunctionCall(reference("id", ImmutableList.of(BIGINT), bigintToBigint),
+                        new IFunctionCall(reference(ID_FUNCTION, ImmutableList.of(BIGINT), bigintToBigint),
                                 ImmutableList.of(new ILiteral(42L, BIGINT)))),
                 Arguments.of(ID + "let e: bigint = id(id(42))",
-                        new IFunctionCall(reference("id", ImmutableList.of(BIGINT), bigintToBigint),
-                                ImmutableList.of(new IFunctionCall(reference("id", ImmutableList.of(BIGINT),
+                        new IFunctionCall(reference(ID_FUNCTION, ImmutableList.of(BIGINT), bigintToBigint),
+                                ImmutableList.of(new IFunctionCall(reference(ID_FUNCTION, ImmutableList.of(BIGINT),
                                         bigintToBigint), ImmutableList.of(new ILiteral(42L, BIGINT)))))),
                 // the order of the arguments does not matter: b makes 42 a bigint
                 Arguments.of(PAIR + "let b: bigint = 7\npair(42, b)",
-                        new IFunctionCall(reference("pair", ImmutableList.of(BIGINT),
+                        new IFunctionCall(reference(PAIR_FUNCTION, ImmutableList.of(BIGINT),
                                 function(ImmutableList.of(BIGINT, BIGINT), VOID)),
                                 ImmutableList.of(new ILiteral(42L, BIGINT), new IVariableReference("b", BIGINT)))),
                 // literals of different kinds agree on a type that they can all be
                 Arguments.of(PAIR + "pair(42, 1.5)",
-                        new IFunctionCall(reference("pair", ImmutableList.of(DOUBLE),
+                        new IFunctionCall(reference(PAIR_FUNCTION, ImmutableList.of(DOUBLE),
                                 function(ImmutableList.of(DOUBLE, DOUBLE), VOID)),
                                 ImmutableList.of(new ILiteral(42.0, DOUBLE), new ILiteral(1.5, DOUBLE)))),
                 // T? matches a nullable type, and T is then its non-nullable version
                 Arguments.of("extern func f<T>(x: T?): T\nlet e = f(42)",
-                        new IFunctionCall(reference("f", ImmutableList.of(INT),
+                        new IFunctionCall(reference(fromNullable, ImmutableList.of(INT),
                                 function(ImmutableList.of(INT.withNullability(true)), INT)),
                                 ImmutableList.of(new ILiteral(42, INT.withNullability(true))))),
                 Arguments.of("extern func f<T>(x: T?): T\nlet e: string = f(nil)",
-                        new IFunctionCall(reference("f", ImmutableList.of(STRING),
+                        new IFunctionCall(reference(fromNullable, ImmutableList.of(STRING),
                                 function(ImmutableList.of(STRING.withNullability(true)), STRING)),
                                 ImmutableList.of(new ILiteral(null, STRING.withNullability(true))))),
                 // functions are values: an argument can be a function, generic or not, and a call can return one
                 Arguments.of(APPLY + "extern func g(x: int): bigint\nlet e = apply(g, 1)",
-                        new IFunctionCall(reference("apply", ImmutableList.of(INT, BIGINT),
+                        new IFunctionCall(reference(APPLY_FUNCTION, ImmutableList.of(INT, BIGINT),
                                 function(ImmutableList.of(function(ImmutableList.of(INT), BIGINT), INT), BIGINT)),
-                                ImmutableList.of(reference("g", function(ImmutableList.of(INT), BIGINT)),
+                                ImmutableList.of(reference(declaration("g", ImmutableList.of(),
+                                                ImmutableList.of(parameter("x", INT)), BIGINT)),
                                         new ILiteral(1, INT)))),
                 Arguments.of(APPLY + ID + "let e = apply(id, 1)",
-                        new IFunctionCall(reference("apply", ImmutableList.of(INT, INT),
+                        new IFunctionCall(reference(APPLY_FUNCTION, ImmutableList.of(INT, INT),
                                 function(ImmutableList.of(intToInt, INT), INT)),
-                                ImmutableList.of(reference("id", ImmutableList.of(INT), intToInt),
+                                ImmutableList.of(reference(ID_FUNCTION, ImmutableList.of(INT), intToInt),
                                         new ILiteral(1, INT)))),
                 Arguments.of("extern func f(x: int): (int) -> bigint\nlet e = f(1)(2)",
-                        new IFunctionCall(new IFunctionCall(reference("f", function(ImmutableList.of(INT),
-                                function(ImmutableList.of(INT), BIGINT))), ImmutableList.of(new ILiteral(1, INT))),
-                                ImmutableList.of(new ILiteral(2, INT)))),
+                        new IFunctionCall(new IFunctionCall(reference(declaration("f", ImmutableList.of(),
+                                ImmutableList.of(parameter("x", INT)), function(ImmutableList.of(INT), BIGINT))),
+                                ImmutableList.of(new ILiteral(1, INT))), ImmutableList.of(new ILiteral(2, INT)))),
                 // a reference to a generic function that is not called takes its type arguments from its context
-                Arguments.of(ID + "let e: (int) -> int = id", reference("id", ImmutableList.of(INT), intToInt)),
+                Arguments.of(ID + "let e: (int) -> int = id", reference(ID_FUNCTION, ImmutableList.of(INT), intToInt)),
                 // a variable of function type, and a closure, can be called
                 Arguments.of("let k = { (y: int) -> int in y }\nlet e = k(1)",
                         new IFunctionCall(new IVariableReference("k", intToInt),
@@ -182,7 +199,8 @@ class FrlIrExpressionParsingTest {
                                 new IVariableReference("x", INT)), ImmutableList.of(new ILiteral(1, INT)))),
                 // the arguments of a call can be split across lines
                 Arguments.of("extern func f(x: int, y: int)\nf(\n    1,\n    2\n)",
-                        new IFunctionCall(reference("f", function(ImmutableList.of(INT, INT), VOID)),
+                        new IFunctionCall(reference(declaration("f", ImmutableList.of(),
+                                ImmutableList.of(parameter("x", INT), parameter("y", INT)), VOID)),
                                 ImmutableList.of(new ILiteral(1, INT), new ILiteral(2, INT)))));
     }
 
@@ -242,7 +260,8 @@ class FrlIrExpressionParsingTest {
                 Arguments.of("extern func f(x: bigint)\nlet e = { () -> void in\n    let a = 42\n    f(a)\n}",
                         new IClosure(ImmutableList.of(), VOID, new IBlock(ImmutableList.of(
                                 new IAssignment("a", new ILiteral(42L, BIGINT)),
-                                new IFunctionCall(reference("f", function(ImmutableList.of(BIGINT), VOID)),
+                                new IFunctionCall(reference(declaration("f", ImmutableList.of(),
+                                                ImmutableList.of(parameter("x", BIGINT)), VOID)),
                                         ImmutableList.of(new IVariableReference("a", BIGINT))))))));
     }
 
@@ -261,34 +280,38 @@ class FrlIrExpressionParsingTest {
     @Nonnull
     static Stream<Arguments> closureArguments() {
         final IFunctionType intToVoid = function(ImmutableList.of(INT), VOID);
+        final IFunctionDeclaration hOfIntToVoid =
+                declaration("h", ImmutableList.of(), ImmutableList.of(parameter("f", intToVoid)), VOID);
         return Stream.of(
                 // the parameter of the called function is the context of the closure
                 Arguments.of("extern func foo(s: string, f: (int) -> string)\nfoo(\"hello\", { i in \"Hello\" })",
-                        new IFunctionCall(reference("foo", function(ImmutableList.of(STRING,
-                                function(ImmutableList.of(INT), STRING)), VOID)),
+                        new IFunctionCall(reference(declaration("foo", ImmutableList.of(),
+                                ImmutableList.of(parameter("s", STRING),
+                                        parameter("f", function(ImmutableList.of(INT), STRING))), VOID)),
                                 ImmutableList.of(new ILiteral("hello", STRING),
                                         closure(ImmutableList.of(new IClosure.Parameter("i", INT)), STRING,
                                                 new ILiteral("Hello", STRING))))),
                 Arguments.of("extern func h(f: () -> bigint)\nh({ 42 })",
-                        new IFunctionCall(reference("h", function(ImmutableList.of(function(ImmutableList.of(),
-                                BIGINT)), VOID)),
+                        new IFunctionCall(reference(declaration("h", ImmutableList.of(),
+                                ImmutableList.of(parameter("f", function(ImmutableList.of(), BIGINT))), VOID)),
                                 ImmutableList.of(closure(ImmutableList.of(), BIGINT, new ILiteral(42L, BIGINT))))),
                 // a later argument can determine the types of a closure
                 Arguments.of(APPLY + "let e = apply({ x in x }, 1)",
-                        new IFunctionCall(reference("apply", ImmutableList.of(INT, INT),
+                        new IFunctionCall(reference(APPLY_FUNCTION, ImmutableList.of(INT, INT),
                                 function(ImmutableList.of(function(ImmutableList.of(INT), INT), INT), INT)),
                                 ImmutableList.of(closure(ImmutableList.of(new IClosure.Parameter("x", INT)), INT,
                                         new IVariableReference("x", INT)), new ILiteral(1, INT)))),
                 // a closure that is passed for a function returning void states void to discard its value
                 Arguments.of("extern func g(x: int): int\nextern func h(f: (int) -> void)\nh({ i -> void in g(i) })",
-                        new IFunctionCall(reference("h", function(ImmutableList.of(intToVoid), VOID)),
+                        new IFunctionCall(reference(hOfIntToVoid),
                                 ImmutableList.of(closure(ImmutableList.of(new IClosure.Parameter("i", INT)), VOID,
-                                        new IFunctionCall(reference("g", function(ImmutableList.of(INT), INT)),
+                                        new IFunctionCall(reference(declaration("g", ImmutableList.of(),
+                                                        ImmutableList.of(parameter("x", INT)), INT)),
                                                 ImmutableList.of(new IVariableReference("i", INT))))))),
                 // a function nested in a closure can use a variable of the closure once the context has determined its
                 // type
                 Arguments.of("extern func h(f: (int) -> void)\nh({ x in\n    func g(): int { x }\n})",
-                        new IFunctionCall(reference("h", function(ImmutableList.of(intToVoid), VOID)),
+                        new IFunctionCall(reference(hOfIntToVoid),
                                 ImmutableList.of(new IClosure(ImmutableList.of(new IClosure.Parameter("x", INT)), VOID,
                                         new IBlock(ImmutableList.of(new IFunctionDefinition("g", ImmutableList.of(),
                                                 ImmutableList.of(), INT, new IBlock(ImmutableList.of(
@@ -386,15 +409,35 @@ class FrlIrExpressionParsingTest {
         return new IFunctionType(false, parameterTypes, resultType);
     }
 
+    /**
+     * Returns a reference to a function that is not generic, whose type is the type of the function.
+     */
     @Nonnull
-    private static IFunctionReference reference(@Nonnull final String name, @Nonnull final IFunctionType type) {
-        return reference(name, ImmutableList.of(), type);
+    private static IFunctionReference reference(@Nonnull final IFunction function) {
+        return reference(function, ImmutableList.of(), function.type());
     }
 
     @Nonnull
-    private static IFunctionReference reference(@Nonnull final String name, @Nonnull final List<IType> typeArguments,
+    private static IFunctionReference reference(@Nonnull final IFunction function,
+                                                @Nonnull final List<IType> typeArguments,
                                                 @Nonnull final IFunctionType type) {
-        return new IFunctionReference(name, typeArguments, type);
+        return new IFunctionReference(function, typeArguments, type);
+    }
+
+    /**
+     * Returns the declaration of an extern function, as a program without a package and without annotations declares it.
+     */
+    @Nonnull
+    private static IFunctionDeclaration declaration(@Nonnull final String name,
+                                                    @Nonnull final List<IGenericType> typeParameters,
+                                                    @Nonnull final List<IFunctionDefinition.Parameter> parameters,
+                                                    @Nonnull final IType resultType) {
+        return new IFunctionDeclaration(name, typeParameters, parameters, resultType);
+    }
+
+    @Nonnull
+    private static IFunctionDefinition.Parameter parameter(@Nonnull final String name, @Nonnull final IType type) {
+        return new IFunctionDefinition.Parameter(name, type);
     }
 
     /**

@@ -22,6 +22,7 @@
  * FRL-IR, a Swift-like textual IR for Record Layer plans that translates to and from MLIR. The grammar lives in
  * {@code src/main/antlr}, and its entry point is a program. {@link com.apple.foundationdb.record.ir.FrlIrFragmentVisitor}
  * turns a parse tree into the fragments of the program
- * ({@link com.apple.foundationdb.record.ir.fragments.IFragment}).
+ * ({@link com.apple.foundationdb.record.ir.fragments.IFragment}). {@link com.apple.foundationdb.record.ir.JavaCoordinates}
+ * tells from the annotations of a program where its extern types and functions live in Java.
  */
 package com.apple.foundationdb.record.ir;

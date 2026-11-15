@@ -22,10 +22,12 @@ package com.apple.foundationdb.record.ir.cascades;
 
 import com.apple.foundationdb.record.RecordCoreException;
 import com.apple.foundationdb.record.TestRecords1Proto;
+import com.apple.foundationdb.record.ir.fragments.IExternType;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IType;
+import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
 import com.apple.foundationdb.record.query.plan.cascades.typing.Type;
 import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -110,7 +112,9 @@ class CascadesTypeConverterTest {
         return Stream.of(new IPrimitiveType(IPrimitiveType.Kind.HALF, false),
                 new IPrimitiveType(IPrimitiveType.Kind.VOID, false),
                 new IGenericType("T", false),
-                new IFunctionType(false, ImmutableList.of(intType), intType));
+                new IFunctionType(false, ImmutableList.of(intType), intType),
+                // only extern functions know what the values of an extern type are
+                new IExternType(new ITypeDeclaration("range", ImmutableList.of(), null), false));
     }
 
     @ParameterizedTest

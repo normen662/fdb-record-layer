@@ -34,10 +34,11 @@ import java.util.function.Supplier;
  * A function definition, {@code func map<T, U>(xs: [T], f: (T) -> U, ys: [U]): [U] { ys }}: a signature and the block
  * that implements it. The value of the block is the result of the function, so a block of a function whose result type
  * is not {@code void} ends with an expression of that type. A function definition is also a statement, so functions can
- * be nested, as in Swift; a nested function sees the type parameters of the functions it is nested in.
+ * be nested, as in Swift; a nested function sees the type parameters of the functions it is nested in. A function is in
+ * scope only after its definition, so it cannot call itself: FRL-IR has no recursion.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IFunctionDefinition implements IStatement {
+public final class IFunctionDefinition implements IFunction {
     @Nonnull
     private final String name;
     @Nonnull
@@ -49,10 +50,12 @@ public final class IFunctionDefinition implements IStatement {
     @Nonnull
     private final IBlock body;
     @Nonnull
+    private final ImmutableList<IAnnotationFragment> annotations;
+    @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
     /**
-     * Creates a function definition.
+     * Creates a function definition without annotations.
      *
      * @param name the name of the function
      * @param typeParameters the type parameters of a generic function, in order, and empty otherwise; the type
@@ -64,11 +67,29 @@ public final class IFunctionDefinition implements IStatement {
     public IFunctionDefinition(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
                                @Nonnull final List<Parameter> parameters, @Nonnull final IType resultType,
                                @Nonnull final IBlock body) {
+        this(name, typeParameters, parameters, resultType, body, ImmutableList.of());
+    }
+
+    /**
+     * Creates a function definition.
+     *
+     * @param name the name of the function
+     * @param typeParameters the type parameters of a generic function, in order, and empty otherwise; the type
+     *        parameters that the signature and the body refer to are these objects
+     * @param parameters the parameters in order
+     * @param resultType the result type, which is {@code void} if the definition does not state one
+     * @param body the block that implements the function, see {@link IBlock#isBodyOf}
+     * @param annotations the annotations of the definition, in order
+     */
+    public IFunctionDefinition(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
+                               @Nonnull final List<Parameter> parameters, @Nonnull final IType resultType,
+                               @Nonnull final IBlock body, @Nonnull final List<IAnnotationFragment> annotations) {
         this.name = Objects.requireNonNull(name);
         this.typeParameters = ImmutableList.copyOf(typeParameters);
         this.parameters = ImmutableList.copyOf(parameters);
         this.resultType = Objects.requireNonNull(resultType);
         this.body = Objects.requireNonNull(body);
+        this.annotations = ImmutableList.copyOf(annotations);
         Preconditions.checkArgument(body.isBodyOf(resultType),
                 "the body of a function must end with an expression of its result type unless that is void");
     }
@@ -77,6 +98,7 @@ public final class IFunctionDefinition implements IStatement {
      * {@return the name of the function}
      */
     @Nonnull
+    @Override
     public String name() {
         return name;
     }
@@ -85,6 +107,7 @@ public final class IFunctionDefinition implements IStatement {
      * {@return the type parameters of a generic function, in order, and an empty list otherwise}
      */
     @Nonnull
+    @Override
     public List<IGenericType> typeParameters() {
         return typeParameters;
     }
@@ -93,6 +116,7 @@ public final class IFunctionDefinition implements IStatement {
      * {@return the parameters in order}
      */
     @Nonnull
+    @Override
     public List<Parameter> parameters() {
         return parameters;
     }
@@ -101,6 +125,7 @@ public final class IFunctionDefinition implements IStatement {
      * {@return the result type, which is {@code void} if the definition does not state one}
      */
     @Nonnull
+    @Override
     public IType resultType() {
         return resultType;
     }
@@ -113,6 +138,15 @@ public final class IFunctionDefinition implements IStatement {
         return body;
     }
 
+    /**
+     * {@return the annotations of the definition, in order}
+     */
+    @Nonnull
+    @Override
+    public List<IAnnotationFragment> annotations() {
+        return annotations;
+    }
+
     @Override
     public boolean equals(final Object other) {
         if (this == other) {
@@ -120,7 +154,8 @@ public final class IFunctionDefinition implements IStatement {
         }
         return other instanceof IFunctionDefinition that && name.equals(that.name)
                 && typeParameters.equals(that.typeParameters) && parameters.equals(that.parameters)
-                && resultType.equals(that.resultType) && body.equals(that.body);
+                && resultType.equals(that.resultType) && body.equals(that.body)
+                && annotations.equals(that.annotations);
     }
 
     @Override
@@ -129,14 +164,14 @@ public final class IFunctionDefinition implements IStatement {
     }
 
     private int computeHashCode() {
-        return Objects.hash("function definition", name, typeParameters, parameters, resultType, body);
+        return Objects.hash("function definition", name, typeParameters, parameters, resultType, body, annotations);
     }
 
     @Nonnull
     @Override
     public String toString() {
         return "IFunctionDefinition[name=" + name + ", typeParameters=" + typeParameters + ", parameters="
-                + parameters + ", resultType=" + resultType + ", body=" + body + "]";
+                + parameters + ", resultType=" + resultType + ", body=" + body + ", annotations=" + annotations + "]";
     }
 
     /**

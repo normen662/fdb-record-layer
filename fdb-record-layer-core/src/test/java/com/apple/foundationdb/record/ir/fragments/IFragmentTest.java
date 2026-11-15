@@ -64,11 +64,22 @@ class IFragmentTest {
                 pinned(() -> new IStreamType(intType()), -943587233),
                 pinned(() -> new IFunctionDefinition.Parameter("x", typeParameter("T")), -853251890),
                 pinned(IFragmentTest::emptyBlock, -1386164011),
-                pinned(IFragmentTest::identityFunction, 1074525709),
-                pinned(() -> new IProgram(ImmutableList.of(identityFunction())), 73444329),
+                pinned(IFragmentTest::identityFunction, -1049441388),
+                pinned(() -> new IProgram(ImmutableList.of(identityFunction())), -2050522768),
                 pinned(() -> new IFunctionDeclaration("lookup", ImmutableList.of(),
                         ImmutableList.of(new IFunctionDefinition.Parameter("key", bigintType())),
-                        stringType().withNullability(true)), -227215891),
+                        stringType().withNullability(true)), 688860876),
+                pinned(() -> new IFunctionDeclaration("scan", ImmutableList.of(),
+                        ImmutableList.of(new IFunctionDefinition.Parameter("range",
+                                new IExternType(rangeDeclaration(), false))),
+                        intType(), ImmutableList.of(), abcPackage()), 1790714996),
+                pinned(() -> new IAnnotationFragment.Argument(null, "com.apple.foundationdb.record.ir"), 1230968439),
+                pinned(() -> new IAnnotationFragment.Argument("class", "com.apple.foundationdb.record.TupleRange"),
+                        1319917643),
+                pinned(IFragmentTest::javaPackageAnnotation, 1583677570),
+                pinned(IFragmentTest::abcPackage, -1125828173),
+                pinned(IFragmentTest::rangeDeclaration, 1798781256),
+                pinned(() -> new IExternType(rangeDeclaration(), true), -1676417504),
                 pinned(() -> new IClosure.Parameter("x", intType()), 1044350755),
                 pinned(() -> new IClosure.Parameter("y", bigintType()), 926581826),
                 pinned(() -> new IClosure(ImmutableList.of(new IClosure.Parameter("x", intType()),
@@ -80,8 +91,8 @@ class IFragmentTest {
                         1294493890),
                 pinned(() -> new ILiteral(null, stringType().withNullability(true)), -686800226),
                 pinned(() -> new IVariableReference("x", intType()), -73490170),
-                pinned(IFragmentTest::identityReference, -777129065),
-                pinned(() -> new IFunctionCall(identityReference(), ImmutableList.of(literal42())), 179555209),
+                pinned(IFragmentTest::identityReference, 23787472),
+                pinned(() -> new IFunctionCall(identityReference(), ImmutableList.of(literal42())), -761835920),
                 pinned(() -> new IAssignment("x", literal42()), -405760496));
     }
 
@@ -120,6 +131,12 @@ class IFragmentTest {
         final IFunctionType intToInt = new IFunctionType(false, ImmutableList.of(intType), intType);
         final IFunctionReference reference = identityReference();
         final IFunctionCall call = new IFunctionCall(reference, ImmutableList.of(literal));
+        final IAnnotationFragment.Argument packageArgument =
+                new IAnnotationFragment.Argument(null, "com.apple.foundationdb.record.ir");
+        final IAnnotationFragment annotation = javaPackageAnnotation();
+        final IPackageStatement abc = abcPackage();
+        final ITypeDeclaration range = rangeDeclaration();
+        final IExternType rangeType = new IExternType(range, false);
         return Stream.of(
                 // primitive types: the kind, the nullability
                 Arguments.of(intType, bigintType),
@@ -163,7 +180,8 @@ class IFragmentTest {
                 // blocks and programs: the statements
                 Arguments.of(emptyBlock, nonEmptyBlock),
                 Arguments.of(new IProgram(ImmutableList.of()), new IProgram(nonEmptyBlock.statements())),
-                // function definitions: the name, the type parameters, the parameters, the result type, the body
+                // function definitions: the name, the type parameters, the parameters, the result type, the body, the
+                // annotations
                 Arguments.of(id, new IFunctionDefinition("f", id.typeParameters(), id.parameters(), id.resultType(),
                         id.body())),
                 Arguments.of(id, new IFunctionDefinition("id", ImmutableList.of(t, typeParameter("U")),
@@ -174,10 +192,13 @@ class IFragmentTest {
                         voidType(), id.body())),
                 Arguments.of(id, new IFunctionDefinition("id", id.typeParameters(), id.parameters(), id.resultType(),
                         new IBlock(ImmutableList.of(new IVariableReference("y", t))))),
+                Arguments.of(id, new IFunctionDefinition("id", id.typeParameters(), id.parameters(), id.resultType(),
+                        id.body(), ImmutableList.of(annotation))),
                 // parameters of function definitions: the name, the type
                 Arguments.of(x, new IFunctionDefinition.Parameter("y", t)),
                 Arguments.of(x, new IFunctionDefinition.Parameter("x", intType)),
-                // function declarations: the name, the type parameters, the parameters, the result type
+                // function declarations: the name, the type parameters, the parameters, the result type, the
+                // annotations, the package
                 Arguments.of(declaration, new IFunctionDeclaration("find", declaration.typeParameters(),
                         declaration.parameters(), declaration.resultType())),
                 Arguments.of(declaration, new IFunctionDeclaration("lookup", ImmutableList.of(t),
@@ -186,6 +207,26 @@ class IFragmentTest {
                         ImmutableList.of(), declaration.resultType())),
                 Arguments.of(declaration, new IFunctionDeclaration("lookup", declaration.typeParameters(),
                         declaration.parameters(), voidType())),
+                Arguments.of(declaration, new IFunctionDeclaration("lookup", declaration.typeParameters(),
+                        declaration.parameters(), declaration.resultType(), ImmutableList.of(annotation), null)),
+                Arguments.of(declaration, new IFunctionDeclaration("lookup", declaration.typeParameters(),
+                        declaration.parameters(), declaration.resultType(), ImmutableList.of(), abc)),
+                // annotations: the name, the arguments; arguments: the label, the value
+                Arguments.of(annotation, new IAnnotationFragment("swift", annotation.arguments())),
+                Arguments.of(annotation, new IAnnotationFragment("java", ImmutableList.of())),
+                Arguments.of(packageArgument, new IAnnotationFragment.Argument("package", packageArgument.value())),
+                Arguments.of(packageArgument, new IAnnotationFragment.Argument(null, "com.apple.foundationdb")),
+                // package statements: the name, the annotations
+                Arguments.of(abc, new IPackageStatement("def", abc.annotations())),
+                Arguments.of(abc, new IPackageStatement("abc", ImmutableList.of())),
+                // type declarations: the name, the annotations, the package
+                Arguments.of(range, new ITypeDeclaration("interval", range.annotations(), range.packageStatement())),
+                Arguments.of(range, new ITypeDeclaration("range", ImmutableList.of(), range.packageStatement())),
+                Arguments.of(range, new ITypeDeclaration("range", range.annotations(), null)),
+                // extern types: the declaration, the nullability
+                Arguments.of(rangeType, new IExternType(new ITypeDeclaration("interval", range.annotations(),
+                        range.packageStatement()), false)),
+                Arguments.of(rangeType, rangeType.withNullability(true)),
                 // closures: the parameters, the result type, the body
                 Arguments.of(closure, new IClosure(ImmutableList.of(), closure.resultType(), closure.body())),
                 Arguments.of(closure, new IClosure(closure.parameters(), voidType(), closure.body())),
@@ -202,10 +243,11 @@ class IFragmentTest {
                 // references to variables: the name, the type
                 Arguments.of(new IVariableReference("x", intType), new IVariableReference("y", intType)),
                 Arguments.of(new IVariableReference("x", intType), new IVariableReference("x", bigintType)),
-                // references to functions: the name, the type arguments, the type
-                Arguments.of(reference, new IFunctionReference("f", reference.typeArguments(), reference.type())),
-                Arguments.of(reference, new IFunctionReference("id", ImmutableList.of(), reference.type())),
-                Arguments.of(reference, new IFunctionReference("id", reference.typeArguments(),
+                // references to functions: the function, the type arguments, the type
+                Arguments.of(reference, new IFunctionReference(new IFunctionDefinition("f", id.typeParameters(),
+                        id.parameters(), id.resultType(), id.body()), reference.typeArguments(), reference.type())),
+                Arguments.of(reference, new IFunctionReference(id, ImmutableList.of(bigintType), reference.type())),
+                Arguments.of(reference, new IFunctionReference(id, reference.typeArguments(),
                         new IFunctionType(false, ImmutableList.of(intType), intType.withNullability(true)))),
                 // calls: the callee, the arguments
                 Arguments.of(call, new IFunctionCall(new IVariableReference("id", intToInt), call.arguments())),
@@ -216,10 +258,15 @@ class IFragmentTest {
                 // fragments of different kinds whose parts are equal
                 Arguments.of(emptyBlock, new IProgram(ImmutableList.of())),
                 Arguments.of(new IFunctionDefinition.Parameter("x", intType), closureX),
-                Arguments.of(new IVariableReference("id", intToInt), new IFunctionReference("id", ImmutableList.of(),
-                        intToInt)),
+                Arguments.of(new IVariableReference("id", intToInt), new IFunctionReference(new IFunctionDeclaration(
+                        "id", ImmutableList.of(), ImmutableList.of(new IFunctionDefinition.Parameter("x", intType)),
+                        intType), ImmutableList.of(), intToInt)),
                 Arguments.of(new IFunctionDeclaration("g", ImmutableList.of(), ImmutableList.of(), voidType()),
-                        new IFunctionDefinition("g", ImmutableList.of(), ImmutableList.of(), voidType(), emptyBlock)));
+                        new IFunctionDefinition("g", ImmutableList.of(), ImmutableList.of(), voidType(), emptyBlock)),
+                Arguments.of(typeParameter("range"), new IExternType(new ITypeDeclaration("range", ImmutableList.of(),
+                        null), false)),
+                Arguments.of(new IPackageStatement("range", ImmutableList.of()),
+                        new ITypeDeclaration("range", ImmutableList.of(), null)));
     }
 
     @ParameterizedTest
@@ -290,6 +337,37 @@ class IFragmentTest {
                 ImmutableList.of(new IFunctionDefinition.Parameter("x", intType()),
                         new IFunctionDefinition.Parameter("x", intType())), voidType()))
                 .isInstanceOf(IllegalArgumentException.class);
+        // a reference gives each type parameter of its function a type argument
+        assertThatThrownBy(() -> new IFunctionReference(identityFunction(), ImmutableList.of(),
+                new IFunctionType(false, ImmutableList.of(intType()), intType())))
+                .isInstanceOf(IllegalArgumentException.class);
+        // a package statement can only be the first statement of a program
+        assertThatThrownBy(() -> new IProgram(ImmutableList.of(rangeDeclaration(), abcPackage())))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void packageStatementOfProgramIsItsFirstStatement() {
+        assertThat(new IProgram(ImmutableList.of(abcPackage(), rangeDeclaration())).packageStatement())
+                .contains(abcPackage());
+        assertThat(new IProgram(ImmutableList.of(rangeDeclaration())).packageStatement()).isEmpty();
+        assertThat(new IProgram(ImmutableList.of()).packageStatement()).isEmpty();
+    }
+
+    @Test
+    void argumentLabelFindsFirstArgumentWithLabel() {
+        final IAnnotationFragment annotation = new IAnnotationFragment("java", ImmutableList.of(
+                new IAnnotationFragment.Argument(null, "a"), new IAnnotationFragment.Argument("class", "b"),
+                new IAnnotationFragment.Argument("class", "c")));
+        assertThat(annotation.argument("class")).contains("b");
+        assertThat(annotation.argument("method")).isEmpty();
+    }
+
+    @Test
+    void typeOfExternTypeIsWrittenAsItsName() {
+        assertThat(new IExternType(rangeDeclaration(), true)).hasToString("range?");
+        assertThat(new IExternType(new ITypeDeclaration("first range", ImmutableList.of(), null), false))
+                .hasToString("`first range`");
     }
 
     /**
@@ -346,8 +424,35 @@ class IFragmentTest {
      */
     @Nonnull
     private static IFunctionReference identityReference() {
-        return new IFunctionReference("id", ImmutableList.of(intType()),
+        return new IFunctionReference(identityFunction(), ImmutableList.of(intType()),
                 new IFunctionType(false, ImmutableList.of(intType()), intType()));
+    }
+
+    /**
+     * Returns {@code @java("com.apple.foundationdb.record.ir")}.
+     */
+    @Nonnull
+    private static IAnnotationFragment javaPackageAnnotation() {
+        return new IAnnotationFragment("java",
+                ImmutableList.of(new IAnnotationFragment.Argument(null, "com.apple.foundationdb.record.ir")));
+    }
+
+    /**
+     * Returns {@code @java("com.apple.foundationdb.record.ir") package abc}.
+     */
+    @Nonnull
+    private static IPackageStatement abcPackage() {
+        return new IPackageStatement("abc", ImmutableList.of(javaPackageAnnotation()));
+    }
+
+    /**
+     * Returns {@code @java(class: "com.apple.foundationdb.record.TupleRange") extern type range} in the package
+     * {@code abc}.
+     */
+    @Nonnull
+    private static ITypeDeclaration rangeDeclaration() {
+        return new ITypeDeclaration("range", ImmutableList.of(new IAnnotationFragment("java", ImmutableList.of(
+                new IAnnotationFragment.Argument("class", "com.apple.foundationdb.record.TupleRange")))), abcPackage());
     }
 
     @Nonnull

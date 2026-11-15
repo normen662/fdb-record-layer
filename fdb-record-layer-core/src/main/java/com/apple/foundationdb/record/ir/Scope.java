@@ -20,10 +20,14 @@
 
 package com.apple.foundationdb.record.ir;
 
+import com.apple.foundationdb.record.ir.fragments.IExternType;
+import com.apple.foundationdb.record.ir.fragments.IFunction;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
+import com.apple.foundationdb.record.ir.fragments.IPackageStatement;
+import com.apple.foundationdb.record.ir.fragments.IType;
+import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 
@@ -37,15 +41,16 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * What is in effect at a point of an FRL-IR program: the type parameters, the variables, and the functions that the
- * enclosing constructs declare, and the inference that types the expressions there. Scopes form a stack. Each scope
- * refers to the scope that encloses it, a lookup searches from the innermost scope outward, so an inner declaration
- * hides an outer one of the same name, and leaving a construct returns to the enclosing scope, which drops what the
- * construct declared.
+ * What is in effect at a point of an FRL-IR program: the type parameters, the extern types, the variables, and the
+ * functions that the enclosing constructs declare, the package of the program, and the inference that types the
+ * expressions there. Scopes form a stack. Each scope refers to the scope that encloses it, a lookup searches from the
+ * innermost scope outward, so an inner declaration hides an outer one of the same name, and leaving a construct returns
+ * to the enclosing scope, which drops what the construct declared.
  *
- * <p>Type parameters are types and the others are values, and the two have separate namespaces. Variables and
- * functions share one: a scope declares a name only once, so there is no overloading. A type parameter must not hide a
- * type parameter of an enclosing function: type parameters compare by name, so the two would be the same type.</p>
+ * <p>Type parameters and extern types are types and the others are values, and the two have separate namespaces.
+ * Within each namespace, a scope declares a name only once, so there is no overloading. A type parameter must not hide
+ * a type parameter of an enclosing function: type parameters compare by name, so the two would be the same type. An
+ * extern type refers to its declaration, so it can hide another type without that ambiguity.</p>
  *
  * <p>The inference of a scope types the expressions in it, see {@code TypeInference}. A statement outside closures has
  * a scope of its own with a new inference. The scopes of the closures in the statement inherit that inference, so that
@@ -54,7 +59,8 @@ import java.util.Optional;
  * its type is a term of that inference.</p>
  *
  * <p>A scope holds the type parameters themselves rather than their names, so that a reference to a type parameter
- * resolves to the type that the enclosing function declares.</p>
+ * resolves to the type that the enclosing function declares. Likewise, a function and an extern type are held by the
+ * fragment that defines or declares them, so that a reference resolves to that fragment once, where it is parsed.</p>
  */
 final class Scope {
 
@@ -81,11 +87,25 @@ final class Scope {
     private final boolean isStatement;
 
     /**
+     * The extern types declared in this scope, by name. Like {@link #values}, they are declared while the statements of
+     * the scope are inferred.
+     */
+    @Nonnull
+    private final Map<String, ITypeDeclaration> externTypes = new LinkedHashMap<>();
+
+    /**
      * The variables and functions declared in this scope, by name. They are declared while the statements of the scope
-     * are inferred, so this is the one mutable part of a scope.
+     * are inferred, so, like the extern types and the package, they are mutable parts of a scope.
      */
     @Nonnull
     private final Map<String, Binding> values = new LinkedHashMap<>();
+
+    /**
+     * The package that the program belongs to, held by the outermost scope, or {@code null} if the program has not
+     * named one. Its first statement does that, so the package is known before anything is declared in it.
+     */
+    @Nullable
+    private IPackageStatement packageStatement;
 
     private Scope(@Nullable final Scope enclosing, @Nonnull final ImmutableMap<String, IGenericType> typeParameters,
                   @Nullable final TypeInference inference, final boolean isStatement) {
@@ -171,6 +191,31 @@ final class Scope {
     }
 
     /**
+     * Declares the package that the program belongs to. The outermost scope holds it, so that every declaration of the
+     * program finds it.
+     *
+     * @param newPackageStatement the package statement of the program
+     */
+    void declarePackage(@Nonnull final IPackageStatement newPackageStatement) {
+        if (enclosing != null) {
+            enclosing.declarePackage(newPackageStatement);
+            return;
+        }
+        Preconditions.checkState(packageStatement == null, "a program belongs to one package at most");
+        packageStatement = newPackageStatement;
+    }
+
+    /**
+     * Returns the package that the program belongs to.
+     *
+     * @return the package statement of the program, or {@code null} if the program has not named a package
+     */
+    @Nullable
+    IPackageStatement packageStatement() {
+        return enclosing == null ? packageStatement : enclosing.packageStatement();
+    }
+
+    /**
      * Declares a variable in this scope. The variable belongs to the inference of this scope.
      *
      * @param name the name of the variable, which this scope must not declare yet
@@ -181,16 +226,13 @@ final class Scope {
     }
 
     /**
-     * Declares a function in this scope. A function is declared with its signature before its body is built, so that
-     * the body can call it.
+     * Declares a function in this scope. A function is declared once its definition is built, so that a reference to it
+     * can refer to the definition; its body therefore cannot call it.
      *
-     * @param name the name of the function, which this scope must not declare yet
-     * @param typeParameters the type parameters of the function, in order
-     * @param type the type of the function, in terms of its type parameters
+     * @param function the definition or declaration of the function, whose name this scope must not declare yet
      */
-    void declareFunction(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
-                         @Nonnull final IFunctionType type) {
-        declare(name, new FunctionBinding(ImmutableList.copyOf(typeParameters), type));
+    void declareFunction(@Nonnull final IFunction function) {
+        declare(function.name(), new FunctionBinding(function));
     }
 
     private void declare(@Nonnull final String name, @Nonnull final Binding binding) {
@@ -201,6 +243,42 @@ final class Scope {
         }
         Preconditions.checkArgument(values.putIfAbsent(name, binding) == null,
                 "a name can be declared only once in a scope");
+    }
+
+    /**
+     * Declares an extern type in this scope.
+     *
+     * @param declaration the declaration of the type, whose name this scope must not declare yet as a type
+     */
+    void declareExternType(@Nonnull final ITypeDeclaration declaration) {
+        if (isStatement) {
+            // the scope of a statement always has an enclosing scope
+            Objects.requireNonNull(enclosing).declareExternType(declaration);
+            return;
+        }
+        Preconditions.checkArgument(!typeParameters.containsKey(declaration.name())
+                        && externTypes.putIfAbsent(declaration.name(), declaration) == null,
+                "a name can be declared only once in a scope");
+    }
+
+    /**
+     * Returns the type of the given name: a type parameter or an extern type that is declared in this scope or, if there
+     * is none, in the nearest enclosing scope that declares one.
+     *
+     * @param name the name of the type
+     * @return the type, which is not nullable, or empty if no type of this name is in scope
+     */
+    @Nonnull
+    Optional<IType> lookupType(@Nonnull final String name) {
+        final IGenericType typeParameter = typeParameters.get(name);
+        if (typeParameter != null) {
+            return Optional.of(typeParameter);
+        }
+        final ITypeDeclaration externType = externTypes.get(name);
+        if (externType != null) {
+            return Optional.of(new IExternType(externType, false));
+        }
+        return enclosing == null ? Optional.empty() : enclosing.lookupType(name);
     }
 
     /**
@@ -252,13 +330,29 @@ final class Scope {
     }
 
     /**
-     * A function, with what a reference to it needs: its type parameters and its type. The definition is complete only
-     * once its body is, and the body can already refer to the function, so a scope does not hold the definition.
+     * A function, held by its definition or its declaration, which a reference to the function refers to.
      *
-     * @param typeParameters the type parameters of the function, in order
-     * @param type the type of the function, in terms of its type parameters
+     * @param function the definition or declaration of the function
      */
-    record FunctionBinding(@Nonnull ImmutableList<IGenericType> typeParameters, @Nonnull IFunctionType type)
-            implements Binding {
+    record FunctionBinding(@Nonnull IFunction function) implements Binding {
+        /**
+         * Returns the type parameters of the function, which a reference to it instantiates.
+         *
+         * @return the type parameters in order
+         */
+        @Nonnull
+        List<IGenericType> typeParameters() {
+            return function.typeParameters();
+        }
+
+        /**
+         * Returns the type of the function, in terms of its type parameters.
+         *
+         * @return the function type
+         */
+        @Nonnull
+        IFunctionType type() {
+            return function.type();
+        }
     }
 }

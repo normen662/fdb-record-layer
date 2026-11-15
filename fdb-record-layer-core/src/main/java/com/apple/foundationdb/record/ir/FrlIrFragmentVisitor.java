@@ -22,6 +22,7 @@ package com.apple.foundationdb.record.ir;
 
 import com.apple.foundationdb.annotation.API;
 import com.apple.foundationdb.half.Half;
+import com.apple.foundationdb.record.ir.fragments.IAnnotationFragment;
 import com.apple.foundationdb.record.ir.fragments.IArrayType;
 import com.apple.foundationdb.record.ir.fragments.IAssignment;
 import com.apple.foundationdb.record.ir.fragments.IBlock;
@@ -36,12 +37,14 @@ import com.apple.foundationdb.record.ir.fragments.IFunctionReference;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.ILiteral;
+import com.apple.foundationdb.record.ir.fragments.IPackageStatement;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IProgram;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
 import com.apple.foundationdb.record.ir.fragments.IStatement;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
 import com.apple.foundationdb.record.ir.fragments.IType;
+import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
 import com.apple.foundationdb.record.ir.fragments.IVariableReference;
 import com.apple.foundationdb.record.ir.fragments.IVectorType;
 import com.apple.foundationdb.record.ir.fragments.ParserHelpers;
@@ -63,8 +66,10 @@ import java.util.function.Supplier;
  *
  * <p>The visitor keeps the {@link Scope} of the construct it is in. A function definition declares its type parameters
  * and its parameters in a scope of their own, a block opens a scope for what its statements declare, and leaving a
- * construct returns to the enclosing scope. A name in a type is a type only if it is a type parameter in scope, so a
- * misspelled type is an error. A visitor holds the scope of one traversal, so each parse uses a new visitor.</p>
+ * construct returns to the enclosing scope. A name in a type is a type only if it is a type parameter or an extern type
+ * in scope, so a misspelled type is an error. Names are resolved once, here: a reference to a function refers to the
+ * definition or declaration that its name stands for where the reference is, and an extern type to its declaration.
+ * A visitor holds the scope of one traversal, so each parse uses a new visitor.</p>
  *
  * <p>Statements are typed as they are built. The visitor first infers a statement: it declares what the statement
  * declares, and it adds the statement's equations to the {@code TypeInference} of the statement's scope. It then
@@ -137,43 +142,100 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
     /**
      * Builds a function definition. Its type parameters and its parameters are declared in the scope of the function,
-     * which its body is nested in. The function is declared in the enclosing scope as soon as its signature is known,
-     * before its body is built, so that the body and the statements after the definition can call it. The scope of the
-     * function has no inference, so the statements of the body are typed one by one, also inside a closure, and the
-     * type parameters of the function stay inside it.
+     * which its body is nested in. The function is declared in the enclosing scope once its definition is built, so
+     * that a reference to it refers to the definition; the body therefore cannot call the function, and FRL-IR has no
+     * recursion. The scope of the function has no inference, so the statements of the body are typed one by one, also
+     * inside a closure, and the type parameters of the function stay inside it.
      */
     @Nonnull
     private IFunctionDefinition functionDefinition(@Nonnull final FrlIrParser.FunctionDefinitionContext ctx) {
+        final ImmutableList<IAnnotationFragment> annotations = annotations(ctx.annotation());
         final String name = name(ctx.identifier());
         final ImmutableList<IGenericType> typeParameters = typeParameters(ctx.typeParameters());
         final Scope enclosingScope = scope;
         return inScope(scope.enterFunction(typeParameters), () -> {
             final ImmutableList<IFunctionDefinition.Parameter> parameters = parameters(ctx.parameter());
             final IType resultType = ctx.type() == null ? voidType() : type(ctx.type());
-            enclosingScope.declareFunction(name, typeParameters, functionType(parameters, resultType));
             parameters.forEach(parameter -> scope.declareVariable(parameter.name(), TypeInference.known(parameter.type())));
             final PendingStatements body = inScope(scope.enterBlock(), () -> statements(ctx.block().statements(),
                     resultType.isVoid() ? null : TypeInference.known(resultType)));
-            return new IFunctionDefinition(name, typeParameters, parameters, resultType, new IBlock(body.builder().get()));
+            final IFunctionDefinition definition = new IFunctionDefinition(name, typeParameters, parameters, resultType,
+                    new IBlock(body.builder().get()), annotations);
+            enclosingScope.declareFunction(definition);
+            return definition;
         });
     }
 
     /**
-     * Builds a function declaration and declares the function in the enclosing scope.
+     * Builds a function declaration and declares the function in the enclosing scope. The declaration records the
+     * package of the program, which, together with its annotations, says what the function is outside FRL-IR.
      */
     @Nonnull
     private IFunctionDeclaration functionDeclaration(@Nonnull final FrlIrParser.FunctionDeclarationContext ctx) {
+        final ImmutableList<IAnnotationFragment> annotations = annotations(ctx.annotation());
         final String name = name(ctx.identifier());
         final ImmutableList<IGenericType> typeParameters = typeParameters(ctx.typeParameters());
         final Scope enclosingScope = scope;
         return inScope(scope.enterFunction(typeParameters), () -> {
             final ImmutableList<IFunctionDefinition.Parameter> parameters = parameters(ctx.parameter());
             final IType resultType = ctx.type() == null ? voidType() : type(ctx.type());
-            final IFunctionDeclaration declaration =
-                    new IFunctionDeclaration(name, typeParameters, parameters, resultType);
-            enclosingScope.declareFunction(name, typeParameters, functionType(parameters, resultType));
+            final IFunctionDeclaration declaration = new IFunctionDeclaration(name, typeParameters, parameters,
+                    resultType, annotations, scope.packageStatement());
+            enclosingScope.declareFunction(declaration);
             return declaration;
         });
+    }
+
+    /**
+     * Builds a type declaration and declares the extern type in the current scope. Like a function declaration, it
+     * records the package of the program.
+     */
+    @Nonnull
+    private ITypeDeclaration typeDeclaration(@Nonnull final FrlIrParser.TypeDeclarationContext ctx) {
+        final ITypeDeclaration declaration = new ITypeDeclaration(name(ctx.identifier()), annotations(ctx.annotation()),
+                scope.packageStatement());
+        scope.declareExternType(declaration);
+        return declaration;
+    }
+
+    /**
+     * Builds the package statement of a program and declares the package, which the outermost scope then holds. Only
+     * the first statement of a program can name a package, so the package is in effect for everything the program
+     * declares.
+     */
+    @Nonnull
+    private IPackageStatement packageStatement(@Nonnull final FrlIrParser.PackageStatementContext ctx) {
+        final FrlIrParser.StatementsContext statements = (FrlIrParser.StatementsContext)ctx.getParent();
+        Preconditions.checkArgument(statements.getParent() instanceof FrlIrParser.ProgramContext
+                        && statements.statement(0).equals(ctx),
+                "a package statement can only be the first statement of a program");
+        final FrlIrParser.PackageDeclarationContext declaration = ctx.packageDeclaration();
+        final IPackageStatement packageStatement =
+                new IPackageStatement(name(declaration.identifier()), annotations(declaration.annotation()));
+        scope.declarePackage(packageStatement);
+        return packageStatement;
+    }
+
+    @Nonnull
+    @Override
+    public IAnnotationFragment visitAnnotation(@Nonnull final FrlIrParser.AnnotationContext ctx) {
+        return new IAnnotationFragment(name(ctx.identifier()), ctx.annotationArgument()
+                .stream()
+                .map(this::visitAnnotationArgument)
+                .collect(ImmutableList.toImmutableList()));
+    }
+
+    @Nonnull
+    @Override
+    public IAnnotationFragment.Argument visitAnnotationArgument(
+            @Nonnull final FrlIrParser.AnnotationArgumentContext ctx) {
+        return new IAnnotationFragment.Argument(ctx.identifier() == null ? null : name(ctx.identifier()),
+                stringValue(ctx.STRING_LITERAL().getText()));
+    }
+
+    @Nonnull
+    private ImmutableList<IAnnotationFragment> annotations(@Nonnull final List<FrlIrParser.AnnotationContext> ctx) {
+        return ctx.stream().map(this::visitAnnotation).collect(ImmutableList.toImmutableList());
     }
 
     @Nonnull
@@ -195,14 +257,6 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     private ImmutableList<IFunctionDefinition.Parameter> parameters(
             @Nonnull final List<FrlIrParser.ParameterContext> ctx) {
         return ctx.stream().map(this::visitParameter).collect(ImmutableList.toImmutableList());
-    }
-
-    @Nonnull
-    private static IFunctionType functionType(@Nonnull final List<IFunctionDefinition.Parameter> parameters,
-                                              @Nonnull final IType resultType) {
-        return new IFunctionType(false, parameters.stream()
-                .map(IFunctionDefinition.Parameter::type)
-                .collect(ImmutableList.toImmutableList()), resultType);
     }
 
     //
@@ -390,13 +444,14 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Resolves a type parameter to the one that the nearest enclosing function declares by that name. Its nullability
-     * is applied by the {@code valueType} around it.
+     * Resolves the name of a type: to the type parameter that the nearest enclosing function declares by that name, or
+     * to the extern type that the nearest enclosing scope declares by it. Its nullability is applied by the
+     * {@code valueType} around it.
      */
     @Nonnull
     @Override
-    public IGenericType visitGenericType(@Nonnull final FrlIrParser.GenericTypeContext ctx) {
-        return scope.lookupTypeParameter(name(ctx.identifier()))
+    public IType visitNamedType(@Nonnull final FrlIrParser.NamedTypeContext ctx) {
+        return scope.lookupType(name(ctx.identifier()))
                 .orElseThrow(() -> new IllegalArgumentException("unknown type"));
     }
 
@@ -645,16 +700,33 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
         @Nonnull
         @Override
-        public PendingStatement visitDefinitionStatement(@Nonnull final FrlIrParser.DefinitionStatementContext ctx) {
+        public PendingStatement visitFunctionDefinitionStatement(
+                @Nonnull final FrlIrParser.FunctionDefinitionStatementContext ctx) {
             final IFunctionDefinition definition = functionDefinition(ctx.functionDefinition());
             return new PendingStatement(() -> definition, null);
         }
 
         @Nonnull
         @Override
-        public PendingStatement visitDeclarationStatement(@Nonnull final FrlIrParser.DeclarationStatementContext ctx) {
+        public PendingStatement visitFunctionDeclarationStatement(
+                @Nonnull final FrlIrParser.FunctionDeclarationStatementContext ctx) {
             final IFunctionDeclaration declaration = functionDeclaration(ctx.functionDeclaration());
             return new PendingStatement(() -> declaration, null);
+        }
+
+        @Nonnull
+        @Override
+        public PendingStatement visitTypeDeclarationStatement(
+                @Nonnull final FrlIrParser.TypeDeclarationStatementContext ctx) {
+            final ITypeDeclaration declaration = typeDeclaration(ctx.typeDeclaration());
+            return new PendingStatement(() -> declaration, null);
+        }
+
+        @Nonnull
+        @Override
+        public PendingStatement visitPackageStatement(@Nonnull final FrlIrParser.PackageStatementContext ctx) {
+            final IPackageStatement packageStatement = packageStatement(ctx);
+            return new PendingStatement(() -> packageStatement, null);
         }
 
         /**
@@ -779,12 +851,14 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             final Scope.FunctionBinding function = (Scope.FunctionBinding)binding;
             final TypeInference.Instantiation instantiation =
                     inference.instantiate(function.typeParameters(), function.type());
-            // an instantiated function type resolves to a function type
-            return fit(new Inferred(instantiation.type(), () -> new IFunctionReference(name,
+            // the reference refers to the function that the name stands for here; an instantiated function type
+            // resolves to a function type
+            return fit(new Inferred(instantiation.type(), () -> new IFunctionReference(function.function(),
                     instantiation.typeArguments()
                             .stream()
                             .map(TypeInference::resolve)
-                            .collect(ImmutableList.toImmutableList()), (IFunctionType)TypeInference.resolve(instantiation.type()))));
+                            .collect(ImmutableList.toImmutableList()),
+                    (IFunctionType)TypeInference.resolve(instantiation.type()))));
         }
 
         /**

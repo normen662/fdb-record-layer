@@ -39,7 +39,8 @@ options { tokenVocab=FrlIrLexer; }
 // Programs
 //
 
-// The entry point: a program is a sequence of statements, like the content of a block without the braces.
+// The entry point: a program is a sequence of statements, like the content of a block without the braces. Its first
+// statement can name the package that the program belongs to (see `packageDeclaration`).
 program
     : statements EOF
     ;
@@ -71,7 +72,7 @@ baseType
     | functionType
     | unitType
     | parenthesizedType
-    | genericType
+    | namedType
     ;
 
 primitiveType
@@ -150,9 +151,10 @@ unitType
     : LPAREN NL* RPAREN
     ;
 
-// A type parameter of an enclosing generic function, e.g. `T` in `func id<T>(x: T): T`. Whether a name is a type
-// parameter is decided after parsing: a name that is not a type parameter in scope is not a type.
-genericType
+// A type that has a name: a type parameter of an enclosing generic function, `T` in `func id<T>(x: T): T`, or an extern
+// type, `range` after `extern type range`. What a name stands for is decided after parsing: a name that is neither a
+// type parameter nor an extern type in scope is not a type.
+namedType
     : identifier
     ;
 
@@ -177,18 +179,45 @@ integer
 
 // `func map<T, U>(xs: [T], f: (T) -> U): [U] { }`. Without `: type`, the function returns `void`. A body must end with an
 // expression of the result type, unless that type is `void`, in which case a value of the last expression is discarded.
-// A function definition ends only with its block, so it may be split across lines anywhere before that.
+// A function definition ends only with its block, so it may be split across lines anywhere before that. The function is
+// in scope from the next statement on: FRL-IR has no recursion, so a body cannot call its own function.
 functionDefinition
-    : FUNC NL* identifier NL* (typeParameters NL*)? LPAREN NL* (parameter (NL* COMMA NL* parameter)* NL*)? RPAREN
-      (NL* COLON NL* type)? NL* block
+    : (annotation NL*)* FUNC NL* identifier NL* (typeParameters NL*)? LPAREN NL*
+      (parameter (NL* COMMA NL* parameter)* NL*)? RPAREN (NL* COLON NL* type)? NL* block
     ;
 
 // `extern func lookup(key: bigint): string?` declares a function that the runtime provides, like an external function in
 // MLIR: it has a signature and no body. A declaration can end after its `)`, so the `:` of its result type stays on the
 // line of the `)`.
 functionDeclaration
-    : EXTERN NL* FUNC NL* identifier NL* (typeParameters NL*)? LPAREN NL* (parameter (NL* COMMA NL* parameter)* NL*)?
-      RPAREN (COLON NL* type)?
+    : (annotation NL*)* EXTERN NL* FUNC NL* identifier NL* (typeParameters NL*)? LPAREN NL*
+      (parameter (NL* COMMA NL* parameter)* NL*)? RPAREN (COLON NL* type)?
+    ;
+
+// `extern type range` declares a type that the runtime provides, for the values that extern functions take and return.
+// An extern type is a plain name without type parameters, and it can be used wherever a type can, also as `range?`.
+typeDeclaration
+    : (annotation NL*)* EXTERN NL* TYPE NL* identifier
+    ;
+
+// `package abc` names the package that a program belongs to. It can only be the first statement of a program, so a
+// program belongs to one package at most, together with everything that the program declares. Annotations on the
+// package say where the package lives outside FRL-IR, e.g. `@java("com.apple.foundationdb.record.ir") package abc`,
+// so that an extern type or function needs an annotation of its own only where it lives elsewhere.
+packageDeclaration
+    : (annotation NL*)* PACKAGE NL* identifier
+    ;
+
+// `@java(class: "com.apple.foundationdb.record.TupleRange")` says how a declaration lives outside FRL-IR. FRL-IR keeps
+// an annotation as written, a name and string arguments that may be labeled: what an annotation means is up to the
+// target that binds the declaration, so a new target needs no new syntax. An annotation can stand on a line of its own
+// before what it annotates, and the `(` stays on the line of the name, as for a call.
+annotation
+    : AT identifier (LPAREN NL* (annotationArgument (NL* COMMA NL* annotationArgument)* NL*)? RPAREN)?
+    ;
+
+annotationArgument
+    : (identifier NL* COLON NL*)? STRING_LITERAL
     ;
 
 // The type parameters of a generic function, `<T, U>`. Within the function, and within the functions nested in it, a
@@ -245,8 +274,10 @@ separators
 // An expression is a statement too: `f(1)` on its own calls `f`, and as the last statement of a body it is the value of
 // the body.
 statement
-    : functionDefinition     # definitionStatement
-    | functionDeclaration    # declarationStatement
+    : functionDefinition     # functionDefinitionStatement
+    | functionDeclaration    # functionDeclarationStatement
+    | typeDeclaration        # typeDeclarationStatement
+    | packageDeclaration     # packageStatement
     | assignment             # assignmentStatement
     | expression             # expressionStatement
     ;

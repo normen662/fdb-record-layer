@@ -80,7 +80,8 @@ public final class CascadesTypeConverter {
      *
      * @param irType the FRL-IR type
      * @return the Cascades type
-     * @throws RecordCoreException if the type has no Cascades counterpart
+     * @throws RecordCoreException if the type has no Cascades counterpart, as for an extern type, whose values only
+     *         extern functions understand
      */
     @Nonnull
     public static Type toCascades(@Nonnull final IType irType) {

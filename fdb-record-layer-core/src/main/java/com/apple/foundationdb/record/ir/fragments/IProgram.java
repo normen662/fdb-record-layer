@@ -21,18 +21,20 @@
 package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nonnull;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
  * A program, the construct that parsing FRL-IR starts from: a sequence of statements, separated by line breaks or
- * semicolons as in a block. This is a placeholder that carries the statements; what a program means is yet to be
- * designed.
+ * semicolons as in a block. A program can belong to a package, which its first statement then names. This is a
+ * placeholder that carries the statements; what a program means is yet to be designed.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IProgram implements IFragment {
@@ -44,10 +46,12 @@ public final class IProgram implements IFragment {
     /**
      * Creates a program.
      *
-     * @param statements the statements in order
+     * @param statements the statements in order; only the first one can be a package statement
      */
     public IProgram(@Nonnull final List<IStatement> statements) {
         this.statements = ImmutableList.copyOf(statements);
+        Preconditions.checkArgument(this.statements.stream().skip(1).noneMatch(IPackageStatement.class::isInstance),
+                "a package statement can only be the first statement of a program");
     }
 
     /**
@@ -56,6 +60,17 @@ public final class IProgram implements IFragment {
     @Nonnull
     public List<IStatement> statements() {
         return statements;
+    }
+
+    /**
+     * {@return the package statement of the program, its first statement, or empty if the program has none}
+     */
+    @Nonnull
+    public Optional<IPackageStatement> packageStatement() {
+        return statements.stream()
+                .findFirst()
+                .filter(IPackageStatement.class::isInstance)
+                .map(IPackageStatement.class::cast);
     }
 
     @Override

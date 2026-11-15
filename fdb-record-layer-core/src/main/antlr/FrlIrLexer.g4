@@ -53,11 +53,14 @@ VECTOR   : 'vector';
 ENUM     : 'enum';
 FUNCTION : 'function';
 
-// Definitions and statements. `extern` declares a function that the runtime provides.
-FUNC   : 'func';
-EXTERN : 'extern';
-IN     : 'in';
-LET    : 'let';
+// Definitions and statements. `extern` declares a function or a type that the runtime provides, and `package` names the
+// package that a program belongs to.
+FUNC    : 'func';
+EXTERN  : 'extern';
+TYPE    : 'type';
+PACKAGE : 'package';
+IN      : 'in';
+LET     : 'let';
 
 // Literals that are keywords. `nil` is the null of every nullable type, as in Swift.
 TRUE  : 'true';
@@ -79,6 +82,7 @@ EQUAL    : '=';
 QUESTION : '?';
 ARROW    : '->';
 MINUS    : '-';
+AT       : '@';
 
 INTEGER_LITERAL : [0-9]+;
 
