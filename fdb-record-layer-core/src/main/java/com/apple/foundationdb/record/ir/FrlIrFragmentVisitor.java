@@ -30,6 +30,7 @@ import com.apple.foundationdb.record.ir.fragments.IClosure;
 import com.apple.foundationdb.record.ir.fragments.IEnumType;
 import com.apple.foundationdb.record.ir.fragments.IExpression;
 import com.apple.foundationdb.record.ir.fragments.IFragment;
+import com.apple.foundationdb.record.ir.fragments.IFunction;
 import com.apple.foundationdb.record.ir.fragments.IFunctionCall;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDeclaration;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDefinition;
@@ -148,48 +149,56 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Builds a function definition. Its type parameters and its parameters are declared in the scope of the function,
-     * which its body is nested in. The function is declared in the enclosing scope once its definition is built, so
-     * that a reference to it refers to the definition; the body therefore cannot call the function, and FRL-IR has no
-     * recursion. The scope of the function has no inference, so the statements of the body are typed one by one, also
-     * inside a closure, and the type parameters of the function stay inside it.
+     * Builds a function definition. Its parameters are declared in the scope of the function, which its body is nested
+     * in. The scope of the function has no inference, so the statements of the body are typed one by one, also inside a
+     * closure, and the type parameters of the function stay inside it.
      */
     @Nonnull
     private IFunctionDefinition functionDefinition(@Nonnull final FrlIrParser.FunctionDefinitionContext ctx) {
         final ImmutableList<IAnnotationFragment> annotations = annotations(ctx.annotation());
-        final String name = name(ctx.identifier());
-        final ImmutableList<IGenericType> typeParameters = typeParameters(ctx.typeParameters());
-        final Scope enclosingScope = scope;
-        return inScope(scope.enterFunction(typeParameters), () -> {
-            final ImmutableList<IFunctionDefinition.Parameter> parameters = parameters(ctx.parameter());
-            final IType resultType = ctx.type() == null ? voidType() : type(ctx.type());
-            parameters.forEach(parameter -> scope.declareVariable(parameter.name(), TypeInference.known(parameter.type())));
+        return function(ctx.functionSignature(), ctx.type(), signature -> {
+            signature.parameters()
+                    .forEach(parameter -> scope.declareVariable(parameter.name(), TypeInference.known(parameter.type())));
+            final IType resultType = signature.resultType();
             final PendingStatements body = inScope(scope.enterBlock(), () -> statements(ctx.block().statements(),
                     resultType.isVoid() ? null : TypeInference.known(resultType)));
-            final IFunctionDefinition definition = new IFunctionDefinition(name, typeParameters, parameters, resultType,
-                    new IBlock(body.builder().get()), annotations);
-            enclosingScope.declareFunction(definition);
-            return definition;
+            return new IFunctionDefinition(signature.name(), signature.typeParameters(), signature.parameters(),
+                    resultType, new IBlock(body.builder().get()), annotations);
         });
     }
 
     /**
-     * Builds a function declaration and declares the function in the enclosing scope. The declaration records the
-     * package of the program, which, together with its annotations, says what the function is outside FRL-IR.
+     * Builds a function declaration. The declaration records the package of the program, which, together with its
+     * annotations, says what the function is outside FRL-IR.
      */
     @Nonnull
     private IFunctionDeclaration functionDeclaration(@Nonnull final FrlIrParser.FunctionDeclarationContext ctx) {
         final ImmutableList<IAnnotationFragment> annotations = annotations(ctx.annotation());
-        final String name = name(ctx.identifier());
+        return function(ctx.functionSignature(), ctx.type(), signature ->
+                new IFunctionDeclaration(signature.name(), signature.typeParameters(), signature.parameters(),
+                        signature.resultType(), annotations, scope.packageStatement()));
+    }
+
+    /**
+     * Builds a function from its signature, what a definition and a declaration have in common. The type parameters
+     * are declared in a scope of the function, in which the signature is read and the function is built. The function
+     * is declared in the enclosing scope once it is built, so that a reference to it refers to the definition; a body
+     * therefore cannot call its own function, and FRL-IR has no recursion.
+     *
+     * @param resultType the result type of the function, or {@code null} if it returns {@code void}
+     * @param builder builds the function, in the scope of the function, from the signature
+     */
+    @Nonnull
+    private <F extends IFunction> F function(@Nonnull final FrlIrParser.FunctionSignatureContext ctx,
+                                             @Nullable final FrlIrParser.TypeContext resultType,
+                                             @Nonnull final Function<Signature, F> builder) {
         final ImmutableList<IGenericType> typeParameters = typeParameters(ctx.typeParameters());
         final Scope enclosingScope = scope;
         return inScope(scope.enterFunction(typeParameters), () -> {
-            final ImmutableList<IFunctionDefinition.Parameter> parameters = parameters(ctx.parameter());
-            final IType resultType = ctx.type() == null ? voidType() : type(ctx.type());
-            final IFunctionDeclaration declaration = new IFunctionDeclaration(name, typeParameters, parameters,
-                    resultType, annotations, scope.packageStatement());
-            enclosingScope.declareFunction(declaration);
-            return declaration;
+            final F function = builder.apply(new Signature(name(ctx.identifier()), typeParameters,
+                    parameters(ctx.parameter()), resultType == null ? voidType() : type(resultType)));
+            enclosingScope.declareFunction(function);
+            return function;
         });
     }
 
@@ -327,32 +336,24 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Returns the arguments between the parentheses of a call, each of which is inferred with the type of its parameter
-     * as its context.
+     * Returns the arguments of a call: those between the parentheses, if there are parentheses, followed by the
+     * trailing closure, if there is one. Each argument is inferred with the type of its parameter as its context, so a
+     * trailing closure, like every closure, has that type before its body is inferred.
      */
     @Nonnull
-    private ImmutableList<Function<TypeInference.Term, Inferred>> arguments(
-            @Nullable final FrlIrParser.ArgumentsContext ctx) {
-        return ctx == null
-                ? ImmutableList.of()
-                : ctx.expression()
-                        .stream()
-                        .<Function<TypeInference.Term, Inferred>>map(argument ->
-                                parameterType -> infer(argument, parameterType, ARGUMENT_MISMATCH))
-                        .collect(ImmutableList.toImmutableList());
-    }
-
-    /**
-     * Returns the trailing closure of a call as its last argument, which, like every closure, has the type of its
-     * parameter as its context before its body is inferred.
-     */
-    @Nonnull
-    private ImmutableList<Function<TypeInference.Term, Inferred>> trailingClosure(
-            @Nullable final FrlIrParser.ClosureContext ctx) {
-        return ctx == null
-                ? ImmutableList.of()
-                : ImmutableList.of(parameterType ->
-                        new ExpressionInferenceVisitor(parameterType, ARGUMENT_MISMATCH).inferClosure(ctx));
+    private ImmutableList<Function<TypeInference.Term, Inferred>> callArguments(
+            @Nonnull final FrlIrParser.CallArgumentsContext ctx) {
+        final ImmutableList.Builder<Function<TypeInference.Term, Inferred>> arguments = ImmutableList.builder();
+        if (ctx.arguments() != null) {
+            ctx.arguments().expression().forEach(argument ->
+                    arguments.add(parameterType -> infer(argument, parameterType, ARGUMENT_MISMATCH)));
+        }
+        final FrlIrParser.ClosureContext trailingClosure = ctx.closure();
+        if (trailingClosure != null) {
+            arguments.add(parameterType ->
+                    new ExpressionInferenceVisitor(parameterType, ARGUMENT_MISMATCH).inferClosure(trailingClosure));
+        }
+        return arguments.build();
     }
 
     /**
@@ -758,31 +759,27 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         @Override
         public PendingStatement visitFunctionDefinitionStatement(
                 @Nonnull final FrlIrParser.FunctionDefinitionStatementContext ctx) {
-            final IFunctionDefinition definition = functionDefinition(ctx.functionDefinition());
-            return new PendingStatement(() -> definition, null);
+            return PendingStatement.built(functionDefinition(ctx.functionDefinition()));
         }
 
         @Nonnull
         @Override
         public PendingStatement visitFunctionDeclarationStatement(
                 @Nonnull final FrlIrParser.FunctionDeclarationStatementContext ctx) {
-            final IFunctionDeclaration declaration = functionDeclaration(ctx.functionDeclaration());
-            return new PendingStatement(() -> declaration, null);
+            return PendingStatement.built(functionDeclaration(ctx.functionDeclaration()));
         }
 
         @Nonnull
         @Override
         public PendingStatement visitTypeDeclarationStatement(
                 @Nonnull final FrlIrParser.TypeDeclarationStatementContext ctx) {
-            final ITypeDeclaration declaration = typeDeclaration(ctx.typeDeclaration());
-            return new PendingStatement(() -> declaration, null);
+            return PendingStatement.built(typeDeclaration(ctx.typeDeclaration()));
         }
 
         @Nonnull
         @Override
         public PendingStatement visitPackageStatement(@Nonnull final FrlIrParser.PackageStatementContext ctx) {
-            final IPackageStatement packageStatement = packageStatement(ctx);
-            return new PendingStatement(() -> packageStatement, null);
+            return PendingStatement.built(packageStatement(ctx));
         }
 
         /**
@@ -1002,16 +999,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         @Nonnull
         @Override
         public Inferred visitCallPostfix(@Nonnull final FrlIrParser.CallPostfixContext ctx) {
-            return inferCall(before, ImmutableList.<Function<TypeInference.Term, Inferred>>builder()
-                    .addAll(arguments(ctx.arguments()))
-                    .addAll(trailingClosure(ctx.closure()))
-                    .build(), expected, mismatch);
-        }
-
-        @Nonnull
-        @Override
-        public Inferred visitTrailingClosurePostfix(@Nonnull final FrlIrParser.TrailingClosurePostfixContext ctx) {
-            return inferCall(before, trailingClosure(ctx.closure()), expected, mismatch);
+            return inferCall(before, callArguments(ctx.callArguments()), expected, mismatch);
         }
 
         /**
@@ -1031,8 +1019,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             };
             return inferCall(functionReference(function), ImmutableList.<Function<TypeInference.Term, Inferred>>builder()
                     .add(receiver)
-                    .addAll(arguments(ctx.arguments()))
-                    .addAll(trailingClosure(ctx.closure()))
+                    .addAll(callArguments(ctx.callArguments()))
                     .build(), expected, mismatch);
         }
     }
@@ -1085,6 +1072,14 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * @param valueType the type of the statement's value if the statement is an expression, and {@code null} otherwise
      */
     private record PendingStatement(@Nonnull Supplier<IStatement> builder, @Nullable TypeInference.Term valueType) {
+        /**
+         * Returns a statement that is built already: a definition or a declaration, which involves no inference and
+         * has no value.
+         */
+        @Nonnull
+        static PendingStatement built(@Nonnull final IStatement statement) {
+            return new PendingStatement(() -> statement, null);
+        }
     }
 
     /**
@@ -1096,6 +1091,19 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      */
     private record PendingStatements(@Nonnull Supplier<ImmutableList<IStatement>> builder,
                                      @Nullable TypeInference.Term valueType) {
+    }
+
+    /**
+     * The signature of a function, read in the scope of the function.
+     *
+     * @param name the name of the function
+     * @param typeParameters the type parameters of the function, in order
+     * @param parameters the parameters of the function, in order
+     * @param resultType the result type of the function, {@code void} if it states none
+     */
+    private record Signature(@Nonnull String name, @Nonnull ImmutableList<IGenericType> typeParameters,
+                             @Nonnull ImmutableList<IFunctionDefinition.Parameter> parameters,
+                             @Nonnull IType resultType) {
     }
 
     /**

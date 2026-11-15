@@ -185,16 +185,20 @@ integer
 // A function definition ends only with its block, so it may be split across lines anywhere before that. The function is
 // in scope from the next statement on: FRL-IR has no recursion, so a body cannot call its own function.
 functionDefinition
-    : (annotation NL*)* FUNC NL* identifier NL* (typeParameters NL*)? LPAREN NL*
-      (parameter (NL* COMMA NL* parameter)* NL*)? RPAREN (NL* COLON NL* type)? NL* block
+    : (annotation NL*)* functionSignature (NL* COLON NL* type)? NL* block
     ;
 
 // `extern func lookup(key: bigint): string?` declares a function that the runtime provides, like an external function in
 // MLIR: it has a signature and no body. A declaration can end after its `)`, so the `:` of its result type stays on the
 // line of the `)`.
 functionDeclaration
-    : (annotation NL*)* EXTERN NL* FUNC NL* identifier NL* (typeParameters NL*)? LPAREN NL*
-      (parameter (NL* COMMA NL* parameter)* NL*)? RPAREN (COLON NL* type)?
+    : (annotation NL*)* EXTERN NL* functionSignature (COLON NL* type)?
+    ;
+
+// What a function definition and a function declaration have in common: the name, the type parameters, and the
+// parameters. The result type is not part of it, since the two allow a line break before its `:` in different places.
+functionSignature
+    : FUNC NL* identifier NL* (typeParameters NL*)? LPAREN NL* (parameter (NL* COMMA NL* parameter)* NL*)? RPAREN
     ;
 
 // `extern type range` declares a type that the runtime provides, for the values that extern functions take and return.
@@ -315,21 +319,25 @@ primaryExpression
 
 // The postfixes of an expression apply from left to right, each to the expression before it.
 // - A call, `f(1)`. Anything of a function type can be called, `f(1)(2)` and `{ (x: int) in x }(1)` included.
-// - A trailing closure, as in Swift: a closure after the arguments is the last argument, `fold(0) { a, x in a }` is
-//   `fold(0, { a, x in a })`, and without other arguments the parentheses can go, `run { 42 }` is `run({ 42 })`.
-// - A dot call: `x.f(1)` calls the function `f` with `x` as its first argument, `f(x, 1)`, and it can take a trailing
-//   closure too, `xs.map { x in x }`. The name after the `.` is looked up among the functions only, so that a variable
-//   cannot hide a function there. Without arguments or a trailing closure, `x.f` is not a call; that form is left to
-//   the fields of records.
+// - A dot call: `x.f(1)` calls the function `f` with `x` as its first argument, `f(x, 1)`. The name after the `.` is
+//   looked up among the functions only, so that a variable cannot hide a function there. Without arguments or a
+//   trailing closure, `x.f` is not a call; that form is left to the fields of records.
 // A dot call may start a line, which continues the expression of the line before. The `(` of a call and a trailing
-// closure stay on the line of what they call. As in Swift, a call has one trailing closure at most. The sign of a
-// literal belongs to the literal, so `-1.f()` is `f(-1)`, unlike in Swift. Statements with a condition, once FRL-IR has
-// them, will take no trailing closure in the condition: there, a `{` starts the body, and a closure argument goes into
-// the parentheses, `if xs.contains({ x in x > 1 }) { }`.
+// closure stay on the line of what they call. The sign of a literal belongs to the literal, so `-1.f()` is `f(-1)`,
+// unlike in Swift.
 postfix
-    : arguments closure?                                    # callPostfix
-    | closure                                               # trailingClosurePostfix
-    | NL* DOT identifier (arguments closure? | closure)     # dotCallPostfix
+    : callArguments                         # callPostfix
+    | NL* DOT identifier callArguments      # dotCallPostfix
+    ;
+
+// The arguments of a call. As in Swift, a closure after the parentheses is a trailing closure, the last argument:
+// `fold(0) { a, x in a }` is `fold(0, { a, x in a })`, and without other arguments the parentheses can go, `run { 42 }`
+// is `run({ 42 })`, also in a dot call, `xs.map { x in x }`. A call has one trailing closure at most. Statements with a
+// condition, once FRL-IR has them, will take no trailing closure in the condition: there, a `{` starts the body, and a
+// closure argument goes into the parentheses, `if xs.contains({ x in x > 1 }) { }`.
+callArguments
+    : arguments closure?
+    | closure
     ;
 
 arguments
