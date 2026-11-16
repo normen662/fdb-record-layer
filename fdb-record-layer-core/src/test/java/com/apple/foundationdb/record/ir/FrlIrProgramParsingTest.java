@@ -38,10 +38,12 @@ import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IProgram;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
 import com.apple.foundationdb.record.ir.fragments.IStatement;
+import com.apple.foundationdb.record.ir.fragments.IStreamFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
 import com.apple.foundationdb.record.ir.fragments.IType;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
 import com.apple.foundationdb.record.ir.fragments.IVariableReference;
+import com.apple.foundationdb.record.ir.fragments.IYieldFragment;
 import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -59,8 +61,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Tests for parsing FRL-IR programs: the program, statement, function definition, function declaration, type
- * declaration, package, and annotation productions of the grammar, and the fragments that {@link FrlIrFragmentVisitor}
- * builds from them.
+ * declaration, package, annotation, and yield productions of the grammar, and the fragments that
+ * {@link FrlIrFragmentVisitor} builds from them; the stream blocks that yields belong to are tested with the other
+ * expressions.
  */
 class FrlIrProgramParsingTest {
     private static final IType INT = new IPrimitiveType(IPrimitiveType.Kind.INT, false);
@@ -311,6 +314,80 @@ class FrlIrProgramParsingTest {
     }
 
     @Nonnull
+    static Stream<Arguments> validStreamFunctions() {
+        final IStreamType streamOfInt = new IStreamType(INT);
+        final IFunctionDefinition one = new IFunctionDefinition("one", ImmutableList.of(), ImmutableList.of(), INT,
+                new IBlock(ImmutableList.of(new ILiteral(1, INT))));
+        return Stream.of(
+                // a function returns the stream that its stream block constructs; the result type of the function is
+                // the context of the stream block, and so of the values that the block yields
+                Arguments.of("func numbers(): stream<bigint> {\n    stream {\n        yield 1\n"
+                                + "        yield 2\n    }\n}",
+                        function("numbers", new IStreamType(BIGINT), ImmutableList.of(new IStreamFragment(BIGINT,
+                                new IBlock(ImmutableList.of(new IYieldFragment(new ILiteral(1L, BIGINT)),
+                                        new IYieldFragment(new ILiteral(2L, BIGINT)))))))),
+                // the code before the stream block runs when the function is called, and the block sees its variables
+                Arguments.of("func twice<T>(x: T): stream<T> {\n    let y = x\n"
+                                + "    stream {\n        yield x\n        yield y\n    }\n}",
+                        new IFunctionDefinition("twice", ImmutableList.of(T),
+                                ImmutableList.of(new IFunctionDefinition.Parameter("x", T)), new IStreamType(T),
+                                new IBlock(ImmutableList.of(new IAssignment("y", new IVariableReference("x", T)),
+                                        new IStreamFragment(T, new IBlock(ImmutableList.of(
+                                                new IYieldFragment(new IVariableReference("x", T)),
+                                                new IYieldFragment(new IVariableReference("y", T))))))))),
+                // a yield can be split across lines after its keyword
+                Arguments.of("func numbers(): stream<int> {\n    stream {\n        yield\n            1\n    }\n}",
+                        function("numbers", streamOfInt, ImmutableList.of(new IStreamFragment(INT,
+                                new IBlock(ImmutableList.of(new IYieldFragment(new ILiteral(1, INT)))))))),
+                // a function in a stream block can compute what the block yields
+                Arguments.of("func numbers(): stream<int> {\n    stream {\n        func one(): int { 1 }\n"
+                                + "        yield one()\n    }\n}",
+                        function("numbers", streamOfInt, ImmutableList.of(new IStreamFragment(INT, new IBlock(
+                                ImmutableList.of(one, new IYieldFragment(new IFunctionCall(new IFunctionReference(one,
+                                        ImmutableList.of(), one.type()), ImmutableList.of())))))))),
+                // a closure can return a stream block
+                Arguments.of("func numbers(): () -> stream<int> { { stream { yield 1 } } }", function("numbers",
+                        new IFunctionType(false, ImmutableList.of(), streamOfInt), ImmutableList.of(new IClosure(
+                                ImmutableList.of(), streamOfInt, new IBlock(ImmutableList.of(new IStreamFragment(INT,
+                                        new IBlock(ImmutableList.of(new IYieldFragment(new ILiteral(1, INT))))))))))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("validStreamFunctions")
+    void parseProgramFunctionReturnsStreamOfItsStreamBlock(@Nonnull final String text,
+                                                           @Nonnull final IFunctionDefinition expected) {
+        assertThat(parseProgram(text).statements()).containsExactly(expected);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            // a yield is a statement of a stream block
+            "yield 1",
+            "func f(): stream<int> { yield 1 }",
+            "func f() { yield 1 }",
+            "let e = { yield 1 }",
+            // also within a stream block, a function or a closure cannot yield, since it can be called when the block
+            // is not running
+            "func f(): stream<int> {\n    stream {\n        func g() { yield 1 }\n        yield 2\n    }\n}",
+            "extern func each(f: () -> void)\nfunc f(): stream<int> {\n    stream {\n"
+                    + "        each { yield 1 }\n    }\n}",
+            // a yield is a statement with one value
+            "let e = stream { yield }",
+            "let e = stream { yield 1, 2 }",
+            "let e = stream { let x = yield 1 }",
+            "extern func g(x: int)\nlet e = stream { g(yield 1) }",
+            "let e = stream { yield 1 yield 2 }",           // statements on one line need a semicolon between them
+            // a stream block has no parameters: the yields add to its stream
+            "let e = stream { downStream in yield 1 }",
+            // the function returns the stream, so its result type must be the type of the stream
+            "func f(): int {\n    stream {\n        yield 1\n    }\n}",
+            "func f(): stream<int> {\n    stream {\n        yield \"a\"\n    }\n}",
+    })
+    void parseProgramInvalidYieldFails(@Nonnull final String text) {
+        assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Nonnull
     static Stream<Arguments> validAssignments() {
         final IAssignment bigintX = new IAssignment("x", new ILiteral(42L, BIGINT));
         return Stream.of(
@@ -554,6 +631,16 @@ class FrlIrProgramParsingTest {
     private static IFunctionDefinition function(@Nonnull final String name,
                                                 @Nonnull final List<IStatement> statements) {
         return new IFunctionDefinition(name, ImmutableList.of(), ImmutableList.of(), VOID, new IBlock(statements));
+    }
+
+    /**
+     * Returns a function definition without parameters of the given result type whose body holds the given statements.
+     */
+    @Nonnull
+    private static IFunctionDefinition function(@Nonnull final String name, @Nonnull final IType resultType,
+                                                @Nonnull final List<IStatement> statements) {
+        return new IFunctionDefinition(name, ImmutableList.of(), ImmutableList.of(), resultType,
+                new IBlock(statements));
     }
 
     @Nonnull

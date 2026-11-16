@@ -93,7 +93,10 @@ class IFragmentTest {
                 pinned(() -> new IVariableReference("x", intType()), -73490170),
                 pinned(IFragmentTest::identityReference, 23787472),
                 pinned(() -> new IFunctionCall(identityReference(), ImmutableList.of(literal42())), -761835920),
-                pinned(() -> new IAssignment("x", literal42()), -405760496));
+                pinned(() -> new IAssignment("x", literal42()), -405760496),
+                pinned(() -> new IYieldFragment(literal42()), 467444080),
+                pinned(() -> new IStreamFragment(intType(),
+                        new IBlock(ImmutableList.of(new IYieldFragment(literal42())))), 1105828874));
     }
 
     @ParameterizedTest
@@ -255,6 +258,12 @@ class IFragmentTest {
                 // assignments: the name, the expression
                 Arguments.of(new IAssignment("x", literal), new IAssignment("y", literal)),
                 Arguments.of(new IAssignment("x", literal), new IAssignment("x", call)),
+                // yields: the value
+                Arguments.of(new IYieldFragment(literal), new IYieldFragment(new ILiteral(43, intType))),
+                // stream blocks: the element type, the block
+                Arguments.of(new IStreamFragment(intType, emptyBlock), new IStreamFragment(bigintType, emptyBlock)),
+                Arguments.of(new IStreamFragment(intType, emptyBlock),
+                        new IStreamFragment(intType, new IBlock(ImmutableList.of(new IYieldFragment(literal))))),
                 // fragments of different kinds whose parts are equal
                 Arguments.of(emptyBlock, new IProgram(ImmutableList.of())),
                 Arguments.of(new IFunctionDefinition.Parameter("x", intType), closureX),
@@ -300,7 +309,11 @@ class IFragmentTest {
                 Arguments.of(valueIsLiteral, intType().withNullability(true), false),
                 // a void function discards the value of its body, if there is one
                 Arguments.of(valueIsLiteral, voidType(), true),
-                Arguments.of(emptyBlock(), voidType(), true));
+                Arguments.of(emptyBlock(), voidType(), true),
+                // a block that yields is the body of no function or closure, since a yield belongs to a stream block
+                Arguments.of(new IBlock(ImmutableList.of(new IYieldFragment(literal42()))), voidType(), false),
+                Arguments.of(new IBlock(ImmutableList.of(new IYieldFragment(literal42()))), new IStreamType(intType()),
+                        false));
     }
 
     @ParameterizedTest
@@ -308,6 +321,20 @@ class IFragmentTest {
     void isBodyOfResultTypeMatchesValueOrIsVoid(@Nonnull final IBlock body, @Nonnull final IType resultType,
                                                 final boolean expected) {
         assertThat(body.isBodyOf(resultType)).isEqualTo(expected);
+    }
+
+    @Test
+    void yieldsReturnsYieldsAmongStatementsOfBlock() {
+        final IYieldFragment yieldOf42 = new IYieldFragment(literal42());
+        final IYieldFragment yieldOf7 = new IYieldFragment(new ILiteral(7, intType()));
+        assertThat(new IBlock(ImmutableList.of(yieldOf42, new IAssignment("x", literal42()), yieldOf7)).yields())
+                .containsExactly(yieldOf42, yieldOf7);
+        assertThat(new IBlock(ImmutableList.of(literal42())).yields()).isEmpty();
+        assertThat(emptyBlock().yields()).isEmpty();
+        // the yields of a nested stream block belong to that stream block
+        final IStreamFragment stream = new IStreamFragment(intType(), new IBlock(ImmutableList.of(yieldOf42)));
+        assertThat(stream.body().yields()).containsExactly(yieldOf42);
+        assertThat(new IBlock(ImmutableList.of(stream)).yields()).isEmpty();
     }
 
     @Test
@@ -331,6 +358,21 @@ class IFragmentTest {
         assertThatThrownBy(() -> new IClosure.Parameter("x", voidType())).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new IAssignment("x", new IFunctionCall(new IVariableReference("g",
                 new IFunctionType(false, ImmutableList.of(), voidType())), ImmutableList.of())))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IYieldFragment(new IFunctionCall(new IVariableReference("g",
+                new IFunctionType(false, ImmutableList.of(), voidType())), ImmutableList.of())))
+                .isInstanceOf(IllegalArgumentException.class);
+        // a yield belongs to a stream block, so neither a function, a closure, nor a program can yield, and a stream
+        // block yields values of its element type, which cannot be void
+        final IBlock yieldsLiteral = new IBlock(ImmutableList.of(new IYieldFragment(literal42())));
+        assertThatThrownBy(() -> new IFunctionDefinition("f", ImmutableList.of(), ImmutableList.of(),
+                new IStreamType(intType()), yieldsLiteral)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IClosure(ImmutableList.of(), voidType(), yieldsLiteral))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IProgram(yieldsLiteral.statements())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IStreamFragment(bigintType(), yieldsLiteral))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IStreamFragment(voidType(), emptyBlock()))
                 .isInstanceOf(IllegalArgumentException.class);
         // the parameters of a declared function have distinct names
         assertThatThrownBy(() -> new IFunctionDeclaration("f", ImmutableList.of(),

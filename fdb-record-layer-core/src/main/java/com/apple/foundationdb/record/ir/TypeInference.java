@@ -50,12 +50,13 @@ import java.util.Optional;
  * Once the statement has added all of its equations, {@link #solve()} gives every literal whose type is still open the
  * default type of the literal, and {@link #resolve} turns the terms of the statement into types.</p>
  *
- * <p>The unit of inference is a statement outside closures, together with every closure in it: the statements of a
- * closure join the inference of the statement that the closure is in, because the types of the closure's parameters
- * can come from anywhere in that statement, as in {@code apply({ x in x }, 1)}. Every other statement, including every
- * statement of a function body, is solved on its own: what it declares has a type when the statement is complete, and
- * later statements do not change it. So in a function body {@code let a = 42} makes {@code a} an int, while in a
- * closure a later {@code let b: bigint = a} can still make it a bigint.</p>
+ * <p>The unit of inference is a statement outside closures and stream blocks, together with every closure and stream
+ * block in it: their statements join the inference of the statement that they are in, because the types of a closure's
+ * parameters, and the element type of a stream block, can come from anywhere in that statement, as in
+ * {@code apply({ x in x }, 1)}. Every other statement, including every statement of a function body, is solved on its
+ * own: what it declares has a type when the statement is complete, and later statements do not change it. So in a
+ * function body {@code let a = 42} makes {@code a} an int, while in a closure a later {@code let b: bigint = a} can
+ * still make it a bigint.</p>
  *
  * <p>Nullability is a property of a type rather than a wrapper around it, so a type parameter {@code T} that occurs as
  * {@code T?} stands for its type made nullable. Matching {@code T?} with {@code int?} makes {@code T} an {@code int},
@@ -147,6 +148,17 @@ final class TypeInference {
     @Nonnull
     Term function(@Nonnull final List<Term> parameterTypes, @Nonnull final Term resultType) {
         return new FunctionTerm(false, ImmutableList.copyOf(parameterTypes), resultType);
+    }
+
+    /**
+     * Returns a term for a stream type.
+     *
+     * @param elementType the term for the type of the elements
+     * @return a term for the stream type
+     */
+    @Nonnull
+    Term stream(@Nonnull final Term elementType) {
+        return new StreamTerm(elementType);
     }
 
     /**

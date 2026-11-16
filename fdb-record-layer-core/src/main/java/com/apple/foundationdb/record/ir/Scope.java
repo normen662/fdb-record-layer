@@ -42,21 +42,27 @@ import java.util.Optional;
 
 /**
  * What is in effect at a point of an FRL-IR program: the type parameters, the extern types, the variables, and the
- * functions that the enclosing constructs declare, the package of the program, and the inference that types the
- * expressions there. Scopes form a stack. Each scope refers to the scope that encloses it, a lookup searches from the
- * innermost scope outward, so an inner declaration hides an outer one of the same name, and leaving a construct returns
- * to the enclosing scope, which drops what the construct declared.
+ * functions that the enclosing constructs declare, the package of the program, the inference that types the
+ * expressions there, and the element type of the stream that a yield there adds to. Scopes form a stack. Each scope
+ * refers to the scope that encloses it, a lookup searches from the innermost scope outward, so an inner declaration
+ * hides an outer one of the same name, and leaving a construct returns to the enclosing scope, which drops what the
+ * construct declared.
  *
  * <p>Type parameters and extern types are types and the others are values, and the two have separate namespaces.
  * Within each namespace, a scope declares a name only once, so there is no overloading. A type parameter must not hide
  * a type parameter of an enclosing function: type parameters compare by name, so the two would be the same type. An
  * extern type refers to its declaration, so it can hide another type without that ambiguity.</p>
  *
- * <p>The inference of a scope types the expressions in it, see {@code TypeInference}. A statement outside closures has
- * a scope of its own with a new inference. The scopes of the closures in the statement inherit that inference, so that
- * the closures' statements join it. The scope of a function has no inference, so that the statements of its body each
- * start their own, also inside a closure. A variable belongs to the inference of the scope that declares it, since
- * its type is a term of that inference.</p>
+ * <p>The inference of a scope types the expressions in it, see {@code TypeInference}. A statement outside closures and
+ * stream blocks has a scope of its own with a new inference. The scopes of the closures and stream blocks in the
+ * statement inherit that inference, so that their statements join it. The scope of a function has no inference, so that
+ * the statements of its body each start their own, also inside a closure. A variable belongs to the inference of the
+ * scope that declares it, since its type is a term of that inference.</p>
+ *
+ * <p>The scope of a stream block holds the element type of its stream, the type of every value that a yield in the
+ * block adds, and the scopes of the blocks in it inherit the element type. The scopes of functions and closures have
+ * none, also within a stream block: a function or a closure can be called when no stream block is running, so a yield
+ * in it would add to no stream.</p>
  *
  * <p>A scope holds the type parameters themselves rather than their names, so that a reference to a type parameter
  * resolves to the type that the enclosing function declares. Likewise, a function and an extern type are held by the
@@ -87,6 +93,13 @@ final class Scope {
     private final boolean isStatement;
 
     /**
+     * The element type of the stream of the stream block that this scope is in, which a yield here adds to, or
+     * {@code null} if this scope is in no stream block, or in a function or a closure within one.
+     */
+    @Nullable
+    private final TypeInference.Term yieldElementType;
+
+    /**
      * The extern types declared in this scope, by name. Like {@link #values}, they are declared while the statements of
      * the scope are inferred.
      */
@@ -108,11 +121,13 @@ final class Scope {
     private IPackageStatement packageStatement;
 
     private Scope(@Nullable final Scope enclosing, @Nonnull final ImmutableMap<String, IGenericType> typeParameters,
-                  @Nullable final TypeInference inference, final boolean isStatement) {
+                  @Nullable final TypeInference inference, final boolean isStatement,
+                  @Nullable final TypeInference.Term yieldElementType) {
         this.enclosing = enclosing;
         this.typeParameters = typeParameters;
         this.inference = inference;
         this.isStatement = isStatement;
+        this.yieldElementType = yieldElementType;
     }
 
     /**
@@ -122,7 +137,7 @@ final class Scope {
      */
     @Nonnull
     static Scope root() {
-        return new Scope(null, ImmutableMap.of(), null, false);
+        return new Scope(null, ImmutableMap.of(), null, false, null);
     }
 
     /**
@@ -141,22 +156,47 @@ final class Scope {
         Preconditions.checkArgument(
                 newTypeParameters.stream().noneMatch(typeParameter -> lookupTypeParameter(typeParameter.name()).isPresent()),
                 "a type parameter must not have the name of a type parameter of an enclosing function");
-        return new Scope(this, Maps.uniqueIndex(newTypeParameters, IGenericType::name), null, false);
+        return new Scope(this, Maps.uniqueIndex(newTypeParameters, IGenericType::name), null, false, null);
     }
 
     /**
-     * Returns the scope of a block or a closure nested in this one, which has the inference of this scope.
+     * Returns the scope of a block nested in this one, the body of a function or a closure, which has the inference of
+     * this scope and its element type of yields.
      *
      * @return a new scope enclosed by this one
      */
     @Nonnull
     Scope enterBlock() {
-        return new Scope(this, ImmutableMap.of(), inference, false);
+        return new Scope(this, ImmutableMap.of(), inference, false, yieldElementType);
     }
 
     /**
-     * Returns the scope of a statement outside closures, which types the statement with an inference of its own. The
-     * scope declares what the statement declares in this scope.
+     * Returns the scope of a closure nested in this one, which has the inference of this scope. The scope has no
+     * element type of yields: the closure can be called when no stream block is running, so it cannot yield, even
+     * within a stream block.
+     *
+     * @return a new scope enclosed by this one
+     */
+    @Nonnull
+    Scope enterClosure() {
+        return new Scope(this, ImmutableMap.of(), inference, false, null);
+    }
+
+    /**
+     * Returns the scope of the block of a stream block nested in this one, which has the inference of this scope, so
+     * that the statements of the block join it, as those of a closure do.
+     *
+     * @param elementType the element type of the stream, which every value that a yield in the block adds must have
+     * @return a new scope enclosed by this one
+     */
+    @Nonnull
+    Scope enterStream(@Nonnull final TypeInference.Term elementType) {
+        return new Scope(this, ImmutableMap.of(), inference, false, elementType);
+    }
+
+    /**
+     * Returns the scope of a statement outside closures and stream blocks, which types the statement with an inference
+     * of its own. The scope declares what the statement declares in this scope.
      *
      * @param statementInference the inference of the statement
      * @return a new scope enclosed by this one
@@ -164,7 +204,7 @@ final class Scope {
     @Nonnull
     Scope enterStatement(@Nonnull final TypeInference statementInference) {
         Preconditions.checkState(inference == null, "a statement of a closure joins the inference of its closure");
-        return new Scope(this, ImmutableMap.of(), statementInference, true);
+        return new Scope(this, ImmutableMap.of(), statementInference, true, yieldElementType);
     }
 
     /**
@@ -188,6 +228,17 @@ final class Scope {
     @Nullable
     TypeInference inference() {
         return inference;
+    }
+
+    /**
+     * Returns the element type of the stream that a yield in this scope adds to.
+     *
+     * @return the element type of the stream of the stream block that this scope is in, or {@code null} if this scope
+     *         is in no stream block, or in a function or a closure within one
+     */
+    @Nullable
+    TypeInference.Term yieldElementType() {
+        return yieldElementType;
     }
 
     /**

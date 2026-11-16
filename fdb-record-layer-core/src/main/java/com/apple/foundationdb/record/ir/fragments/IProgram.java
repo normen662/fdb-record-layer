@@ -46,12 +46,15 @@ public final class IProgram implements IFragment {
     /**
      * Creates a program.
      *
-     * @param statements the statements in order; only the first one can be a package statement
+     * @param statements the statements in order; only the first one can be a package statement, and none can be a
+     *        yield, which belongs to a stream block
      */
     public IProgram(@Nonnull final List<IStatement> statements) {
         this.statements = ImmutableList.copyOf(statements);
         Preconditions.checkArgument(this.statements.stream().skip(1).noneMatch(IPackageStatement.class::isInstance),
                 "a package statement can only be the first statement of a program");
+        Preconditions.checkArgument(this.statements.stream().noneMatch(IYieldFragment.class::isInstance),
+                "a yield must be in a stream block");
     }
 
     /**

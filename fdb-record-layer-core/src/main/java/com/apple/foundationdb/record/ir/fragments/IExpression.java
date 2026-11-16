@@ -25,14 +25,14 @@ import com.apple.foundationdb.annotation.API;
 import javax.annotation.Nonnull;
 
 /**
- * An expression: a literal, a reference to a variable or a function, a call, or a closure. Every expression has a type,
- * and the fragments are typed when they are built: the type of a literal is the one inferred from its context, and the
- * type of a reference to a generic function is the one for its inferred type arguments. Every expression is also a
- * statement.
+ * An expression: a literal, a reference to a variable or a function, a call, a closure, or a stream block. Every
+ * expression has a type, and the fragments are typed when they are built: the type of a literal is the one inferred
+ * from its context, and the type of a reference to a generic function is the one for its inferred type arguments. Every
+ * expression is also a statement.
  */
 @API(API.Status.EXPERIMENTAL)
 public sealed interface IExpression extends IStatement
-        permits ILiteral, IVariableReference, IFunctionReference, IFunctionCall, IClosure {
+        permits ILiteral, IVariableReference, IFunctionReference, IFunctionCall, IClosure, IStreamFragment {
 
     /**
      * Returns the type of the value of this expression.

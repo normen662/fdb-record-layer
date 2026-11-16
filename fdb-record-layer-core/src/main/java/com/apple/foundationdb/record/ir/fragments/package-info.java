@@ -20,10 +20,10 @@
 
 /**
  * The fragments of FRL-IR, the objects that a program consists of: the program and its statements, which are function
- * definitions and declarations, type declarations, the package statement, assignments, and expressions; the
- * expressions, which are literals, references, calls, and closures; the blocks that implement functions and closures,
- * whose value is the value of their last expression; the types; and the annotations that say how a package, a
- * function, or an extern type lives outside FRL-IR. Every fragment implements
+ * definitions and declarations, type declarations, the package statement, assignments, yields, and expressions; the
+ * expressions, which are literals, references, calls, closures, and stream blocks; the blocks that implement functions,
+ * closures, and stream blocks, whose value is the value of their last expression; the types; and the annotations that
+ * say how a package, a function, or an extern type lives outside FRL-IR. Every fragment implements
  * {@link com.apple.foundationdb.record.ir.fragments.IFragment}, and every expression is typed. A reference to a
  * function, and an extern type, refer back to the fragment that defines or declares them. The constructors reject
  * fragments that are not well-typed, such as a call whose arguments do not have the types of the parameters, or a

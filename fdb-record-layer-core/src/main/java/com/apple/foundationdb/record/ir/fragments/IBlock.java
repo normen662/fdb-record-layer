@@ -31,9 +31,9 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
- * The body of a function definition or a closure: a sequence of statements, separated by line breaks or semicolons. The
- * value of a block is the value of its last statement if that statement is an expression, as in a Kotlin lambda; a
- * block whose last statement is not an expression, or that has no statements, has no value.
+ * The body of a function definition, a closure, or a stream block: a sequence of statements, separated by line breaks
+ * or semicolons. The value of a block is the value of its last statement if that statement is an expression, as in a
+ * Kotlin lambda; a block whose last statement is not an expression, or that has no statements, has no value.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IBlock implements IFragment {
@@ -70,15 +70,33 @@ public final class IBlock implements IFragment {
     }
 
     /**
+     * Returns the yields of this block, the statements that add a value to the stream of the stream block that this
+     * block is the body of. Only the statements of this block itself count: the yields of a stream block among the
+     * statements belong to that stream block, and a function or a closure has none.
+     *
+     * @return the yields among the statements, in order
+     */
+    @Nonnull
+    public List<IYieldFragment> yields() {
+        return statements.stream()
+                .filter(IYieldFragment.class::isInstance)
+                .map(IYieldFragment.class::cast)
+                .collect(ImmutableList.toImmutableList());
+    }
+
+    /**
      * Returns whether this block can implement a function or a closure of the given result type. A {@code void}
      * function discards the value of its body, if there is one; any other function returns it, so the value must be of
-     * the result type.
+     * the result type. Neither can yield: a yield belongs to a stream block, and a function or a closure can be called
+     * when no stream block is running.
      *
      * @param resultType the result type of the function or the closure
-     * @return {@code true} if the result type is {@code void}, or if this block has a value of that type
+     * @return {@code true} if this block does not yield, and if the result type is {@code void} or this block has a
+     *         value of that type
      */
     public boolean isBodyOf(@Nonnull final IType resultType) {
-        return resultType.isVoid() || value().map(IExpression::type).filter(resultType::equals).isPresent();
+        return statements.stream().noneMatch(IYieldFragment.class::isInstance)
+                && (resultType.isVoid() || value().map(IExpression::type).filter(resultType::equals).isPresent());
     }
 
     @Override

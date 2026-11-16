@@ -37,10 +37,12 @@ import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.ILiteral;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IStatement;
+import com.apple.foundationdb.record.ir.fragments.IStreamFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
 import com.apple.foundationdb.record.ir.fragments.IType;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
 import com.apple.foundationdb.record.ir.fragments.IVariableReference;
+import com.apple.foundationdb.record.ir.fragments.IYieldFragment;
 import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -57,8 +59,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Tests for parsing FRL-IR expressions: literals, references, calls, and closures, and the inference of their types.
- * Each test program ends with an assignment or an expression, whose expression the test checks.
+ * Tests for parsing FRL-IR expressions: literals, references, calls, closures, and stream blocks, and the inference of
+ * their types. Each test program ends with an assignment or an expression, whose expression the test checks.
  */
 class FrlIrExpressionParsingTest {
     private static final IType INT = new IPrimitiveType(IPrimitiveType.Kind.INT, false);
@@ -330,6 +332,64 @@ class FrlIrExpressionParsingTest {
     }
 
     @Nonnull
+    static Stream<Arguments> streams() {
+        final IType nullableString = STRING.withNullability(true);
+        return Stream.of(
+                // a stream block is a stream of the values that it yields, in order; without a context, they determine
+                // its element type
+                Arguments.of("let e = stream { yield 1; yield 2 }",
+                        stream(INT, ImmutableList.of(new ILiteral(1, INT), new ILiteral(2, INT)))),
+                // the context determines the element type, which is the context of every yielded value
+                Arguments.of("let e: stream<bigint> = stream { yield 1 }",
+                        stream(BIGINT, ImmutableList.of(new ILiteral(1L, BIGINT)))),
+                Arguments.of("let e: stream<string?> = stream { yield nil; yield \"a\" }", stream(nullableString,
+                        ImmutableList.of(new ILiteral(null, nullableString), new ILiteral("a", nullableString)))),
+                Arguments.of("let e: stream<(int) -> int> = stream { yield { x in x } }",
+                        stream(function(ImmutableList.of(INT), INT), ImmutableList.of(closure(
+                                ImmutableList.of(new IClosure.Parameter("x", INT)), INT,
+                                new IVariableReference("x", INT))))),
+                // without yields, a stream block is an empty stream
+                Arguments.of("let e: stream<int> = stream { }", new IStreamFragment(INT, EMPTY_BLOCK)),
+                // the block sees the variables of the enclosing scopes, and the value of its last expression is
+                // discarded
+                Arguments.of("let a = 7\nlet e = stream {\n    let b = a\n    yield b\n    \"done\"\n}",
+                        new IStreamFragment(INT, new IBlock(ImmutableList.of(
+                                new IAssignment("b", new IVariableReference("a", INT)),
+                                new IYieldFragment(new IVariableReference("b", INT)), new ILiteral("done", STRING))))),
+                // the statements of a stream block are inferred together with the statement that the stream block is
+                // in, as those of a closure are
+                Arguments.of("extern func f(x: bigint)\nlet e = stream {\n    let a = 42\n    f(a)\n    yield a\n}",
+                        new IStreamFragment(BIGINT, new IBlock(ImmutableList.of(
+                                new IAssignment("a", new ILiteral(42L, BIGINT)),
+                                new IFunctionCall(reference(declaration("f", ImmutableList.of(),
+                                                ImmutableList.of(parameter("x", BIGINT)), VOID)),
+                                        ImmutableList.of(new IVariableReference("a", BIGINT))),
+                                new IYieldFragment(new IVariableReference("a", BIGINT)))))),
+                // a yield belongs to the innermost stream block
+                Arguments.of("let e = stream { yield stream { yield 1 } }", stream(new IStreamType(INT),
+                        ImmutableList.of(stream(INT, ImmutableList.of(new ILiteral(1, INT)))))),
+                // a stream block is an argument like any other: the parameter is its context
+                Arguments.of("extern func count<T>(s: stream<T>): bigint\nlet e = count(stream { yield \"a\" })",
+                        new IFunctionCall(reference(declaration("count", ImmutableList.of(T),
+                                        ImmutableList.of(parameter("s", new IStreamType(T))), BIGINT),
+                                ImmutableList.of(STRING), function(ImmutableList.of(new IStreamType(STRING)), BIGINT)),
+                                ImmutableList.of(stream(STRING, ImmutableList.of(new ILiteral("a", STRING)))))),
+                // a closure can return a stream block, whose yields add to the stream, not to the closure
+                Arguments.of("let e = { (x: int) in stream { yield x } }", closure(ImmutableList.of(
+                                new IClosure.Parameter("x", INT)), new IStreamType(INT),
+                        stream(INT, ImmutableList.of(new IVariableReference("x", INT))))),
+                // `stream` cannot stand on its own, so its block may start on the next line
+                Arguments.of("let e = stream\n{ yield 1 }", stream(INT, ImmutableList.of(new ILiteral(1, INT)))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("streams")
+    void parseProgramStreamBlockCreatesStreamOfYieldedValues(@Nonnull final String text,
+                                                              @Nonnull final IExpression expected) {
+        assertThat(lastExpression(text)).isEqualTo(expected);
+    }
+
+    @Nonnull
     static Stream<Arguments> dotCallsAndTrailingClosures() {
         final String inc = "extern func inc(x: int): int\n";
         final IFunctionDeclaration incFunction =
@@ -514,6 +574,15 @@ class FrlIrExpressionParsingTest {
             "extern func g(x: int): int\nextern func h(f: (int) -> void)\nh({ i in g(i) })",
             // a closure whose result type is not void must have a value of that type
             "let e = { () -> int in }",
+            // a stream block yields values of its element type, which must be inferred and cannot be void
+            "let e: stream<int> = stream { yield \"a\" }",
+            "let e = stream { yield 1; yield \"a\" }",
+            "let e = stream { }",
+            "extern func g()\nlet e = stream { yield g() }",
+            // a stream block is a stream, which is neither of another type nor a function
+            "let e: int = stream { yield 1 }",
+            "extern func h(f: () -> stream<int>)\nh(stream { yield 1 })",
+            "let e = stream { yield 1 }()",
             // the type of a parameter cannot contain itself
             "let e = { f in f(f) }",
             // a function nested in a closure cannot use a variable of the closure whose type is not known yet
@@ -604,5 +673,15 @@ class FrlIrExpressionParsingTest {
     private static IClosure closure(@Nonnull final List<IClosure.Parameter> parameters, @Nonnull final IType resultType,
                                     @Nonnull final IExpression value) {
         return new IClosure(parameters, resultType, new IBlock(ImmutableList.of(value)));
+    }
+
+    /**
+     * Returns a stream block whose block yields the given values in order.
+     */
+    @Nonnull
+    private static IStreamFragment stream(@Nonnull final IType elementType, @Nonnull final List<IExpression> values) {
+        return new IStreamFragment(elementType, new IBlock(values.stream()
+                .<IStatement>map(IYieldFragment::new)
+                .collect(ImmutableList.toImmutableList())));
     }
 }

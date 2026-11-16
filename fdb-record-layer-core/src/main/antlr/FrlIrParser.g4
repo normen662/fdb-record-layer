@@ -286,6 +286,7 @@ statement
     | typeDeclaration        # typeDeclarationStatement
     | packageDeclaration     # packageStatement
     | assignment             # assignmentStatement
+    | yieldValue             # yieldStatement
     | expression             # expressionStatement
     ;
 
@@ -294,6 +295,14 @@ statement
 // than the one it would get on its own. The variable is in scope from the next statement on.
 assignment
     : LET NL* identifier (NL* COLON NL* type)? NL* EQUAL NL* expression
+    ;
+
+// `yield x` adds `x` to the stream of the stream block it is in, as `yield return` does in C#: the block stops there
+// until the next element of the stream is asked for. A yield belongs to the innermost stream block around it, and it
+// must be a statement of that block itself, not of a function or a closure in the block, which can be called when the
+// block is not running; that is the rule of C#, where a lambda cannot yield either.
+yieldValue
+    : YIELD NL* expression
     ;
 
 //
@@ -312,9 +321,21 @@ expression
 
 // A name is a variable, a parameter, or a function.
 primaryExpression
-    : literal       # literalExpression
-    | identifier    # nameExpression
-    | closure       # closureExpression
+    : literal        # literalExpression
+    | identifier     # nameExpression
+    | closure        # closureExpression
+    | streamBlock    # streamExpression
+    ;
+
+// `stream { yield 1; yield 2 }` is a stream block, an expression of type `stream<T>` whose elements are the values that
+// its yields add, in order. Its block runs as the stream is consumed, from one yield to the next, while the code around
+// the stream block runs when it is reached: in `func f(): stream<int> { let x = g(); stream { yield x } }`, `g()` is
+// called when `f` is. The element type `T` is the one that the context requires, such as the result type of `f`, and
+// otherwise the type that the yielded values agree on. The block sees the names of the enclosing scopes, as a closure
+// does, and the value of its last expression is discarded. `stream` cannot stand on its own, so the `{` may follow on
+// the next line.
+streamBlock
+    : STREAM NL* block
     ;
 
 // The postfixes of an expression apply from left to right, each to the expression before it.

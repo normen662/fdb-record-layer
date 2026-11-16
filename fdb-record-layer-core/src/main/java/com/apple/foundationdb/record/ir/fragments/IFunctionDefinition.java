@@ -90,8 +90,8 @@ public final class IFunctionDefinition implements IFunction {
         this.resultType = Objects.requireNonNull(resultType);
         this.body = Objects.requireNonNull(body);
         this.annotations = ImmutableList.copyOf(annotations);
-        Preconditions.checkArgument(body.isBodyOf(resultType),
-                "the body of a function must end with an expression of its result type unless that is void");
+        Preconditions.checkArgument(body.isBodyOf(resultType), "the body of a function must end with an expression of "
+                + "its result type unless that is void, and it must not yield");
     }
 
     /**

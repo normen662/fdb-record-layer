@@ -43,11 +43,13 @@ import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IProgram;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
 import com.apple.foundationdb.record.ir.fragments.IStatement;
+import com.apple.foundationdb.record.ir.fragments.IStreamFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
 import com.apple.foundationdb.record.ir.fragments.IType;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
 import com.apple.foundationdb.record.ir.fragments.IVariableReference;
 import com.apple.foundationdb.record.ir.fragments.IVectorType;
+import com.apple.foundationdb.record.ir.fragments.IYieldFragment;
 import com.apple.foundationdb.record.ir.fragments.ParserHelpers;
 import com.apple.foundationdb.record.ir.generated.FrlIrParser;
 import com.apple.foundationdb.record.ir.generated.FrlIrParserBaseVisitor;
@@ -74,11 +76,11 @@ import java.util.function.Supplier;
  *
  * <p>Statements are typed as they are built. The visitor first infers a statement: it declares what the statement
  * declares, and it adds the statement's equations to the {@code TypeInference} of the statement's scope. It then
- * solves the inference and builds the fragments from the solved types. The statements of a closure join the inference
- * of the statement that the closure is in, so they are built only once that statement is solved; every other
- * statement, including every statement of a function body, is solved and built on its own. A statement and an
- * expression thus produce something to build later rather than a fragment, so they are visited by visitors of their
- * own, one method for each alternative of the grammar.</p>
+ * solves the inference and builds the fragments from the solved types. The statements of a closure or a stream block
+ * join the inference of the statement that the closure or the stream block is in, so they are built only once that
+ * statement is solved; every other statement, including every statement of a function body, is solved and built on
+ * its own. A statement and an expression thus produce something to build later rather than a fragment, so they are
+ * visited by visitors of their own, one method for each alternative of the grammar.</p>
  */
 @API(API.Status.EXPERIMENTAL)
 public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
@@ -89,6 +91,13 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     @Nonnull
     private static final String ARGUMENT_MISMATCH =
             "a call must call a function that is not nullable with arguments of the types of its parameters";
+
+    /**
+     * The message of the exception if a yield is not a statement of a stream block.
+     */
+    @Nonnull
+    private static final String YIELD_OUTSIDE_STREAM =
+            "a yield must be in a stream block, and not in a function or a closure within one";
 
     @Nonnull
     private Scope scope = Scope.root();
@@ -104,8 +113,9 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Infers the statements of a program, a block, or a closure. If the last statement is an expression, the expected
-     * type of the value of the statements is its context, and its type is the type of the value.
+     * Infers the statements of a program, a block, a closure, or a stream block. If the last statement is an
+     * expression, the expected type of the value of the statements is its context, and its type is the type of the
+     * value.
      */
     @Nonnull
     private PendingStatements statements(@Nonnull final FrlIrParser.StatementsContext ctx,
@@ -129,9 +139,9 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Infers a statement. A statement of a closure joins the inference of the statement that the closure is in, which
-     * its scope carries. Any other statement gets a scope with an inference of its own, and it is inferred, solved, and
-     * built right away.
+     * Infers a statement. A statement of a closure or a stream block joins the inference of the statement that the
+     * closure or the stream block is in, which its scope carries. Any other statement gets a scope with an inference of
+     * its own, and it is inferred, solved, and built right away.
      */
     @Nonnull
     private PendingStatement statement(@Nonnull final FrlIrParser.StatementContext ctx,
@@ -798,6 +808,22 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             return new PendingStatement(() -> new IAssignment(name, value.builder().get()), null);
         }
 
+        /**
+         * Infers a yield. The element type of the stream of the enclosing stream block is the context of the value, so
+         * that, as for an argument, a literal or a closure takes its type from it.
+         */
+        @Nonnull
+        @Override
+        public PendingStatement visitYieldStatement(@Nonnull final FrlIrParser.YieldStatementContext ctx) {
+            final TypeInference.Term elementType = scope.yieldElementType();
+            if (elementType == null) {
+                throw new IllegalArgumentException(YIELD_OUTSIDE_STREAM);
+            }
+            final Inferred value = infer(ctx.yieldValue().expression(), elementType,
+                    "a yielded value must be of the element type of its stream");
+            return new PendingStatement(() -> new IYieldFragment(value.builder().get()), null);
+        }
+
         @Nonnull
         @Override
         public PendingStatement visitExpressionStatement(@Nonnull final FrlIrParser.ExpressionStatementContext ctx) {
@@ -879,9 +905,9 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
          * type of the function, in which new inference variables stand for the type parameters of the function; what
          * they are solved as becomes the type arguments of the reference.
          *
-         * <p>A variable that a closure declares can have a type that the inference of the closure's statement has not
-         * determined yet. A function nested in the closure is typed by inferences of its own, so it can use such a
-         * variable only once the type is known.</p>
+         * <p>A variable that a closure or a stream block declares can have a type that the inference of their statement
+         * has not determined yet. A function nested in the closure or the stream block is typed by inferences of its
+         * own, so it can use such a variable only once the type is known.</p>
          */
         @Nonnull
         @Override
@@ -896,7 +922,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                     type = variable.type();
                 } else {
                     Preconditions.checkArgument(TypeInference.isResolved(variable.type()),
-                            "a function nested in a closure can use a variable of the closure only once its type is known");
+                            "a function can use a variable of an enclosing closure or stream block only once its type "
+                                    + "is known");
                     type = TypeInference.known(TypeInference.resolve(variable.type()));
                 }
                 return fit(new Inferred(type, () -> new IVariableReference(name, TypeInference.resolve(type))));
@@ -911,18 +938,41 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         }
 
         /**
+         * Infers the type of a stream block, {@code stream { … }}, a stream of a new inference variable. The stream
+         * type is unified with the expected type before the block is inferred, so that the context determines the
+         * element type and every yield has it as the context of its value; without a context, the yielded values
+         * determine it. The scope of the block inherits the inference of the statement that the stream block is in, so
+         * the statements of the block join it, as those of a closure do. The value of the block is discarded, so its
+         * last expression has no context.
+         */
+        @Nonnull
+        @Override
+        public Inferred visitStreamExpression(@Nonnull final FrlIrParser.StreamExpressionContext ctx) {
+            final TypeInference inference = inference();
+            final TypeInference.Term elementType = inference.unknown();
+            final TypeInference.Term type = inference.stream(elementType);
+            if (expected != null) {
+                inference.unify(type, expected, mismatch);
+            }
+            final PendingStatements block = inScope(scope.enterStream(elementType),
+                    () -> statements(ctx.streamBlock().block().statements(), null));
+            return new Inferred(type, () -> new IStreamFragment(TypeInference.resolve(elementType),
+                    new IBlock(block.builder().get())));
+        }
+
+        /**
          * Infers the type of a closure, also of a trailing closure. A parameter type or a result type that the closure
          * does not state is a new inference variable. The closure's function type is unified with the expected type
          * before the body is inferred, so that the context determines the types that the closure leaves out and the
          * body sees them; the closure does not need {@link #fit} afterwards. The scope of the closure inherits the
-         * inference of the statement that the closure is in, so the body joins it. A result type that neither the
-         * closure nor the context states becomes the type of the value of the body, or {@code void} if the body has no
-         * value.
+         * inference of the statement that the closure is in, so the body joins it, but not the element type of a stream
+         * block around the closure: a closure cannot yield. A result type that neither the closure nor the context
+         * states becomes the type of the value of the body, or {@code void} if the body has no value.
          */
         @Nonnull
         private Inferred inferClosure(@Nonnull final FrlIrParser.ClosureContext closure) {
             final TypeInference inference = inference();
-            return inScope(scope.enterBlock(), () -> {
+            return inScope(scope.enterClosure(), () -> {
                 final FrlIrParser.ClosureSignatureContext signature = closure.closureSignature();
                 final ImmutableList<ClosureParameter> parameters = signature == null
                         ? ImmutableList.of()

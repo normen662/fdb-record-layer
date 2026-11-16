@@ -38,7 +38,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Tests for {@link Scope}: what a scope declares is visible there and in the scopes it encloses, leaving a scope drops
- * what it declared, and a scope carries the inference that types its expressions and the package of the program.
+ * what it declared, and a scope carries the inference that types its expressions, the package of the program, and the
+ * element type of the stream that a yield adds to.
  */
 class ScopeTest {
     private static final IGenericType T = new IGenericType("T", false);
@@ -172,14 +173,34 @@ class ScopeTest {
     }
 
     @Test
-    void inferenceBlockInheritsAndFunctionHasNone() {
+    void inferenceClosureInheritsAndFunctionHasNone() {
         final TypeInference inference = new TypeInference();
         final Scope statement = Scope.root().enterStatement(inference);
         // the scope of a closure inherits the inference of its statement, the scope of a function has none
-        assertThat(statement.enterBlock().inference()).isSameAs(inference);
-        assertThat(statement.enterBlock().enterFunction(ImmutableList.of()).inference()).isNull();
-        assertThat(statement.enterBlock().enterFunction(ImmutableList.of()).enterBlock().inference()).isNull();
+        assertThat(statement.enterClosure().inference()).isSameAs(inference);
+        assertThat(statement.enterClosure().enterFunction(ImmutableList.of()).inference()).isNull();
+        assertThat(statement.enterClosure().enterFunction(ImmutableList.of()).enterBlock().inference()).isNull();
         assertThat(Scope.root().inference()).isNull();
+    }
+
+    @Test
+    void yieldElementTypeStreamSetsItAndClosuresAndFunctionsDropIt() {
+        final TypeInference inference = new TypeInference();
+        final Scope stream = Scope.root().enterStatement(inference).enterStream(INT_TERM);
+        assertThat(stream.yieldElementType()).isSameAs(INT_TERM);
+        // the statements of the stream block join the inference of its statement, as those of a closure do
+        assertThat(stream.inference()).isSameAs(inference);
+        // a block in the stream block inherits the element type, and a nested stream block has its own
+        assertThat(stream.enterBlock().yieldElementType()).isSameAs(INT_TERM);
+        assertThat(stream.enterStream(STRING_TERM).yieldElementType()).isSameAs(STRING_TERM);
+        // a function or a closure can be called when the stream block is not running, so neither it nor its blocks
+        // have an element type
+        assertThat(stream.enterClosure().yieldElementType()).isNull();
+        assertThat(stream.enterClosure().enterBlock().yieldElementType()).isNull();
+        assertThat(stream.enterFunction(ImmutableList.of()).enterBlock().yieldElementType()).isNull();
+        // a statement of a program is in no stream block
+        assertThat(Scope.root().yieldElementType()).isNull();
+        assertThat(Scope.root().enterStatement(new TypeInference()).yieldElementType()).isNull();
     }
 
     @Test
@@ -196,7 +217,7 @@ class ScopeTest {
         assertThat(block.lookupValue("f")).isPresent();
         assertThat(block.lookupType("range")).isPresent();
         // a closure's variable belongs to the inference of the closure's statement too
-        final Scope closure = statement.enterBlock();
+        final Scope closure = statement.enterClosure();
         closure.declareVariable("y", STRING_TERM);
         assertThat(closure.lookupValue("y")).contains(new Scope.VariableBinding(STRING_TERM, inference));
     }
@@ -219,7 +240,7 @@ class ScopeTest {
     @Test
     void enterStatementInStatementFails() {
         // a statement of a closure joins the inference of the closure's statement
-        final Scope closure = Scope.root().enterStatement(new TypeInference()).enterBlock();
+        final Scope closure = Scope.root().enterStatement(new TypeInference()).enterClosure();
         assertThatThrownBy(() -> closure.enterStatement(new TypeInference())).isInstanceOf(IllegalStateException.class);
     }
 

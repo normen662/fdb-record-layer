@@ -53,14 +53,15 @@ VECTOR   : 'vector';
 ENUM     : 'enum';
 FUNCTION : 'function';
 
-// Definitions and statements. `extern` declares a function or a type that the runtime provides, and `package` names the
-// package that a program belongs to.
+// Definitions and statements. `extern` declares a function or a type that the runtime provides, `package` names the
+// package that a program belongs to, and `yield` adds a value to the stream of a stream block, `stream { … }`.
 FUNC    : 'func';
 EXTERN  : 'extern';
 TYPE    : 'type';
 PACKAGE : 'package';
 IN      : 'in';
 LET     : 'let';
+YIELD   : 'yield';
 
 // Literals that are keywords. `nil` is the null of every nullable type, as in Swift.
 TRUE  : 'true';

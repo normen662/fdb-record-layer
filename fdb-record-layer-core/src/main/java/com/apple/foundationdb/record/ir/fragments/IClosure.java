@@ -64,8 +64,8 @@ public final class IClosure implements IExpression {
         this.body = Objects.requireNonNull(body);
         this.type = new IFunctionType(false,
                 this.parameters.stream().map(Parameter::type).collect(ImmutableList.toImmutableList()), resultType);
-        Preconditions.checkArgument(body.isBodyOf(resultType),
-                "the body of a closure must end with an expression of its result type unless that is void");
+        Preconditions.checkArgument(body.isBodyOf(resultType), "the body of a closure must end with an expression of "
+                + "its result type unless that is void, and it must not yield");
     }
 
     /**
