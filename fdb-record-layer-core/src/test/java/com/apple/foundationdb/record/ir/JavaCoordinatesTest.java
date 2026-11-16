@@ -20,9 +20,9 @@
 
 package com.apple.foundationdb.record.ir;
 
-import com.apple.foundationdb.record.ir.fragments.IFunctionDeclaration;
-import com.apple.foundationdb.record.ir.fragments.IStatement;
-import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
+import com.apple.foundationdb.record.ir.fragments.IFunctionDeclarationFragment;
+import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
+import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -43,7 +43,7 @@ class JavaCoordinatesTest {
 
     @Test
     void coordinatesWithoutAnnotationsFollowFromPackage() {
-        final List<IStatement> statements = parseProgram(PACKAGE + """
+        final List<IStatementFragment> statements = parseProgram(PACKAGE + """
                 extern type range
                 extern func scan(range: range): bigint""").statements();
         assertThat(JavaCoordinates.typeClass(typeDeclaration(statements, "range")))
@@ -55,7 +55,7 @@ class JavaCoordinatesTest {
 
     @Test
     void coordinatesAnnotationOfDeclarationOverridesPackage() {
-        final List<IStatement> statements = parseProgram(PACKAGE + """
+        final List<IStatementFragment> statements = parseProgram(PACKAGE + """
                 @java(class: "com.apple.foundationdb.record.TupleRange") extern type range
                 @java(class: "com.apple.foundationdb.record.Scans") extern func scan(range: range): bigint
                 @java(method: "lookUp") extern func lookup(key: bigint): bigint
@@ -77,7 +77,7 @@ class JavaCoordinatesTest {
 
     @Test
     void coordinatesWithoutPackageNeedAnnotationOfDeclaration() {
-        final List<IStatement> statements = parseProgram("""
+        final List<IStatementFragment> statements = parseProgram("""
                 extern type range
                 @java(class: "a.Range") extern type interval
                 extern func scan(range: range): bigint
@@ -91,7 +91,7 @@ class JavaCoordinatesTest {
         // a method needs a class
         assertThat(JavaCoordinates.function(functionDeclaration(statements, "lookup"))).isEmpty();
         // a package without a @java annotation does not locate anything in Java
-        final List<IStatement> swiftOnly = parseProgram("@swift(module: \"RecordLayerIR\") package abc\n"
+        final List<IStatementFragment> swiftOnly = parseProgram("@swift(module: \"RecordLayerIR\") package abc\n"
                 + "extern type range").statements();
         assertThat(JavaCoordinates.typeClass(typeDeclaration(swiftOnly, "range"))).isEmpty();
     }
@@ -108,7 +108,7 @@ class JavaCoordinatesTest {
             "@java(\"a\") @java(\"b\") package abc\nextern type range",
     })
     void typeClassMalformedAnnotationFails(@Nonnull final String text) {
-        final ITypeDeclaration range = typeDeclaration(parseProgram(text).statements(), "range");
+        final ITypeDeclarationFragment range = typeDeclaration(parseProgram(text).statements(), "range");
         assertThatThrownBy(() -> JavaCoordinates.typeClass(range)).isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -120,27 +120,27 @@ class JavaCoordinatesTest {
             "@java(name: \"a\") package abc\nextern func f()",
     })
     void functionMalformedAnnotationFails(@Nonnull final String text) {
-        final IFunctionDeclaration f = functionDeclaration(parseProgram(text).statements(), "f");
+        final IFunctionDeclarationFragment f = functionDeclaration(parseProgram(text).statements(), "f");
         assertThatThrownBy(() -> JavaCoordinates.function(f)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Nonnull
-    private static ITypeDeclaration typeDeclaration(@Nonnull final List<IStatement> statements,
-                                                    @Nonnull final String name) {
+    private static ITypeDeclarationFragment typeDeclaration(@Nonnull final List<IStatementFragment> statements,
+                                                            @Nonnull final String name) {
         return statements.stream()
-                .filter(ITypeDeclaration.class::isInstance)
-                .map(ITypeDeclaration.class::cast)
+                .filter(ITypeDeclarationFragment.class::isInstance)
+                .map(ITypeDeclarationFragment.class::cast)
                 .filter(declaration -> declaration.name().equals(name))
                 .findFirst()
                 .orElseThrow();
     }
 
     @Nonnull
-    private static IFunctionDeclaration functionDeclaration(@Nonnull final List<IStatement> statements,
-                                                            @Nonnull final String name) {
+    private static IFunctionDeclarationFragment functionDeclaration(@Nonnull final List<IStatementFragment> statements,
+                                                                    @Nonnull final String name) {
         return statements.stream()
-                .filter(IFunctionDeclaration.class::isInstance)
-                .map(IFunctionDeclaration.class::cast)
+                .filter(IFunctionDeclarationFragment.class::isInstance)
+                .map(IFunctionDeclarationFragment.class::cast)
                 .filter(declaration -> declaration.name().equals(name))
                 .findFirst()
                 .orElseThrow();

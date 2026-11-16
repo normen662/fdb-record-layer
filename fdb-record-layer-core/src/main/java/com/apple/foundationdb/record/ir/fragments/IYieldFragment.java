@@ -31,14 +31,14 @@ import java.util.function.Supplier;
 /**
  * A yield, {@code yield x}: a statement of a stream block, {@code stream { … }}, that adds the value of {@code x} to
  * the stream of the block, as {@code yield return} does in C#. The block runs as the stream is consumed, so every yield
- * is a point at which it stops until the next element is asked for, see {@link IStreamFragment}. A yield belongs to the
- * innermost stream block around it and is a statement of that block itself: a function or a closure cannot yield,
- * since it can be called when no stream block is running.
+ * is a point at which it stops until the next element is asked for, see {@link IStreamBlockFragment}. A yield belongs
+ * to the innermost stream block around it and is a statement of that block itself: a function or a closure cannot
+ * yield, since it can be called when no stream block is running.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IYieldFragment implements IStatement {
+public final class IYieldFragment implements IStatementFragment {
     @Nonnull
-    private final IExpression value;
+    private final IExpressionFragment value;
     @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
@@ -47,7 +47,7 @@ public final class IYieldFragment implements IStatement {
      *
      * @param value the expression whose value is yielded, which cannot be of type {@code void}
      */
-    public IYieldFragment(@Nonnull final IExpression value) {
+    public IYieldFragment(@Nonnull final IExpressionFragment value) {
         this.value = Objects.requireNonNull(value);
         Preconditions.checkArgument(!value.type().isVoid(), "void is only a result type");
     }
@@ -56,7 +56,7 @@ public final class IYieldFragment implements IStatement {
      * {@return the expression whose value is yielded}
      */
     @Nonnull
-    public IExpression value() {
+    public IExpressionFragment value() {
         return value;
     }
 

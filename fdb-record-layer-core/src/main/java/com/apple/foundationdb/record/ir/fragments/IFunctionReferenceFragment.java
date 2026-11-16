@@ -1,5 +1,5 @@
 /*
- * IFunctionReference.java
+ * IFunctionReferenceFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -33,15 +33,15 @@ import java.util.function.Supplier;
 /**
  * A reference to a function, as the callee of a call, {@code f} in {@code f(1)}, or as a value of function type,
  * {@code f} in {@code let g = f}. The name of a function is resolved once, while parsing, and the reference refers to
- * the {@link IFunction} that the name stood for there: the definition that lowering compiles, or the declaration that
- * says what to call. A reference to a generic function fixes its type arguments, which are inferred from where the
- * reference is used: in {@code id(42)} for {@code func id<T>(x: T): T}, the reference is to {@code id} with the type
- * argument {@code int}, and its type is {@code (int) -> int}.
+ * the {@link IFunctionFragment} that the name stood for there: the definition that lowering compiles, or the
+ * declaration that says what to call. A reference to a generic function fixes its type arguments, which are inferred
+ * from where the reference is used: in {@code id(42)} for {@code func id<T>(x: T): T}, the reference is to {@code id}
+ * with the type argument {@code int}, and its type is {@code (int) -> int}.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IFunctionReference implements IExpression {
+public final class IFunctionReferenceFragment implements IExpressionFragment {
     @Nonnull
-    private final IFunction function;
+    private final IFunctionFragment function;
     @Nonnull
     private final ImmutableList<IType> typeArguments;
     @Nonnull
@@ -57,8 +57,9 @@ public final class IFunctionReference implements IExpression {
      *        generic
      * @param type the type of the function for these type arguments
      */
-    public IFunctionReference(@Nonnull final IFunction function, @Nonnull final List<IType> typeArguments,
-                              @Nonnull final IFunctionType type) {
+    public IFunctionReferenceFragment(@Nonnull final IFunctionFragment function,
+                                      @Nonnull final List<IType> typeArguments,
+                                      @Nonnull final IFunctionType type) {
         this.function = Objects.requireNonNull(function);
         this.typeArguments = ImmutableList.copyOf(typeArguments);
         this.type = Objects.requireNonNull(type);
@@ -70,7 +71,7 @@ public final class IFunctionReference implements IExpression {
      * {@return the function that the reference refers to}
      */
     @Nonnull
-    public IFunction function() {
+    public IFunctionFragment function() {
         return function;
     }
 
@@ -101,7 +102,7 @@ public final class IFunctionReference implements IExpression {
         if (this == other) {
             return true;
         }
-        return other instanceof IFunctionReference that && function.equals(that.function)
+        return other instanceof IFunctionReferenceFragment that && function.equals(that.function)
                 && typeArguments.equals(that.typeArguments) && type.equals(that.type);
     }
 
@@ -117,6 +118,7 @@ public final class IFunctionReference implements IExpression {
     @Nonnull
     @Override
     public String toString() {
-        return "IFunctionReference[name=" + name() + ", typeArguments=" + typeArguments + ", type=" + type + "]";
+        return "IFunctionReferenceFragment[name=" + name() + ", typeArguments=" + typeArguments + ", type=" + type
+                + "]";
     }
 }

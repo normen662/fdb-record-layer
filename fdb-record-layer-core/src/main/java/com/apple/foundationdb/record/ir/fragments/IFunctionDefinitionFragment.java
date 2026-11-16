@@ -1,5 +1,5 @@
 /*
- * IFunctionDefinition.java
+ * IFunctionDefinitionFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -38,7 +38,7 @@ import java.util.function.Supplier;
  * scope only after its definition, so it cannot call itself: FRL-IR has no recursion.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IFunctionDefinition implements IFunction {
+public final class IFunctionDefinitionFragment implements IFunctionFragment {
     @Nonnull
     private final String name;
     @Nonnull
@@ -48,7 +48,7 @@ public final class IFunctionDefinition implements IFunction {
     @Nonnull
     private final IType resultType;
     @Nonnull
-    private final IBlock body;
+    private final IBlockFragment body;
     @Nonnull
     private final ImmutableList<IAnnotationFragment> annotations;
     @Nonnull
@@ -62,11 +62,11 @@ public final class IFunctionDefinition implements IFunction {
      *        parameters that the signature and the body refer to are these objects
      * @param parameters the parameters in order
      * @param resultType the result type, which is {@code void} if the definition does not state one
-     * @param body the block that implements the function, see {@link IBlock#isBodyOf}
+     * @param body the block that implements the function, see {@link IBlockFragment#isBodyOf}
      */
-    public IFunctionDefinition(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
-                               @Nonnull final List<Parameter> parameters, @Nonnull final IType resultType,
-                               @Nonnull final IBlock body) {
+    public IFunctionDefinitionFragment(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
+                                       @Nonnull final List<Parameter> parameters, @Nonnull final IType resultType,
+                                       @Nonnull final IBlockFragment body) {
         this(name, typeParameters, parameters, resultType, body, ImmutableList.of());
     }
 
@@ -78,12 +78,13 @@ public final class IFunctionDefinition implements IFunction {
      *        parameters that the signature and the body refer to are these objects
      * @param parameters the parameters in order
      * @param resultType the result type, which is {@code void} if the definition does not state one
-     * @param body the block that implements the function, see {@link IBlock#isBodyOf}
+     * @param body the block that implements the function, see {@link IBlockFragment#isBodyOf}
      * @param annotations the annotations of the definition, in order
      */
-    public IFunctionDefinition(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
-                               @Nonnull final List<Parameter> parameters, @Nonnull final IType resultType,
-                               @Nonnull final IBlock body, @Nonnull final List<IAnnotationFragment> annotations) {
+    public IFunctionDefinitionFragment(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
+                                       @Nonnull final List<Parameter> parameters, @Nonnull final IType resultType,
+                                       @Nonnull final IBlockFragment body,
+                                       @Nonnull final List<IAnnotationFragment> annotations) {
         this.name = Objects.requireNonNull(name);
         this.typeParameters = ImmutableList.copyOf(typeParameters);
         this.parameters = ImmutableList.copyOf(parameters);
@@ -134,7 +135,7 @@ public final class IFunctionDefinition implements IFunction {
      * {@return the block that implements the function}
      */
     @Nonnull
-    public IBlock body() {
+    public IBlockFragment body() {
         return body;
     }
 
@@ -152,7 +153,7 @@ public final class IFunctionDefinition implements IFunction {
         if (this == other) {
             return true;
         }
-        return other instanceof IFunctionDefinition that && name.equals(that.name)
+        return other instanceof IFunctionDefinitionFragment that && name.equals(that.name)
                 && typeParameters.equals(that.typeParameters) && parameters.equals(that.parameters)
                 && resultType.equals(that.resultType) && body.equals(that.body)
                 && annotations.equals(that.annotations);
@@ -170,7 +171,7 @@ public final class IFunctionDefinition implements IFunction {
     @Nonnull
     @Override
     public String toString() {
-        return "IFunctionDefinition[name=" + name + ", typeParameters=" + typeParameters + ", parameters="
+        return "IFunctionDefinitionFragment[name=" + name + ", typeParameters=" + typeParameters + ", parameters="
                 + parameters + ", resultType=" + resultType + ", body=" + body + ", annotations=" + annotations + "]";
     }
 

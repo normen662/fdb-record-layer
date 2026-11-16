@@ -21,12 +21,12 @@
 package com.apple.foundationdb.record.ir;
 
 import com.apple.foundationdb.record.ir.fragments.IExternType;
-import com.apple.foundationdb.record.ir.fragments.IFunction;
+import com.apple.foundationdb.record.ir.fragments.IFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
-import com.apple.foundationdb.record.ir.fragments.IPackageStatement;
+import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IType;
-import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
+import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
@@ -104,7 +104,7 @@ final class Scope {
      * the scope are inferred.
      */
     @Nonnull
-    private final Map<String, ITypeDeclaration> externTypes = new LinkedHashMap<>();
+    private final Map<String, ITypeDeclarationFragment> externTypes = new LinkedHashMap<>();
 
     /**
      * The variables and functions declared in this scope, by name. They are declared while the statements of the scope
@@ -118,7 +118,7 @@ final class Scope {
      * named one. Its first statement does that, so the package is known before anything is declared in it.
      */
     @Nullable
-    private IPackageStatement packageStatement;
+    private IPackageStatementFragment packageStatement;
 
     private Scope(@Nullable final Scope enclosing, @Nonnull final ImmutableMap<String, IGenericType> typeParameters,
                   @Nullable final TypeInference inference, final boolean isStatement,
@@ -247,7 +247,7 @@ final class Scope {
      *
      * @param newPackageStatement the package statement of the program
      */
-    void declarePackage(@Nonnull final IPackageStatement newPackageStatement) {
+    void declarePackage(@Nonnull final IPackageStatementFragment newPackageStatement) {
         if (enclosing != null) {
             enclosing.declarePackage(newPackageStatement);
             return;
@@ -262,7 +262,7 @@ final class Scope {
      * @return the package statement of the program, or {@code null} if the program has not named a package
      */
     @Nullable
-    IPackageStatement packageStatement() {
+    IPackageStatementFragment packageStatement() {
         return enclosing == null ? packageStatement : enclosing.packageStatement();
     }
 
@@ -282,7 +282,7 @@ final class Scope {
      *
      * @param function the definition or declaration of the function, whose name this scope must not declare yet
      */
-    void declareFunction(@Nonnull final IFunction function) {
+    void declareFunction(@Nonnull final IFunctionFragment function) {
         declare(function.name(), new FunctionBinding(function));
     }
 
@@ -301,7 +301,7 @@ final class Scope {
      *
      * @param declaration the declaration of the type, whose name this scope must not declare yet as a type
      */
-    void declareExternType(@Nonnull final ITypeDeclaration declaration) {
+    void declareExternType(@Nonnull final ITypeDeclarationFragment declaration) {
         if (isStatement) {
             // the scope of a statement always has an enclosing scope
             Objects.requireNonNull(enclosing).declareExternType(declaration);
@@ -325,7 +325,7 @@ final class Scope {
         if (typeParameter != null) {
             return Optional.of(typeParameter);
         }
-        final ITypeDeclaration externType = externTypes.get(name);
+        final ITypeDeclarationFragment externType = externTypes.get(name);
         if (externType != null) {
             return Optional.of(new IExternType(externType, false));
         }
@@ -401,7 +401,7 @@ final class Scope {
      *
      * @param function the definition or declaration of the function
      */
-    record FunctionBinding(@Nonnull IFunction function) implements Binding {
+    record FunctionBinding(@Nonnull IFunctionFragment function) implements Binding {
         /**
          * Returns the type parameters of the function, which a reference to it instantiates.
          *

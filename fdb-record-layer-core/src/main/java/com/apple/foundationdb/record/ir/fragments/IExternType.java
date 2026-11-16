@@ -29,14 +29,14 @@ import java.util.function.Supplier;
 
 /**
  * An extern type, {@code range} after {@code extern type range}: a type that the runtime provides. Its values come from
- * and go to extern functions; FRL-IR only passes them along. The type refers back to its {@link ITypeDeclaration}, so
- * that a target can tell from the declaration what the type is outside FRL-IR. Equality compares the declaration and
- * the nullability.
+ * and go to extern functions; FRL-IR only passes them along. The type refers back to its
+ * {@link ITypeDeclarationFragment}, so that a target can tell from the declaration what the type is outside FRL-IR.
+ * Equality compares the declaration and the nullability.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IExternType implements IType {
     @Nonnull
-    private final ITypeDeclaration declaration;
+    private final ITypeDeclarationFragment declaration;
     private final boolean isNullable;
     @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
@@ -47,7 +47,7 @@ public final class IExternType implements IType {
      * @param declaration the declaration of the type
      * @param isNullable whether values of this type can be null
      */
-    public IExternType(@Nonnull final ITypeDeclaration declaration, final boolean isNullable) {
+    public IExternType(@Nonnull final ITypeDeclarationFragment declaration, final boolean isNullable) {
         this.declaration = Objects.requireNonNull(declaration);
         this.isNullable = isNullable;
     }
@@ -56,7 +56,7 @@ public final class IExternType implements IType {
      * {@return the declaration of the type}
      */
     @Nonnull
-    public ITypeDeclaration declaration() {
+    public ITypeDeclarationFragment declaration() {
         return declaration;
     }
 

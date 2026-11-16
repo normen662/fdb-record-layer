@@ -22,9 +22,9 @@ package com.apple.foundationdb.record.ir;
 
 import com.apple.foundationdb.annotation.API;
 import com.apple.foundationdb.record.ir.fragments.IAnnotationFragment;
-import com.apple.foundationdb.record.ir.fragments.IFunctionDeclaration;
-import com.apple.foundationdb.record.ir.fragments.IPackageStatement;
-import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
+import com.apple.foundationdb.record.ir.fragments.IFunctionDeclarationFragment;
+import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
+import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -73,7 +73,7 @@ public final class JavaCoordinates {
      * @throws IllegalArgumentException if a {@code @java} annotation of the declaration or its package is malformed
      */
     @Nonnull
-    public static Optional<String> typeClass(@Nonnull final ITypeDeclaration declaration) {
+    public static Optional<String> typeClass(@Nonnull final ITypeDeclarationFragment declaration) {
         return declarationAnnotation(declaration.annotations(), ImmutableSet.of(CLASS))
                 .flatMap(annotation -> annotation.argument(CLASS))
                 .or(() -> javaPackage(declaration.packageStatement())
@@ -89,7 +89,7 @@ public final class JavaCoordinates {
      * @throws IllegalArgumentException if a {@code @java} annotation of the declaration or its package is malformed
      */
     @Nonnull
-    public static Optional<Method> function(@Nonnull final IFunctionDeclaration declaration) {
+    public static Optional<Method> function(@Nonnull final IFunctionDeclarationFragment declaration) {
         final Optional<IAnnotationFragment> annotation =
                 declarationAnnotation(declaration.annotations(), ImmutableSet.of(CLASS, METHOD));
         final String methodName = annotation.flatMap(javaAnnotation -> javaAnnotation.argument(METHOD))
@@ -103,7 +103,7 @@ public final class JavaCoordinates {
      * Returns the class that holds the extern functions of a package, which is named after the FRL-IR package.
      */
     @Nonnull
-    private static Optional<String> packageClass(@Nullable final IPackageStatement packageStatement) {
+    private static Optional<String> packageClass(@Nullable final IPackageStatementFragment packageStatement) {
         return javaPackage(packageStatement)
                 .map(javaPackage -> javaPackage + "." + Objects.requireNonNull(packageStatement).name());
     }
@@ -133,7 +133,7 @@ public final class JavaCoordinates {
      * Returns the Java package that the {@code @java} annotation of a package names: its only argument, without a label.
      */
     @Nonnull
-    private static Optional<String> javaPackage(@Nullable final IPackageStatement packageStatement) {
+    private static Optional<String> javaPackage(@Nullable final IPackageStatementFragment packageStatement) {
         if (packageStatement == null) {
             return Optional.empty();
         }

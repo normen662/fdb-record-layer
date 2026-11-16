@@ -1,5 +1,5 @@
 /*
- * ILiteral.java
+ * ILiteralFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -37,7 +37,7 @@ import java.util.function.Supplier;
  * {@link Long}.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class ILiteral implements IExpression {
+public final class ILiteralFragment implements IExpressionFragment {
     @Nullable
     private final Object value;
     @Nonnull
@@ -54,7 +54,7 @@ public final class ILiteral implements IExpression {
      * @param type the type of the literal: one of these types, or its nullable version; {@code nil} can be of any
      *        nullable type
      */
-    public ILiteral(@Nullable final Object value, @Nonnull final IType type) {
+    public ILiteralFragment(@Nullable final Object value, @Nonnull final IType type) {
         this.value = value;
         this.type = Objects.requireNonNull(type);
         Preconditions.checkArgument(value == null ? type.isNullable() : isValueOf(value, type),
@@ -96,7 +96,7 @@ public final class ILiteral implements IExpression {
         if (this == other) {
             return true;
         }
-        return other instanceof ILiteral that && Objects.equals(value, that.value) && type.equals(that.type);
+        return other instanceof ILiteralFragment that && Objects.equals(value, that.value) && type.equals(that.type);
     }
 
     @Override
@@ -111,6 +111,6 @@ public final class ILiteral implements IExpression {
     @Nonnull
     @Override
     public String toString() {
-        return "ILiteral[value=" + value + ", type=" + type + "]";
+        return "ILiteralFragment[value=" + value + ", type=" + type + "]";
     }
 }

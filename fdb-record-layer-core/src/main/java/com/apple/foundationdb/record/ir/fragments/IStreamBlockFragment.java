@@ -1,5 +1,5 @@
 /*
- * IStreamFragment.java
+ * IStreamBlockFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -38,11 +38,11 @@ import java.util.function.Supplier;
  * that returns {@code void}.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IStreamFragment implements IExpression {
+public final class IStreamBlockFragment implements IExpressionFragment {
     @Nonnull
     private final IType elementType;
     @Nonnull
-    private final IBlock body;
+    private final IBlockFragment body;
     @Nonnull
     private final IStreamType type;
     @Nonnull
@@ -52,10 +52,10 @@ public final class IStreamFragment implements IExpression {
      * Creates a stream block.
      *
      * @param elementType the element type of the stream, which cannot be {@code void}
-     * @param body the block that produces the elements, see {@link IBlock#yields()}; every value it yields must be of
-     *        the element type
+     * @param body the block that produces the elements, see {@link IBlockFragment#yields()}; every value it yields
+     *        must be of the element type
      */
-    public IStreamFragment(@Nonnull final IType elementType, @Nonnull final IBlock body) {
+    public IStreamBlockFragment(@Nonnull final IType elementType, @Nonnull final IBlockFragment body) {
         this.elementType = Objects.requireNonNull(elementType);
         this.body = Objects.requireNonNull(body);
         this.type = new IStreamType(elementType);
@@ -77,7 +77,7 @@ public final class IStreamFragment implements IExpression {
      * {@return the block that produces the elements of the stream}
      */
     @Nonnull
-    public IBlock body() {
+    public IBlockFragment body() {
         return body;
     }
 
@@ -97,7 +97,8 @@ public final class IStreamFragment implements IExpression {
         if (this == other) {
             return true;
         }
-        return other instanceof IStreamFragment that && elementType.equals(that.elementType) && body.equals(that.body);
+        return other instanceof IStreamBlockFragment that && elementType.equals(that.elementType)
+                && body.equals(that.body);
     }
 
     @Override
@@ -112,6 +113,6 @@ public final class IStreamFragment implements IExpression {
     @Nonnull
     @Override
     public String toString() {
-        return "IStreamFragment[elementType=" + elementType + ", body=" + body + "]";
+        return "IStreamBlockFragment[elementType=" + elementType + ", body=" + body + "]";
     }
 }

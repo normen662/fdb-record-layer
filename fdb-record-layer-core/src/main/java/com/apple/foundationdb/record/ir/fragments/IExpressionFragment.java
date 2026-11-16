@@ -1,5 +1,5 @@
 /*
- * IExpression.java
+ * IExpressionFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -31,8 +31,9 @@ import javax.annotation.Nonnull;
  * expression is also a statement.
  */
 @API(API.Status.EXPERIMENTAL)
-public sealed interface IExpression extends IStatement
-        permits ILiteral, IVariableReference, IFunctionReference, IFunctionCall, IClosure, IStreamFragment {
+public sealed interface IExpressionFragment extends IStatementFragment
+        permits ILiteralFragment, IVariableReferenceFragment, IFunctionReferenceFragment, IFunctionCallFragment,
+                IClosureFragment, IStreamBlockFragment {
 
     /**
      * Returns the type of the value of this expression.

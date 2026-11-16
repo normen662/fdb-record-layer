@@ -20,9 +20,9 @@
 
 package com.apple.foundationdb.record.ir;
 
-import com.apple.foundationdb.record.ir.fragments.IFunctionDeclaration;
+import com.apple.foundationdb.record.ir.fragments.IFunctionDeclarationFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
-import com.apple.foundationdb.record.ir.fragments.IProgram;
+import com.apple.foundationdb.record.ir.fragments.IProgramFragment;
 import com.apple.foundationdb.record.ir.fragments.IType;
 import com.apple.foundationdb.record.ir.generated.FrlIrLexer;
 import com.apple.foundationdb.record.ir.generated.FrlIrParser;
@@ -53,7 +53,7 @@ public final class FrlIrParsing {
      * @throws IllegalArgumentException if the text is not a program
      */
     @Nonnull
-    public static IProgram parseProgram(@Nonnull final String text) {
+    public static IProgramFragment parseProgram(@Nonnull final String text) {
         final FrlIrLexer lexer = new FrlIrLexer(CharStreams.fromString(text));
         lexer.removeErrorListeners();
         lexer.addErrorListener(ThrowingErrorListener.INSTANCE);
@@ -91,8 +91,9 @@ public final class FrlIrParsing {
         final String typeParameterClause = typeParameters.isEmpty()
                 ? ""
                 : typeParameters.stream().collect(Collectors.joining(", ", "<", ">"));
-        final IProgram program = parseProgram("extern func f" + typeParameterClause + "(x: () ->\n" + text + "\n)");
-        final IFunctionDeclaration declaration = (IFunctionDeclaration)program.statements().get(0);
+        final IProgramFragment program =
+                parseProgram("extern func f" + typeParameterClause + "(x: () ->\n" + text + "\n)");
+        final IFunctionDeclarationFragment declaration = (IFunctionDeclarationFragment)program.statements().get(0);
         final IFunctionType wrapper = (IFunctionType)declaration.parameters().get(0).type();
         // a `?` that the type cannot take, as in `int??` or `stream<int>?`, makes the wrapping function type nullable
         if (wrapper.isNullable()) {

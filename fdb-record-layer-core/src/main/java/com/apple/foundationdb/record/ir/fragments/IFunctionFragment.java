@@ -1,5 +1,5 @@
 /*
- * IFunction.java
+ * IFunctionFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -27,12 +27,14 @@ import javax.annotation.Nonnull;
 import java.util.List;
 
 /**
- * A function that a name can stand for: one that FRL-IR defines, an {@link IFunctionDefinition}, or one that the
- * runtime provides, an {@link IFunctionDeclaration}. A reference to a function, an {@link IFunctionReference}, refers
- * back to it, so that lowering finds the definition to compile, or the declaration that says what to call.
+ * A function that a name can stand for: one that FRL-IR defines, an {@link IFunctionDefinitionFragment}, or one that
+ * the runtime provides, an {@link IFunctionDeclarationFragment}. A reference to a function, an
+ * {@link IFunctionReferenceFragment}, refers back to it, so that lowering finds the definition to compile, or the
+ * declaration that says what to call.
  */
 @API(API.Status.EXPERIMENTAL)
-public sealed interface IFunction extends IStatement permits IFunctionDefinition, IFunctionDeclaration {
+public sealed interface IFunctionFragment extends IStatementFragment
+        permits IFunctionDefinitionFragment, IFunctionDeclarationFragment {
 
     /**
      * Returns the name of the function.
@@ -56,7 +58,7 @@ public sealed interface IFunction extends IStatement permits IFunctionDefinition
      * @return the parameters in order
      */
     @Nonnull
-    List<IFunctionDefinition.Parameter> parameters();
+    List<IFunctionDefinitionFragment.Parameter> parameters();
 
     /**
      * Returns the result type of the function.
@@ -82,7 +84,7 @@ public sealed interface IFunction extends IStatement permits IFunctionDefinition
     @Nonnull
     default IFunctionType type() {
         return new IFunctionType(false, parameters().stream()
-                .map(IFunctionDefinition.Parameter::type)
+                .map(IFunctionDefinitionFragment.Parameter::type)
                 .collect(ImmutableList.toImmutableList()), resultType());
     }
 }

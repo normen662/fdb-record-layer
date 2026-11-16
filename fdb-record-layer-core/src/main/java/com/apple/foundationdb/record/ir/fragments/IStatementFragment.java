@@ -1,5 +1,5 @@
 /*
- * IStatement.java
+ * IStatementFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -28,6 +28,7 @@ import com.apple.foundationdb.annotation.API;
  * last statement of a block it is the value of the block.
  */
 @API(API.Status.EXPERIMENTAL)
-public sealed interface IStatement extends IFragment
-        permits IFunction, ITypeDeclaration, IPackageStatement, IAssignment, IYieldFragment, IExpression {
+public sealed interface IStatementFragment extends IFragment
+        permits IFunctionFragment, ITypeDeclarationFragment, IPackageStatementFragment, IAssignmentFragment,
+                IYieldFragment, IExpressionFragment {
 }

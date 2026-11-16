@@ -1,5 +1,5 @@
 /*
- * IProgram.java
+ * IProgramFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -37,9 +37,9 @@ import java.util.function.Supplier;
  * placeholder that carries the statements; what a program means is yet to be designed.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IProgram implements IFragment {
+public final class IProgramFragment implements IFragment {
     @Nonnull
-    private final ImmutableList<IStatement> statements;
+    private final ImmutableList<IStatementFragment> statements;
     @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
@@ -49,9 +49,10 @@ public final class IProgram implements IFragment {
      * @param statements the statements in order; only the first one can be a package statement, and none can be a
      *        yield, which belongs to a stream block
      */
-    public IProgram(@Nonnull final List<IStatement> statements) {
+    public IProgramFragment(@Nonnull final List<IStatementFragment> statements) {
         this.statements = ImmutableList.copyOf(statements);
-        Preconditions.checkArgument(this.statements.stream().skip(1).noneMatch(IPackageStatement.class::isInstance),
+        Preconditions.checkArgument(
+                this.statements.stream().skip(1).noneMatch(IPackageStatementFragment.class::isInstance),
                 "a package statement can only be the first statement of a program");
         Preconditions.checkArgument(this.statements.stream().noneMatch(IYieldFragment.class::isInstance),
                 "a yield must be in a stream block");
@@ -61,7 +62,7 @@ public final class IProgram implements IFragment {
      * {@return the statements in order}
      */
     @Nonnull
-    public List<IStatement> statements() {
+    public List<IStatementFragment> statements() {
         return statements;
     }
 
@@ -69,11 +70,11 @@ public final class IProgram implements IFragment {
      * {@return the package statement of the program, its first statement, or empty if the program has none}
      */
     @Nonnull
-    public Optional<IPackageStatement> packageStatement() {
+    public Optional<IPackageStatementFragment> packageStatement() {
         return statements.stream()
                 .findFirst()
-                .filter(IPackageStatement.class::isInstance)
-                .map(IPackageStatement.class::cast);
+                .filter(IPackageStatementFragment.class::isInstance)
+                .map(IPackageStatementFragment.class::cast);
     }
 
     @Override
@@ -81,7 +82,7 @@ public final class IProgram implements IFragment {
         if (this == other) {
             return true;
         }
-        return other instanceof IProgram that && statements.equals(that.statements);
+        return other instanceof IProgramFragment that && statements.equals(that.statements);
     }
 
     @Override
@@ -96,6 +97,6 @@ public final class IProgram implements IFragment {
     @Nonnull
     @Override
     public String toString() {
-        return "IProgram[statements=" + statements + "]";
+        return "IProgramFragment[statements=" + statements + "]";
     }
 }

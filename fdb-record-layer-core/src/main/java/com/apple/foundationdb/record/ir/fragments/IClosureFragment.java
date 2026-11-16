@@ -1,5 +1,5 @@
 /*
- * IClosure.java
+ * IClosureFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -38,13 +38,13 @@ import java.util.function.Supplier;
  * parameters of its own.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IClosure implements IExpression {
+public final class IClosureFragment implements IExpressionFragment {
     @Nonnull
     private final ImmutableList<Parameter> parameters;
     @Nonnull
     private final IType resultType;
     @Nonnull
-    private final IBlock body;
+    private final IBlockFragment body;
     @Nonnull
     private final IFunctionType type;
     @Nonnull
@@ -55,10 +55,10 @@ public final class IClosure implements IExpression {
      *
      * @param parameters the parameters in order
      * @param resultType the result type
-     * @param body the block that implements the closure, see {@link IBlock#isBodyOf}
+     * @param body the block that implements the closure, see {@link IBlockFragment#isBodyOf}
      */
-    public IClosure(@Nonnull final List<Parameter> parameters, @Nonnull final IType resultType,
-                    @Nonnull final IBlock body) {
+    public IClosureFragment(@Nonnull final List<Parameter> parameters, @Nonnull final IType resultType,
+                            @Nonnull final IBlockFragment body) {
         this.parameters = ImmutableList.copyOf(parameters);
         this.resultType = Objects.requireNonNull(resultType);
         this.body = Objects.requireNonNull(body);
@@ -88,7 +88,7 @@ public final class IClosure implements IExpression {
      * {@return the block that implements the closure}
      */
     @Nonnull
-    public IBlock body() {
+    public IBlockFragment body() {
         return body;
     }
 
@@ -108,7 +108,7 @@ public final class IClosure implements IExpression {
         if (this == other) {
             return true;
         }
-        return other instanceof IClosure that && parameters.equals(that.parameters)
+        return other instanceof IClosureFragment that && parameters.equals(that.parameters)
                 && resultType.equals(that.resultType) && body.equals(that.body);
     }
 
@@ -124,7 +124,7 @@ public final class IClosure implements IExpression {
     @Nonnull
     @Override
     public String toString() {
-        return "IClosure[parameters=" + parameters + ", resultType=" + resultType + ", body=" + body + "]";
+        return "IClosureFragment[parameters=" + parameters + ", resultType=" + resultType + ", body=" + body + "]";
     }
 
     /**

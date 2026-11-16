@@ -1,5 +1,5 @@
 /*
- * IFunctionCall.java
+ * IFunctionCallFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -39,11 +39,11 @@ import java.util.function.Supplier;
  * promotion, so an argument of type {@code int} cannot be passed for a parameter of type {@code int?}.</p>
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IFunctionCall implements IExpression {
+public final class IFunctionCallFragment implements IExpressionFragment {
     @Nonnull
-    private final IExpression callee;
+    private final IExpressionFragment callee;
     @Nonnull
-    private final ImmutableList<IExpression> arguments;
+    private final ImmutableList<IExpressionFragment> arguments;
     @Nonnull
     private final IType type;
     @Nonnull
@@ -55,14 +55,17 @@ public final class IFunctionCall implements IExpression {
      * @param callee the expression to call, of a function type that is not nullable
      * @param arguments the arguments in order, each of the type of its parameter
      */
-    public IFunctionCall(@Nonnull final IExpression callee, @Nonnull final List<IExpression> arguments) {
+    public IFunctionCallFragment(@Nonnull final IExpressionFragment callee,
+                                 @Nonnull final List<IExpressionFragment> arguments) {
         this.callee = Objects.requireNonNull(callee);
         this.arguments = ImmutableList.copyOf(arguments);
         if (!(callee.type() instanceof IFunctionType functionType) || functionType.isNullable()) {
             throw new IllegalArgumentException("only a function that is not nullable can be called");
         }
         Preconditions.checkArgument(functionType.parameterTypes()
-                        .equals(this.arguments.stream().map(IExpression::type).collect(ImmutableList.toImmutableList())),
+                        .equals(this.arguments.stream()
+                                .map(IExpressionFragment::type)
+                                .collect(ImmutableList.toImmutableList())),
                 "the types of the arguments of a call must be the types of the parameters of the function");
         this.type = functionType.resultType();
     }
@@ -71,7 +74,7 @@ public final class IFunctionCall implements IExpression {
      * {@return the expression that is called}
      */
     @Nonnull
-    public IExpression callee() {
+    public IExpressionFragment callee() {
         return callee;
     }
 
@@ -79,7 +82,7 @@ public final class IFunctionCall implements IExpression {
      * {@return the arguments in order}
      */
     @Nonnull
-    public List<IExpression> arguments() {
+    public List<IExpressionFragment> arguments() {
         return arguments;
     }
 
@@ -99,7 +102,8 @@ public final class IFunctionCall implements IExpression {
         if (this == other) {
             return true;
         }
-        return other instanceof IFunctionCall that && callee.equals(that.callee) && arguments.equals(that.arguments);
+        return other instanceof IFunctionCallFragment that && callee.equals(that.callee)
+                && arguments.equals(that.arguments);
     }
 
     @Override
@@ -114,6 +118,6 @@ public final class IFunctionCall implements IExpression {
     @Nonnull
     @Override
     public String toString() {
-        return "IFunctionCall[callee=" + callee + ", arguments=" + arguments + "]";
+        return "IFunctionCallFragment[callee=" + callee + ", arguments=" + arguments + "]";
     }
 }

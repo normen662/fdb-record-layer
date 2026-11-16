@@ -1,5 +1,5 @@
 /*
- * IBlock.java
+ * IBlockFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -36,9 +36,9 @@ import java.util.function.Supplier;
  * Kotlin lambda; a block whose last statement is not an expression, or that has no statements, has no value.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IBlock implements IFragment {
+public final class IBlockFragment implements IFragment {
     @Nonnull
-    private final ImmutableList<IStatement> statements;
+    private final ImmutableList<IStatementFragment> statements;
     @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
@@ -47,7 +47,7 @@ public final class IBlock implements IFragment {
      *
      * @param statements the statements in order
      */
-    public IBlock(@Nonnull final List<IStatement> statements) {
+    public IBlockFragment(@Nonnull final List<IStatementFragment> statements) {
         this.statements = ImmutableList.copyOf(statements);
     }
 
@@ -55,7 +55,7 @@ public final class IBlock implements IFragment {
      * {@return the statements in order}
      */
     @Nonnull
-    public List<IStatement> statements() {
+    public List<IStatementFragment> statements() {
         return statements;
     }
 
@@ -63,8 +63,8 @@ public final class IBlock implements IFragment {
      * {@return the expression whose value is the value of this block: its last statement, if that is an expression}
      */
     @Nonnull
-    public Optional<IExpression> value() {
-        return statements.isEmpty() || !(statements.get(statements.size() - 1) instanceof IExpression value)
+    public Optional<IExpressionFragment> value() {
+        return statements.isEmpty() || !(statements.get(statements.size() - 1) instanceof IExpressionFragment value)
                 ? Optional.empty()
                 : Optional.of(value);
     }
@@ -96,7 +96,8 @@ public final class IBlock implements IFragment {
      */
     public boolean isBodyOf(@Nonnull final IType resultType) {
         return statements.stream().noneMatch(IYieldFragment.class::isInstance)
-                && (resultType.isVoid() || value().map(IExpression::type).filter(resultType::equals).isPresent());
+                && (resultType.isVoid()
+                        || value().map(IExpressionFragment::type).filter(resultType::equals).isPresent());
     }
 
     @Override
@@ -104,7 +105,7 @@ public final class IBlock implements IFragment {
         if (this == other) {
             return true;
         }
-        return other instanceof IBlock that && statements.equals(that.statements);
+        return other instanceof IBlockFragment that && statements.equals(that.statements);
     }
 
     @Override
@@ -119,6 +120,6 @@ public final class IBlock implements IFragment {
     @Nonnull
     @Override
     public String toString() {
-        return "IBlock[statements=" + statements + "]";
+        return "IBlockFragment[statements=" + statements + "]";
     }
 }

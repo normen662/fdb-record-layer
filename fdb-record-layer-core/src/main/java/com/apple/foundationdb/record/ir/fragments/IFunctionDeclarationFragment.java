@@ -1,5 +1,5 @@
 /*
- * IFunctionDeclaration.java
+ * IFunctionDeclarationFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -38,19 +38,19 @@ import java.util.function.Supplier;
  * what to call.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IFunctionDeclaration implements IFunction {
+public final class IFunctionDeclarationFragment implements IFunctionFragment {
     @Nonnull
     private final String name;
     @Nonnull
     private final ImmutableList<IGenericType> typeParameters;
     @Nonnull
-    private final ImmutableList<IFunctionDefinition.Parameter> parameters;
+    private final ImmutableList<IFunctionDefinitionFragment.Parameter> parameters;
     @Nonnull
     private final IType resultType;
     @Nonnull
     private final ImmutableList<IAnnotationFragment> annotations;
     @Nullable
-    private final IPackageStatement packageStatement;
+    private final IPackageStatementFragment packageStatement;
     @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
@@ -62,9 +62,9 @@ public final class IFunctionDeclaration implements IFunction {
      * @param parameters the parameters in order, with distinct names
      * @param resultType the result type, which is {@code void} if the declaration does not state one
      */
-    public IFunctionDeclaration(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
-                                @Nonnull final List<IFunctionDefinition.Parameter> parameters,
-                                @Nonnull final IType resultType) {
+    public IFunctionDeclarationFragment(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
+                                        @Nonnull final List<IFunctionDefinitionFragment.Parameter> parameters,
+                                        @Nonnull final IType resultType) {
         this(name, typeParameters, parameters, resultType, ImmutableList.of(), null);
     }
 
@@ -79,18 +79,22 @@ public final class IFunctionDeclaration implements IFunction {
      * @param packageStatement the package of the program that declares the function, or {@code null} if the program
      *        has none
      */
-    public IFunctionDeclaration(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
-                                @Nonnull final List<IFunctionDefinition.Parameter> parameters,
-                                @Nonnull final IType resultType, @Nonnull final List<IAnnotationFragment> annotations,
-                                @Nullable final IPackageStatement packageStatement) {
+    public IFunctionDeclarationFragment(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
+                                        @Nonnull final List<IFunctionDefinitionFragment.Parameter> parameters,
+                                        @Nonnull final IType resultType,
+                                        @Nonnull final List<IAnnotationFragment> annotations,
+                                        @Nullable final IPackageStatementFragment packageStatement) {
         this.name = Objects.requireNonNull(name);
         this.typeParameters = ImmutableList.copyOf(typeParameters);
         this.parameters = ImmutableList.copyOf(parameters);
         this.resultType = Objects.requireNonNull(resultType);
         this.annotations = ImmutableList.copyOf(annotations);
         this.packageStatement = packageStatement;
-        Preconditions.checkArgument(this.parameters.stream().map(IFunctionDefinition.Parameter::name).distinct().count()
-                == this.parameters.size(), "the parameters of a function must have distinct names");
+        Preconditions.checkArgument(this.parameters.stream()
+                        .map(IFunctionDefinitionFragment.Parameter::name)
+                        .distinct()
+                        .count() == this.parameters.size(),
+                "the parameters of a function must have distinct names");
     }
 
     /**
@@ -116,7 +120,7 @@ public final class IFunctionDeclaration implements IFunction {
      */
     @Nonnull
     @Override
-    public List<IFunctionDefinition.Parameter> parameters() {
+    public List<IFunctionDefinitionFragment.Parameter> parameters() {
         return parameters;
     }
 
@@ -142,7 +146,7 @@ public final class IFunctionDeclaration implements IFunction {
      * {@return the package of the program that declares the function, or {@code null} if the program has none}
      */
     @Nullable
-    public IPackageStatement packageStatement() {
+    public IPackageStatementFragment packageStatement() {
         return packageStatement;
     }
 
@@ -151,7 +155,7 @@ public final class IFunctionDeclaration implements IFunction {
         if (this == other) {
             return true;
         }
-        return other instanceof IFunctionDeclaration that && name.equals(that.name)
+        return other instanceof IFunctionDeclarationFragment that && name.equals(that.name)
                 && typeParameters.equals(that.typeParameters) && parameters.equals(that.parameters)
                 && resultType.equals(that.resultType) && annotations.equals(that.annotations)
                 && Objects.equals(packageStatement, that.packageStatement);
@@ -170,7 +174,7 @@ public final class IFunctionDeclaration implements IFunction {
     @Nonnull
     @Override
     public String toString() {
-        return "IFunctionDeclaration[name=" + name + ", typeParameters=" + typeParameters + ", parameters="
+        return "IFunctionDeclarationFragment[name=" + name + ", typeParameters=" + typeParameters + ", parameters="
                 + parameters + ", resultType=" + resultType + ", annotations=" + annotations + ", packageStatement="
                 + packageStatement + "]";
     }

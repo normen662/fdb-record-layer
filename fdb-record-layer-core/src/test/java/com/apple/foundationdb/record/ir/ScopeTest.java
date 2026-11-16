@@ -21,13 +21,13 @@
 package com.apple.foundationdb.record.ir;
 
 import com.apple.foundationdb.record.ir.fragments.IExternType;
-import com.apple.foundationdb.record.ir.fragments.IFunctionDeclaration;
-import com.apple.foundationdb.record.ir.fragments.IFunctionDefinition;
+import com.apple.foundationdb.record.ir.fragments.IFunctionDeclarationFragment;
+import com.apple.foundationdb.record.ir.fragments.IFunctionDefinitionFragment;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
-import com.apple.foundationdb.record.ir.fragments.IPackageStatement;
+import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IType;
-import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
+import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
 import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Test;
 
@@ -48,8 +48,9 @@ class ScopeTest {
     private static final IType STRING = new IPrimitiveType(IPrimitiveType.Kind.STRING, false);
     private static final TypeInference.Term INT_TERM = TypeInference.known(INT);
     private static final TypeInference.Term STRING_TERM = TypeInference.known(STRING);
-    private static final IFunctionDeclaration IDENTITY = function("f", T);
-    private static final ITypeDeclaration RANGE = new ITypeDeclaration("range", ImmutableList.of(), null);
+    private static final IFunctionDeclarationFragment IDENTITY = function("f", T);
+    private static final ITypeDeclarationFragment RANGE =
+            new ITypeDeclarationFragment("range", ImmutableList.of(), null);
 
     @Test
     void lookupTypeParameterDeclaredInEnclosingScopeFindsDeclaration() {
@@ -91,7 +92,7 @@ class ScopeTest {
 
     @Test
     void declareExternTypeInnerDeclarationHidesOuterTypes() {
-        final ITypeDeclaration innerT = new ITypeDeclaration("T", ImmutableList.of(), null);
+        final ITypeDeclarationFragment innerT = new ITypeDeclarationFragment("T", ImmutableList.of(), null);
         final Scope function = Scope.root().enterFunction(ImmutableList.of(T));
         final Scope body = function.enterBlock();
         body.declareExternType(innerT);
@@ -104,11 +105,13 @@ class ScopeTest {
     void declareExternTypeTwiceInOneScopeFails() {
         final Scope scope = Scope.root();
         scope.declareExternType(RANGE);
-        assertThatThrownBy(() -> scope.declareExternType(new ITypeDeclaration("range", ImmutableList.of(), null)))
+        assertThatThrownBy(() -> scope.declareExternType(
+                new ITypeDeclarationFragment("range", ImmutableList.of(), null)))
                 .isInstanceOf(IllegalArgumentException.class);
         // nor can a scope declare an extern type by the name of one of its type parameters
         final Scope function = Scope.root().enterFunction(ImmutableList.of(T));
-        assertThatThrownBy(() -> function.declareExternType(new ITypeDeclaration("T", ImmutableList.of(), null)))
+        assertThatThrownBy(() -> function.declareExternType(
+                new ITypeDeclarationFragment("T", ImmutableList.of(), null)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -224,7 +227,7 @@ class ScopeTest {
 
     @Test
     void declarePackageHoldsPackageInOutermostScope() {
-        final IPackageStatement abc = new IPackageStatement("abc", ImmutableList.of());
+        final IPackageStatementFragment abc = new IPackageStatementFragment("abc", ImmutableList.of());
         final Scope root = Scope.root();
         final Scope statement = root.enterStatement(new TypeInference());
         statement.declarePackage(abc);
@@ -233,7 +236,7 @@ class ScopeTest {
         assertThat(statement.enterBlock().enterFunction(ImmutableList.of(T)).packageStatement()).isSameAs(abc);
         assertThat(Scope.root().packageStatement()).isNull();
         // a program belongs to one package at most
-        assertThatThrownBy(() -> root.declarePackage(new IPackageStatement("def", ImmutableList.of())))
+        assertThatThrownBy(() -> root.declarePackage(new IPackageStatementFragment("def", ImmutableList.of())))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -254,8 +257,8 @@ class ScopeTest {
      * which is generic in {@code T} if the type is {@code T}.
      */
     @Nonnull
-    private static IFunctionDeclaration function(@Nonnull final String name, @Nonnull final IType type) {
-        return new IFunctionDeclaration(name, type.equals(T) ? ImmutableList.of(T) : ImmutableList.of(),
-                ImmutableList.of(new IFunctionDefinition.Parameter("x", type)), type);
+    private static IFunctionDeclarationFragment function(@Nonnull final String name, @Nonnull final IType type) {
+        return new IFunctionDeclarationFragment(name, type.equals(T) ? ImmutableList.of(T) : ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", type)), type);
     }
 }

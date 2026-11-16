@@ -1,5 +1,5 @@
 /*
- * ITypeDeclaration.java
+ * ITypeDeclarationFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -37,13 +37,13 @@ import java.util.function.Supplier;
  * annotations, and from those of the {@linkplain #packageStatement() package}, what the type is outside FRL-IR.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class ITypeDeclaration implements IStatement {
+public final class ITypeDeclarationFragment implements IStatementFragment {
     @Nonnull
     private final String name;
     @Nonnull
     private final ImmutableList<IAnnotationFragment> annotations;
     @Nullable
-    private final IPackageStatement packageStatement;
+    private final IPackageStatementFragment packageStatement;
     @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
@@ -55,8 +55,8 @@ public final class ITypeDeclaration implements IStatement {
      * @param packageStatement the package of the program that declares the type, or {@code null} if the program has
      *        none
      */
-    public ITypeDeclaration(@Nonnull final String name, @Nonnull final List<IAnnotationFragment> annotations,
-                            @Nullable final IPackageStatement packageStatement) {
+    public ITypeDeclarationFragment(@Nonnull final String name, @Nonnull final List<IAnnotationFragment> annotations,
+                                    @Nullable final IPackageStatementFragment packageStatement) {
         this.name = Objects.requireNonNull(name);
         this.annotations = ImmutableList.copyOf(annotations);
         this.packageStatement = packageStatement;
@@ -83,7 +83,7 @@ public final class ITypeDeclaration implements IStatement {
      * {@return the package of the program that declares the type, or {@code null} if the program has none}
      */
     @Nullable
-    public IPackageStatement packageStatement() {
+    public IPackageStatementFragment packageStatement() {
         return packageStatement;
     }
 
@@ -92,7 +92,7 @@ public final class ITypeDeclaration implements IStatement {
         if (this == other) {
             return true;
         }
-        return other instanceof ITypeDeclaration that && name.equals(that.name)
+        return other instanceof ITypeDeclarationFragment that && name.equals(that.name)
                 && annotations.equals(that.annotations) && Objects.equals(packageStatement, that.packageStatement);
     }
 
@@ -108,7 +108,7 @@ public final class ITypeDeclaration implements IStatement {
     @Nonnull
     @Override
     public String toString() {
-        return "ITypeDeclaration[name=" + name + ", annotations=" + annotations + ", packageStatement="
+        return "ITypeDeclarationFragment[name=" + name + ", annotations=" + annotations + ", packageStatement="
                 + packageStatement + "]";
     }
 }

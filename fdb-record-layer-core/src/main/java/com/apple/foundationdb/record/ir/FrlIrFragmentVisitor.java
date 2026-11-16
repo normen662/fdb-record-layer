@@ -24,30 +24,30 @@ import com.apple.foundationdb.annotation.API;
 import com.apple.foundationdb.half.Half;
 import com.apple.foundationdb.record.ir.fragments.IAnnotationFragment;
 import com.apple.foundationdb.record.ir.fragments.IArrayType;
-import com.apple.foundationdb.record.ir.fragments.IAssignment;
-import com.apple.foundationdb.record.ir.fragments.IBlock;
-import com.apple.foundationdb.record.ir.fragments.IClosure;
+import com.apple.foundationdb.record.ir.fragments.IAssignmentFragment;
+import com.apple.foundationdb.record.ir.fragments.IBlockFragment;
+import com.apple.foundationdb.record.ir.fragments.IClosureFragment;
 import com.apple.foundationdb.record.ir.fragments.IEnumType;
-import com.apple.foundationdb.record.ir.fragments.IExpression;
+import com.apple.foundationdb.record.ir.fragments.IExpressionFragment;
 import com.apple.foundationdb.record.ir.fragments.IFragment;
-import com.apple.foundationdb.record.ir.fragments.IFunction;
-import com.apple.foundationdb.record.ir.fragments.IFunctionCall;
-import com.apple.foundationdb.record.ir.fragments.IFunctionDeclaration;
-import com.apple.foundationdb.record.ir.fragments.IFunctionDefinition;
-import com.apple.foundationdb.record.ir.fragments.IFunctionReference;
+import com.apple.foundationdb.record.ir.fragments.IFunctionFragment;
+import com.apple.foundationdb.record.ir.fragments.IFunctionCallFragment;
+import com.apple.foundationdb.record.ir.fragments.IFunctionDeclarationFragment;
+import com.apple.foundationdb.record.ir.fragments.IFunctionDefinitionFragment;
+import com.apple.foundationdb.record.ir.fragments.IFunctionReferenceFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
-import com.apple.foundationdb.record.ir.fragments.ILiteral;
-import com.apple.foundationdb.record.ir.fragments.IPackageStatement;
+import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
+import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
-import com.apple.foundationdb.record.ir.fragments.IProgram;
+import com.apple.foundationdb.record.ir.fragments.IProgramFragment;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
-import com.apple.foundationdb.record.ir.fragments.IStatement;
-import com.apple.foundationdb.record.ir.fragments.IStreamFragment;
+import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
+import com.apple.foundationdb.record.ir.fragments.IStreamBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
 import com.apple.foundationdb.record.ir.fragments.IType;
-import com.apple.foundationdb.record.ir.fragments.ITypeDeclaration;
-import com.apple.foundationdb.record.ir.fragments.IVariableReference;
+import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
+import com.apple.foundationdb.record.ir.fragments.IVariableReferenceFragment;
 import com.apple.foundationdb.record.ir.fragments.IVectorType;
 import com.apple.foundationdb.record.ir.fragments.IYieldFragment;
 import com.apple.foundationdb.record.ir.fragments.ParserHelpers;
@@ -64,8 +64,8 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
- * Builds the fragments of an FRL-IR program from its parse tree: {@link #visitProgram} builds the {@link IProgram} of a
- * program, and the visit methods for types build the {@link IType} that a type denotes.
+ * Builds the fragments of an FRL-IR program from its parse tree: {@link #visitProgram} builds the
+ * {@link IProgramFragment} of a program, and the visit methods for types build the {@link IType} that a type denotes.
  *
  * <p>The visitor keeps the {@link Scope} of the construct it is in. A function definition declares its type parameters
  * and its parameters in a scope of their own, a block opens a scope for what its statements declare, and leaving a
@@ -108,8 +108,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
     @Nonnull
     @Override
-    public IProgram visitProgram(@Nonnull final FrlIrParser.ProgramContext ctx) {
-        return new IProgram(statements(ctx.statements(), null).builder().get());
+    public IProgramFragment visitProgram(@Nonnull final FrlIrParser.ProgramContext ctx) {
+        return new IProgramFragment(statements(ctx.statements(), null).builder().get());
     }
 
     /**
@@ -121,7 +121,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     private PendingStatements statements(@Nonnull final FrlIrParser.StatementsContext ctx,
                                          @Nullable final TypeInference.Term expectedValue) {
         final List<FrlIrParser.StatementContext> statementContexts = ctx.statement();
-        final ImmutableList.Builder<Supplier<IStatement>> builders = ImmutableList.builder();
+        final ImmutableList.Builder<Supplier<IStatementFragment>> builders = ImmutableList.builder();
         TypeInference.Term valueType = null;
         if (!statementContexts.isEmpty()) {
             final int last = statementContexts.size() - 1;
@@ -132,7 +132,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             builders.add(lastStatement.builder());
             valueType = lastStatement.valueType();
         }
-        final ImmutableList<Supplier<IStatement>> pending = builders.build();
+        final ImmutableList<Supplier<IStatementFragment>> pending = builders.build();
         return new PendingStatements(() -> pending.stream()
                 .map(Supplier::get)
                 .collect(ImmutableList.toImmutableList()), valueType);
@@ -153,7 +153,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         return inScope(scope.enterStatement(statementInference), () -> {
             final PendingStatement pending = new StatementInferenceVisitor(expectedValue).visit(ctx);
             statementInference.solve();
-            final IStatement statement = pending.builder().get();
+            final IStatementFragment statement = pending.builder().get();
             return new PendingStatement(() -> statement, pending.valueType());
         });
     }
@@ -164,7 +164,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * closure, and the type parameters of the function stay inside it.
      */
     @Nonnull
-    private IFunctionDefinition functionDefinition(@Nonnull final FrlIrParser.FunctionDefinitionContext ctx) {
+    private IFunctionDefinitionFragment functionDefinition(@Nonnull final FrlIrParser.FunctionDefinitionContext ctx) {
         final ImmutableList<IAnnotationFragment> annotations = annotations(ctx.annotation());
         return function(ctx.functionSignature(), ctx.type(), signature -> {
             signature.parameters()
@@ -172,8 +172,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             final IType resultType = signature.resultType();
             final PendingStatements body = inScope(scope.enterBlock(), () -> statements(ctx.block().statements(),
                     resultType.isVoid() ? null : TypeInference.known(resultType)));
-            return new IFunctionDefinition(signature.name(), signature.typeParameters(), signature.parameters(),
-                    resultType, new IBlock(body.builder().get()), annotations);
+            return new IFunctionDefinitionFragment(signature.name(), signature.typeParameters(), signature.parameters(),
+                    resultType, new IBlockFragment(body.builder().get()), annotations);
         });
     }
 
@@ -182,10 +182,11 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * annotations, says what the function is outside FRL-IR.
      */
     @Nonnull
-    private IFunctionDeclaration functionDeclaration(@Nonnull final FrlIrParser.FunctionDeclarationContext ctx) {
+    private IFunctionDeclarationFragment functionDeclaration(
+            @Nonnull final FrlIrParser.FunctionDeclarationContext ctx) {
         final ImmutableList<IAnnotationFragment> annotations = annotations(ctx.annotation());
         return function(ctx.functionSignature(), ctx.type(), signature ->
-                new IFunctionDeclaration(signature.name(), signature.typeParameters(), signature.parameters(),
+                new IFunctionDeclarationFragment(signature.name(), signature.typeParameters(), signature.parameters(),
                         signature.resultType(), annotations, scope.packageStatement()));
     }
 
@@ -199,9 +200,9 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * @param builder builds the function, in the scope of the function, from the signature
      */
     @Nonnull
-    private <F extends IFunction> F function(@Nonnull final FrlIrParser.FunctionSignatureContext ctx,
-                                             @Nullable final FrlIrParser.TypeContext resultType,
-                                             @Nonnull final Function<Signature, F> builder) {
+    private <F extends IFunctionFragment> F function(@Nonnull final FrlIrParser.FunctionSignatureContext ctx,
+                                                     @Nullable final FrlIrParser.TypeContext resultType,
+                                                     @Nonnull final Function<Signature, F> builder) {
         final ImmutableList<IGenericType> typeParameters = typeParameters(ctx.typeParameters());
         final Scope enclosingScope = scope;
         return inScope(scope.enterFunction(typeParameters), () -> {
@@ -217,9 +218,9 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * records the package of the program.
      */
     @Nonnull
-    private ITypeDeclaration typeDeclaration(@Nonnull final FrlIrParser.TypeDeclarationContext ctx) {
-        final ITypeDeclaration declaration = new ITypeDeclaration(name(ctx.identifier()), annotations(ctx.annotation()),
-                scope.packageStatement());
+    private ITypeDeclarationFragment typeDeclaration(@Nonnull final FrlIrParser.TypeDeclarationContext ctx) {
+        final ITypeDeclarationFragment declaration = new ITypeDeclarationFragment(name(ctx.identifier()),
+                annotations(ctx.annotation()), scope.packageStatement());
         scope.declareExternType(declaration);
         return declaration;
     }
@@ -230,14 +231,14 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * declares.
      */
     @Nonnull
-    private IPackageStatement packageStatement(@Nonnull final FrlIrParser.PackageStatementContext ctx) {
+    private IPackageStatementFragment packageStatement(@Nonnull final FrlIrParser.PackageStatementContext ctx) {
         final FrlIrParser.StatementsContext statements = (FrlIrParser.StatementsContext)ctx.getParent();
         Preconditions.checkArgument(statements.getParent() instanceof FrlIrParser.ProgramContext
                         && statements.statement(0).equals(ctx),
                 "a package statement can only be the first statement of a program");
         final FrlIrParser.PackageDeclarationContext declaration = ctx.packageDeclaration();
-        final IPackageStatement packageStatement =
-                new IPackageStatement(name(declaration.identifier()), annotations(declaration.annotation()));
+        final IPackageStatementFragment packageStatement =
+                new IPackageStatementFragment(name(declaration.identifier()), annotations(declaration.annotation()));
         scope.declarePackage(packageStatement);
         return packageStatement;
     }
@@ -266,8 +267,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
     @Nonnull
     @Override
-    public IFunctionDefinition.Parameter visitParameter(@Nonnull final FrlIrParser.ParameterContext ctx) {
-        return new IFunctionDefinition.Parameter(name(ctx.identifier()), type(ctx.type()));
+    public IFunctionDefinitionFragment.Parameter visitParameter(@Nonnull final FrlIrParser.ParameterContext ctx) {
+        return new IFunctionDefinitionFragment.Parameter(name(ctx.identifier()), type(ctx.type()));
     }
 
     @Nonnull
@@ -280,7 +281,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     @Nonnull
-    private ImmutableList<IFunctionDefinition.Parameter> parameters(
+    private ImmutableList<IFunctionDefinitionFragment.Parameter> parameters(
             @Nonnull final List<FrlIrParser.ParameterContext> ctx) {
         return ctx.stream().map(this::visitParameter).collect(ImmutableList.toImmutableList());
     }
@@ -340,7 +341,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             inferredArguments.add(arguments.get(i).apply(parameterTypes.get(i)));
         }
         final ImmutableList<Inferred> builtArguments = inferredArguments.build();
-        return new Inferred(resultType, () -> new IFunctionCall(callee.builder().get(), builtArguments.stream()
+        return new Inferred(resultType, () -> new IFunctionCallFragment(callee.builder().get(), builtArguments.stream()
                 .map(argument -> argument.builder().get())
                 .collect(ImmutableList.toImmutableList())));
     }
@@ -376,7 +377,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         final TypeInference.Instantiation instantiation =
                 inference().instantiate(function.typeParameters(), function.type());
         // an instantiated function type resolves to a function type
-        return new Inferred(instantiation.type(), () -> new IFunctionReference(function.function(),
+        return new Inferred(instantiation.type(), () -> new IFunctionReferenceFragment(function.function(),
                 instantiation.typeArguments()
                         .stream()
                         .map(TypeInference::resolve)
@@ -394,7 +395,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         final TypeInference.Term type = inference().literal(kind);
         return new Inferred(type, () -> {
             final IType resolvedType = TypeInference.resolve(type);
-            return new ILiteral(valueOfType.apply(resolvedType), resolvedType);
+            return new ILiteralFragment(valueOfType.apply(resolvedType), resolvedType);
         });
     }
 
@@ -805,7 +806,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                     "the expression of an assignment must be of the type stated for the variable");
             final String name = name(assignment.identifier());
             scope.declareVariable(name, value.type());
-            return new PendingStatement(() -> new IAssignment(name, value.builder().get()), null);
+            return new PendingStatement(() -> new IAssignmentFragment(name, value.builder().get()), null);
         }
 
         /**
@@ -926,7 +927,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                                     + "is known");
                     type = TypeInference.known(TypeInference.resolve(variable.type()));
                 }
-                return fit(new Inferred(type, () -> new IVariableReference(name, TypeInference.resolve(type))));
+                return fit(new Inferred(type, () -> new IVariableReferenceFragment(name, TypeInference.resolve(type))));
             }
             return fit(functionReference((Scope.FunctionBinding)binding));
         }
@@ -956,8 +957,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             }
             final PendingStatements block = inScope(scope.enterStream(elementType),
                     () -> statements(ctx.streamBlock().block().statements(), null));
-            return new Inferred(type, () -> new IStreamFragment(TypeInference.resolve(elementType),
-                    new IBlock(block.builder().get())));
+            return new Inferred(type, () -> new IStreamBlockFragment(TypeInference.resolve(elementType),
+                    new IBlockFragment(block.builder().get())));
         }
 
         /**
@@ -997,11 +998,11 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                     inference.unify(resultType, TypeInference.known(voidType()),
                             "the body of a closure must end with an expression of its result type unless that is void");
                 }
-                return new Inferred(type, () -> new IClosure(parameters.stream()
-                        .map(parameter -> new IClosure.Parameter(parameter.name(),
+                return new Inferred(type, () -> new IClosureFragment(parameters.stream()
+                        .map(parameter -> new IClosureFragment.Parameter(parameter.name(),
                                 TypeInference.resolve(parameter.type())))
                         .collect(ImmutableList.toImmutableList()), TypeInference.resolve(resultType),
-                        new IBlock(body.builder().get())));
+                        new IBlockFragment(body.builder().get())));
             });
         }
 
@@ -1112,7 +1113,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * @param type the type of the expression
      * @param builder builds the expression; it must be called only after the inference is solved
      */
-    private record Inferred(@Nonnull TypeInference.Term type, @Nonnull Supplier<IExpression> builder) {
+    private record Inferred(@Nonnull TypeInference.Term type, @Nonnull Supplier<IExpressionFragment> builder) {
     }
 
     /**
@@ -1121,13 +1122,14 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * @param builder builds the statement; it must be called only after the inference is solved
      * @param valueType the type of the statement's value if the statement is an expression, and {@code null} otherwise
      */
-    private record PendingStatement(@Nonnull Supplier<IStatement> builder, @Nullable TypeInference.Term valueType) {
+    private record PendingStatement(@Nonnull Supplier<IStatementFragment> builder,
+                                    @Nullable TypeInference.Term valueType) {
         /**
          * Returns a statement that is built already: a definition or a declaration, which involves no inference and
          * has no value.
          */
         @Nonnull
-        static PendingStatement built(@Nonnull final IStatement statement) {
+        static PendingStatement built(@Nonnull final IStatementFragment statement) {
             return new PendingStatement(() -> statement, null);
         }
     }
@@ -1139,7 +1141,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * @param valueType the type of the value of the statements, the value of the last one if it is an expression, and
      *        {@code null} if they have no value
      */
-    private record PendingStatements(@Nonnull Supplier<ImmutableList<IStatement>> builder,
+    private record PendingStatements(@Nonnull Supplier<ImmutableList<IStatementFragment>> builder,
                                      @Nullable TypeInference.Term valueType) {
     }
 
@@ -1152,7 +1154,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * @param resultType the result type of the function, {@code void} if it states none
      */
     private record Signature(@Nonnull String name, @Nonnull ImmutableList<IGenericType> typeParameters,
-                             @Nonnull ImmutableList<IFunctionDefinition.Parameter> parameters,
+                             @Nonnull ImmutableList<IFunctionDefinitionFragment.Parameter> parameters,
                              @Nonnull IType resultType) {
     }
 

@@ -1,5 +1,5 @@
 /*
- * IVariableReference.java
+ * IPackageStatementFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -22,47 +22,54 @@ package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.annotation.API;
 import com.google.common.base.Suppliers;
+import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nonnull;
+import java.util.List;
 import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
- * A reference to a variable: the variable of an assignment, or a parameter of a function definition or a closure. A
- * reference names the nearest variable of that name in scope.
+ * The package statement of a program, {@code @java("com.apple.foundationdb.record.ir") package abc}: the name of the
+ * package that the program and everything it declares belong to. It can only be the first statement of a program. Its
+ * annotations say where the package lives outside FRL-IR, which locates the package's extern types and functions there
+ * unless their own annotations say otherwise.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IVariableReference implements IExpression {
+public final class IPackageStatementFragment implements IStatementFragment {
     @Nonnull
     private final String name;
     @Nonnull
-    private final IType type;
+    private final ImmutableList<IAnnotationFragment> annotations;
     @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
     /**
-     * Creates a reference to a variable.
+     * Creates a package statement.
      *
-     * @param name the name of the variable
-     * @param type the type of the variable
+     * @param name the name of the package
+     * @param annotations the annotations of the package, in order
      */
-    public IVariableReference(@Nonnull final String name, @Nonnull final IType type) {
+    public IPackageStatementFragment(@Nonnull final String name, @Nonnull final List<IAnnotationFragment> annotations) {
         this.name = Objects.requireNonNull(name);
-        this.type = Objects.requireNonNull(type);
+        this.annotations = ImmutableList.copyOf(annotations);
+        ParserHelpers.checkWritableName(name);
     }
 
     /**
-     * {@return the name of the variable}
+     * {@return the name of the package}
      */
     @Nonnull
     public String name() {
         return name;
     }
 
+    /**
+     * {@return the annotations of the package, in order}
+     */
     @Nonnull
-    @Override
-    public IType type() {
-        return type;
+    public List<IAnnotationFragment> annotations() {
+        return annotations;
     }
 
     @Override
@@ -70,7 +77,8 @@ public final class IVariableReference implements IExpression {
         if (this == other) {
             return true;
         }
-        return other instanceof IVariableReference that && name.equals(that.name) && type.equals(that.type);
+        return other instanceof IPackageStatementFragment that && name.equals(that.name)
+                && annotations.equals(that.annotations);
     }
 
     @Override
@@ -79,12 +87,12 @@ public final class IVariableReference implements IExpression {
     }
 
     private int computeHashCode() {
-        return Objects.hash("variable reference", name, type);
+        return Objects.hash("package statement", name, annotations);
     }
 
     @Nonnull
     @Override
     public String toString() {
-        return "IVariableReference[name=" + name + ", type=" + type + "]";
+        return "IPackageStatementFragment[name=" + name + ", annotations=" + annotations + "]";
     }
 }

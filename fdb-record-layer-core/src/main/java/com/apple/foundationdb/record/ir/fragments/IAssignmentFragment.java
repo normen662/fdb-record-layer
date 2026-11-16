@@ -1,5 +1,5 @@
 /*
- * IAssignment.java
+ * IAssignmentFragment.java
  *
  * This source file is part of the FoundationDB open source project
  *
@@ -35,11 +35,11 @@ import java.util.function.Supplier;
  * {@code void} has no value to name.
  */
 @API(API.Status.EXPERIMENTAL)
-public final class IAssignment implements IStatement {
+public final class IAssignmentFragment implements IStatementFragment {
     @Nonnull
     private final String name;
     @Nonnull
-    private final IExpression expression;
+    private final IExpressionFragment expression;
     @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
@@ -49,7 +49,7 @@ public final class IAssignment implements IStatement {
      * @param name the name of the variable
      * @param expression the expression whose value the variable names, which cannot be of type {@code void}
      */
-    public IAssignment(@Nonnull final String name, @Nonnull final IExpression expression) {
+    public IAssignmentFragment(@Nonnull final String name, @Nonnull final IExpressionFragment expression) {
         this.name = Objects.requireNonNull(name);
         this.expression = Objects.requireNonNull(expression);
         Preconditions.checkArgument(!expression.type().isVoid(), "void is only a result type");
@@ -67,7 +67,7 @@ public final class IAssignment implements IStatement {
      * {@return the expression whose value the variable names; its type is the type of the variable}
      */
     @Nonnull
-    public IExpression expression() {
+    public IExpressionFragment expression() {
         return expression;
     }
 
@@ -76,7 +76,8 @@ public final class IAssignment implements IStatement {
         if (this == other) {
             return true;
         }
-        return other instanceof IAssignment that && name.equals(that.name) && expression.equals(that.expression);
+        return other instanceof IAssignmentFragment that && name.equals(that.name)
+                && expression.equals(that.expression);
     }
 
     @Override
@@ -91,6 +92,6 @@ public final class IAssignment implements IStatement {
     @Nonnull
     @Override
     public String toString() {
-        return "IAssignment[name=" + name + ", expression=" + expression + "]";
+        return "IAssignmentFragment[name=" + name + ", expression=" + expression + "]";
     }
 }
