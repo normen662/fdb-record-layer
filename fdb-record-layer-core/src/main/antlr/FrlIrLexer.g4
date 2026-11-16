@@ -53,15 +53,24 @@ VECTOR   : 'vector';
 ENUM     : 'enum';
 FUNCTION : 'function';
 
-// Definitions and statements. `extern` declares a function or a type that the runtime provides, `package` names the
-// package that a program belongs to, and `yield` adds a value to the stream of a stream block, `stream { … }`.
-FUNC    : 'func';
-EXTERN  : 'extern';
-TYPE    : 'type';
-PACKAGE : 'package';
-IN      : 'in';
-LET     : 'let';
-YIELD   : 'yield';
+// Definitions and statements. `extern` declares a function or a type that the runtime provides, `typealias` names
+// a type, `package` names the package that a program belongs to, and `yield` adds a value to the stream of a stream
+// block, `stream { … }`, which `yield break` ends or stops. `if`, `for`, and `consume` are the statements of control
+// flow; `consume` pulls the elements of a stream, one `case` for each way a stream can answer.
+FUNC      : 'func';
+EXTERN    : 'extern';
+TYPE      : 'type';
+TYPEALIAS : 'typealias';
+PACKAGE   : 'package';
+IN        : 'in';
+LET       : 'let';
+YIELD     : 'yield';
+BREAK     : 'break';
+IF        : 'if';
+ELSE      : 'else';
+FOR       : 'for';
+CONSUME   : 'consume';
+CASE      : 'case';
 
 // Literals that are keywords. `nil` is the null of every nullable type, as in Swift.
 TRUE  : 'true';

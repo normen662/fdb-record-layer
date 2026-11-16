@@ -162,6 +162,17 @@ final class TypeInference {
     }
 
     /**
+     * Returns a term for an array type that is not nullable.
+     *
+     * @param elementType the term for the type of the elements
+     * @return a term for the array type
+     */
+    @Nonnull
+    Term array(@Nonnull final Term elementType) {
+        return new ArrayTerm(false, elementType);
+    }
+
+    /**
      * Returns the type of a reference to a function, in which a new inference variable stands for each type parameter
      * of the function. The variables become the type arguments of the reference.
      *

@@ -23,12 +23,12 @@ package com.apple.foundationdb.record.ir.fragments;
 import com.apple.foundationdb.annotation.API;
 
 /**
- * A statement in a block or a program: a function, defined or declared, a type declaration, the package statement of a
- * program, an assignment, a yield, or an expression. An expression on its own is evaluated for its effect, and as the
- * last statement of a block it is the value of the block.
+ * A statement in a block or a program: a function, defined or declared, a type declaration, a type alias, the package
+ * statement of a program, an assignment, a yield or a yield break, a statement of control flow, or an expression. An
+ * expression on its own is evaluated for its effect, and as the last statement of a block it is the value of the block.
  */
 @API(API.Status.EXPERIMENTAL)
 public sealed interface IStatementFragment extends IFragment
-        permits IFunctionFragment, ITypeDeclarationFragment, IPackageStatementFragment, IAssignmentFragment,
-                IYieldFragment, IExpressionFragment {
+        permits IFunctionFragment, ITypeDeclarationFragment, ITypeAliasFragment, IPackageStatementFragment,
+                IAssignmentFragment, IYieldFragment, IYieldBreakFragment, IControlFlowFragment, IExpressionFragment {
 }

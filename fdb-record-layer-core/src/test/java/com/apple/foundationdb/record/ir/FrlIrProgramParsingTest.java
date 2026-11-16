@@ -25,13 +25,16 @@ import com.apple.foundationdb.record.ir.fragments.IArrayType;
 import com.apple.foundationdb.record.ir.fragments.IAssignmentFragment;
 import com.apple.foundationdb.record.ir.fragments.IBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IClosureFragment;
+import com.apple.foundationdb.record.ir.fragments.IConsumeFragment;
 import com.apple.foundationdb.record.ir.fragments.IExternType;
+import com.apple.foundationdb.record.ir.fragments.IForFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionCallFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDeclarationFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDefinitionFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionReferenceFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
+import com.apple.foundationdb.record.ir.fragments.IIfFragment;
 import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
 import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
@@ -41,8 +44,10 @@ import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
 import com.apple.foundationdb.record.ir.fragments.IType;
+import com.apple.foundationdb.record.ir.fragments.ITypeAliasFragment;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
 import com.apple.foundationdb.record.ir.fragments.IVariableReferenceFragment;
+import com.apple.foundationdb.record.ir.fragments.IYieldBreakFragment;
 import com.apple.foundationdb.record.ir.fragments.IYieldFragment;
 import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Test;
@@ -61,8 +66,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Tests for parsing FRL-IR programs: the program, statement, function definition, function declaration, type
- * declaration, package, annotation, and yield productions of the grammar, and the fragments that
- * {@link FrlIrFragmentVisitor} builds from them; the stream blocks that yields belong to are tested with the other
+ * declaration, type alias, package, annotation, yield, and control-flow productions of the grammar, and the fragments
+ * that {@link FrlIrFragmentVisitor} builds from them; the stream blocks that yields belong to are tested with the other
  * expressions.
  */
 class FrlIrProgramParsingTest {
@@ -71,6 +76,7 @@ class FrlIrProgramParsingTest {
     private static final IType STRING = new IPrimitiveType(IPrimitiveType.Kind.STRING, false);
     private static final IType BOOLEAN = new IPrimitiveType(IPrimitiveType.Kind.BOOLEAN, false);
     private static final IType VOID = new IPrimitiveType(IPrimitiveType.Kind.VOID, false);
+    private static final IType STOP_REASON = IConsumeFragment.STOP_REASON_TYPE;
     private static final IGenericType T = new IGenericType("T", false);
     private static final IGenericType U = new IGenericType("U", false);
     private static final IBlockFragment EMPTY_BLOCK = new IBlockFragment(ImmutableList.of());
@@ -400,6 +406,394 @@ class FrlIrProgramParsingTest {
     }
 
     @Nonnull
+    static Stream<Arguments> validConditionals() {
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", BOOLEAN);
+        final IBlockFragment one = block(ImmutableList.of(new ILiteralFragment(1, INT)));
+        final IBlockFragment two = block(ImmutableList.of(new ILiteralFragment(2, INT)));
+        final IFunctionDeclarationFragment not = new IFunctionDeclarationFragment("not", ImmutableList.of(),
+                ImmutableList.of(parameter("b", BOOLEAN)), BOOLEAN);
+        final IIfFragment ifNotC = new IIfFragment(new IFunctionCallFragment(
+                new IFunctionReferenceFragment(not, ImmutableList.of(), not.type()), ImmutableList.of(c)), one, null);
+        return Stream.of(
+                // an if runs its block if its condition is true, and the block after else, if there is one, otherwise
+                Arguments.of("func f(c: boolean) { if c { 1 } }", new IIfFragment(c, one, null)),
+                Arguments.of("func f(c: boolean) { if c { 1 } else { 2 } }", new IIfFragment(c, one, two)),
+                // the else may stand on the line after the }, since a statement cannot start with it
+                Arguments.of("func f(c: boolean) {\n    if c {\n        1\n    }\n    else {\n        2\n    }\n}",
+                        new IIfFragment(c, one, two)),
+                // an else if is an else block whose only statement is an if
+                Arguments.of("func f(c: boolean, d: boolean) { if c { 1 } else if d { 2 } }",
+                        new IIfFragment(c, one, block(ImmutableList.of(
+                                new IIfFragment(new IVariableReferenceFragment("d", BOOLEAN), two, null))))),
+                // the condition is an expression whose calls take no trailing closure; the block may start on the next
+                // line, since the if cannot end before it
+                Arguments.of("extern func not(b: boolean): boolean\nfunc f(c: boolean) { if not(c) { 1 } }", ifNotC),
+                Arguments.of("extern func not(b: boolean): boolean\nfunc f(c: boolean) { if c.not()\n{ 1 } }", ifNotC),
+                // in a function body, the statements of the blocks are typed one by one, as the statements around the
+                // if are, so 42 has the default type of its literal
+                Arguments.of("func f(c: boolean) { if c { let a = 42; a } }",
+                        new IIfFragment(c, block(ImmutableList.of(
+                                new IAssignmentFragment("a", new ILiteralFragment(42, INT)),
+                                new IVariableReferenceFragment("a", INT))), null)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("validConditionals")
+    void parseProgramIfCreatesIf(@Nonnull final String text, @Nonnull final IIfFragment expected) {
+        assertThat(lastStatementOfLastFunction(text)).isEqualTo(expected);
+    }
+
+    @Nonnull
+    static Stream<Arguments> validForLoops() {
+        final IArrayType arrayOfInt = new IArrayType(false, INT);
+        final IForFragment forXInXs = new IForFragment("x", new IVariableReferenceFragment("xs", arrayOfInt),
+                block(ImmutableList.of(new IVariableReferenceFragment("x", INT))));
+        final IType nullableString = STRING.withNullability(true);
+        final IFunctionDeclarationFragment numbers = new IFunctionDeclarationFragment("numbers", ImmutableList.of(T),
+                ImmutableList.of(parameter("x", T)), new IArrayType(false, T));
+        return Stream.of(
+                // a for loop runs its block for each element of an array, which is the value of the loop variable
+                Arguments.of("func f(xs: [int]) { for x in xs { x } }", forXInXs),
+                // a loop can be split across lines wherever it cannot end
+                Arguments.of("func f(xs: [int]) {\n    for\n    x\n    in\n    xs\n    {\n        x\n    }\n}",
+                        forXInXs),
+                // the elements can be nullable, and the elements of an array of arrays are arrays
+                Arguments.of("func f(xs: [string?]) { for x in xs { x } }", new IForFragment("x",
+                        new IVariableReferenceFragment("xs", new IArrayType(false, nullableString)),
+                        block(ImmutableList.of(new IVariableReferenceFragment("x", nullableString))))),
+                Arguments.of("func f(xss: [[int]]) { for xs in xss { for x in xs { x } } }", new IForFragment("xs",
+                        new IVariableReferenceFragment("xss", new IArrayType(false, arrayOfInt)),
+                        block(ImmutableList.of(forXInXs)))),
+                // the array is inferred before the loop variable is declared, so its name refers to what it stood for
+                // before the loop
+                Arguments.of("func f(x: [int]) { for x in x { x } }",
+                        new IForFragment("x", new IVariableReferenceFragment("x", arrayOfInt),
+                                block(ImmutableList.of(new IVariableReferenceFragment("x", INT))))),
+                // in a function body, the array is typed before the statements of the block, which are typed one by
+                // one, so the type of the loop variable is the one that the array has on its own
+                Arguments.of("extern func numbers<T>(x: T): [T]\nfunc f() { for x in numbers(1) { x } }",
+                        new IForFragment("x", new IFunctionCallFragment(new IFunctionReferenceFragment(numbers,
+                                ImmutableList.of(INT), new IFunctionType(false, ImmutableList.of(INT), arrayOfInt)),
+                                ImmutableList.of(new ILiteralFragment(1, INT))),
+                                block(ImmutableList.of(new IVariableReferenceFragment("x", INT))))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("validForLoops")
+    void parseProgramForCreatesFor(@Nonnull final String text, @Nonnull final IForFragment expected) {
+        assertThat(lastStatementOfLastFunction(text)).isEqualTo(expected);
+    }
+
+    @Nonnull
+    static Stream<Arguments> validConsumes() {
+        final IVariableReferenceFragment s = new IVariableReferenceFragment("s", new IStreamType(INT));
+        final IVariableReferenceFragment reason = new IVariableReferenceFragment("reason", STOP_REASON);
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", BOOLEAN);
+        final IYieldFragment yieldX = new IYieldFragment(new IVariableReferenceFragment("x", INT));
+        final IConsumeFragment.Case valueX = new IConsumeFragment.Case("x", block(ImmutableList.of(yieldX)));
+        final IConsumeFragment.Case stopForReason =
+                new IConsumeFragment.Case("reason", block(ImmutableList.of(new IYieldBreakFragment(reason))));
+        return Stream.of(
+                // the value case runs for every element; the stopped case communicates the reason why the consumed
+                // stream stopped outward, as the reason why the stream block stops
+                Arguments.of("consume s {\n    case .value(x):\n        yield x\n"
+                                + "    case .stopped(reason):\n        yield break reason\n}",
+                        new IConsumeFragment(s, valueX, null, stopForReason)),
+                // the end case runs at the end of the stream
+                Arguments.of("consume s { case .value(x): yield x; case .end: yield break; "
+                                + "case .stopped(reason): yield break reason }",
+                        new IConsumeFragment(s, valueX, new IConsumeFragment.Case(null,
+                                block(ImmutableList.of(new IYieldBreakFragment(null)))), stopForReason)),
+                // the cases can come in any order, and a value or an end case can have no statements: a case does not
+                // fall through
+                Arguments.of("consume s {\n    case .end:\n    case .stopped(reason):\n        yield break reason\n"
+                                + "    case .value(x):\n        yield x\n}",
+                        new IConsumeFragment(s, valueX, new IConsumeFragment.Case(null, EMPTY_BLOCK), stopForReason)),
+                // a reason stays on the line of its yield break: on the next line, it is a statement of its own
+                Arguments.of("consume s {\n    case .value(x):\n        yield x\n"
+                                + "    case .stopped(reason):\n        yield break\n        reason\n"
+                                + "        yield break reason\n}",
+                        new IConsumeFragment(s, valueX, null, new IConsumeFragment.Case("reason",
+                                block(ImmutableList.of(new IYieldBreakFragment(null), reason,
+                                        new IYieldBreakFragment(reason)))))),
+                // the stopped case ends with a yield break on every path, here in both blocks of an if, of which one
+                // ends the stream instead of stopping it
+                Arguments.of("consume s { case .value(x): yield x; "
+                                + "case .stopped(reason): if c { yield break reason } else { yield break } }",
+                        new IConsumeFragment(s, valueX, null, new IConsumeFragment.Case("reason",
+                                block(ImmutableList.of(new IIfFragment(c,
+                                        block(ImmutableList.of(new IYieldBreakFragment(reason))),
+                                        block(ImmutableList.of(new IYieldBreakFragment(null))))))))),
+                // a yield in a block of an if in a case belongs to the stream block too
+                Arguments.of("consume s { case .value(x): if c { yield x }; "
+                                + "case .stopped(reason): yield break reason }",
+                        new IConsumeFragment(s, new IConsumeFragment.Case("x", block(ImmutableList.of(
+                                new IIfFragment(c, block(ImmutableList.of(yieldX)), null)))), null, stopForReason)),
+                // the consumed stream can be any expression of a stream type, a stream block included
+                Arguments.of("consume stream { yield 1 } { case .value(x): yield x; "
+                                + "case .stopped(reason): yield break reason }",
+                        new IConsumeFragment(new IStreamBlockFragment(INT, block(ImmutableList.of(
+                                new IYieldFragment(new ILiteralFragment(1, INT))))), valueX, null, stopForReason)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("validConsumes")
+    void parseProgramConsumeCreatesConsume(@Nonnull final String consume, @Nonnull final IConsumeFragment expected) {
+        // a consume is a statement of a stream block
+        final IStatementFragment streamBlock = lastStatementOfLastFunction(
+                "func f(s: stream<int>, c: boolean): stream<int> {\n    stream {\n" + consume + "\n    }\n}");
+        final List<IStatementFragment> statements = ((IStreamBlockFragment)streamBlock).body().statements();
+        assertThat(statements.get(statements.size() - 1)).isEqualTo(expected);
+    }
+
+    @Test
+    void parseProgramFlatmapStopsAtStopOfInnerStream() {
+        final IProgramFragment program = parseProgram("""
+                func flatmap<T, R>(outer: stream<T>, innerProducer: (T) -> stream<R>): stream<R> {
+                    stream {
+                        consume outer {
+                            case .value(nextOuter):
+                                let inner = innerProducer(nextOuter)
+                                consume inner {
+                                    case .value(nextInner):
+                                        yield nextInner
+                                    case .stopped(reason):
+                                        yield break reason
+                                }
+                            case .stopped(reason):
+                                yield break reason
+                        }
+                    }
+                }""");
+        final IGenericType r = new IGenericType("R", false);
+        final IFunctionType producerType = new IFunctionType(false, ImmutableList.of(T), new IStreamType(r));
+        final IConsumeFragment.Case stopForReason = new IConsumeFragment.Case("reason", block(ImmutableList.of(
+                new IYieldBreakFragment(new IVariableReferenceFragment("reason", STOP_REASON)))));
+        // an inner stop stops the flatmap, and the end of the inner stream leaves the inner loop only
+        final IConsumeFragment innerConsume = new IConsumeFragment(
+                new IVariableReferenceFragment("inner", new IStreamType(r)),
+                new IConsumeFragment.Case("nextInner", block(ImmutableList.of(
+                        new IYieldFragment(new IVariableReferenceFragment("nextInner", r))))),
+                null, stopForReason);
+        final IConsumeFragment outerConsume = new IConsumeFragment(
+                new IVariableReferenceFragment("outer", new IStreamType(T)),
+                new IConsumeFragment.Case("nextOuter", block(ImmutableList.of(
+                        new IAssignmentFragment("inner", new IFunctionCallFragment(
+                                new IVariableReferenceFragment("innerProducer", producerType),
+                                ImmutableList.of(new IVariableReferenceFragment("nextOuter", T)))),
+                        innerConsume))),
+                null, stopForReason);
+        assertThat(program.statements()).containsExactly(new IFunctionDefinitionFragment("flatmap",
+                ImmutableList.of(T, r),
+                ImmutableList.of(parameter("outer", new IStreamType(T)), parameter("innerProducer", producerType)),
+                new IStreamType(r), block(ImmutableList.of(
+                        new IStreamBlockFragment(r, block(ImmutableList.of(outerConsume)))))));
+    }
+
+    @Test
+    void parseProgramExplodeYieldsElementsOfArray() {
+        final IProgramFragment program = parseProgram("""
+                func explode<T>(a: [T]): stream<T> {
+                    stream {
+                        for t in a {
+                            yield t
+                        }
+                    }
+                }""");
+        final IArrayType arrayOfT = new IArrayType(false, T);
+        assertThat(program.statements()).containsExactly(new IFunctionDefinitionFragment("explode",
+                ImmutableList.of(T), ImmutableList.of(parameter("a", arrayOfT)), new IStreamType(T),
+                block(ImmutableList.of(new IStreamBlockFragment(T, block(ImmutableList.of(new IForFragment("t",
+                        new IVariableReferenceFragment("a", arrayOfT),
+                        block(ImmutableList.of(new IYieldFragment(new IVariableReferenceFragment("t", T))))))))))));
+    }
+
+    @Test
+    void parseProgramStopReasonIsAliasOfEnumThatFrlIrDeclares() {
+        final IFunctionDeclarationFragment timeout = new IFunctionDeclarationFragment("timeout", ImmutableList.of(),
+                ImmutableList.of(), STOP_REASON);
+        final IProgramFragment expected = new IProgramFragment(ImmutableList.of(timeout, function("f",
+                new IStreamType(INT), ImmutableList.of(new IStreamBlockFragment(INT, block(ImmutableList.of(
+                        new IYieldBreakFragment(new IFunctionCallFragment(new IFunctionReferenceFragment(timeout,
+                                ImmutableList.of(), timeout.type()), ImmutableList.of())))))))));
+        // a stream block without yields takes its element type from its context
+        assertThat(parseProgram("extern func timeout(): stopReason\n"
+                + "func f(): stream<int> { stream { yield break timeout() } }")).isEqualTo(expected);
+        // the alias stands for the enum, which a program can also spell out
+        assertThat(parseProgram("extern func timeout(): enum<RETURN_LIMIT_REACHED = 1, TIME_LIMIT_REACHED = 2, "
+                + "SCAN_LIMIT_REACHED = 3, BYTE_LIMIT_REACHED = 4>\n"
+                + "func f(): stream<int> { stream { yield break timeout() } }")).isEqualTo(expected);
+    }
+
+    @Test
+    void parseProgramStatementsOfControlFlowInClosureJoinInferenceOfClosure() {
+        // in a closure, the statements of the blocks of an if and a for join the inference of the statement that the
+        // closure is in, as the other statements of the closure do: a later statement can still make 42 a bigint, and
+        // the body of a for loop can determine the element type of its array
+        final IProgramFragment program = parseProgram("""
+                extern func h(x: bigint)
+                extern func numbers<T>(x: T): [T]
+                extern func run(f: () -> void)
+                func f(c: boolean) {
+                    run {
+                        if c {
+                            let a = 42
+                            h(a)
+                        }
+                        for x in numbers(1) {
+                            h(x)
+                        }
+                    }
+                }""");
+        final IFunctionDeclarationFragment h = (IFunctionDeclarationFragment)program.statements().get(0);
+        final IFunctionDeclarationFragment numbers = (IFunctionDeclarationFragment)program.statements().get(1);
+        final IFunctionDeclarationFragment run = (IFunctionDeclarationFragment)program.statements().get(2);
+        final IFunctionReferenceFragment hReference = new IFunctionReferenceFragment(h, ImmutableList.of(), h.type());
+        final IClosureFragment closure = new IClosureFragment(ImmutableList.of(), VOID, block(ImmutableList.of(
+                new IIfFragment(new IVariableReferenceFragment("c", BOOLEAN), block(ImmutableList.of(
+                        new IAssignmentFragment("a", new ILiteralFragment(42L, BIGINT)),
+                        new IFunctionCallFragment(hReference,
+                                ImmutableList.of(new IVariableReferenceFragment("a", BIGINT))))), null),
+                new IForFragment("x", new IFunctionCallFragment(new IFunctionReferenceFragment(numbers,
+                        ImmutableList.of(BIGINT),
+                        new IFunctionType(false, ImmutableList.of(BIGINT), new IArrayType(false, BIGINT))),
+                        ImmutableList.of(new ILiteralFragment(1L, BIGINT))),
+                        block(ImmutableList.of(new IFunctionCallFragment(hReference,
+                                ImmutableList.of(new IVariableReferenceFragment("x", BIGINT)))))))));
+        assertThat(((IFunctionDefinitionFragment)program.statements().get(3)).body().statements()).containsExactly(
+                new IFunctionCallFragment(new IFunctionReferenceFragment(run, ImmutableList.of(), run.type()),
+                        ImmutableList.of(closure)));
+    }
+
+    @Test
+    void parseProgramStatementsOfControlFlowInStreamBlockJoinInferenceOfStreamBlock() {
+        // in a stream block, the statements of the blocks of an if join the inference of the statement that the stream
+        // block is in, so a yield can make 42 a value of the element type
+        final IProgramFragment program = parseProgram("""
+                func f(c: boolean): stream<bigint> {
+                    stream {
+                        if c {
+                            let a = 42
+                            yield a
+                        }
+                    }
+                }""");
+        assertThat(program.statements()).containsExactly(new IFunctionDefinitionFragment("f", ImmutableList.of(),
+                ImmutableList.of(parameter("c", BOOLEAN)), new IStreamType(BIGINT), block(ImmutableList.of(
+                        new IStreamBlockFragment(BIGINT, block(ImmutableList.of(new IIfFragment(
+                                new IVariableReferenceFragment("c", BOOLEAN), block(ImmutableList.of(
+                                        new IAssignmentFragment("a", new ILiteralFragment(42L, BIGINT)),
+                                        new IYieldFragment(new IVariableReferenceFragment("a", BIGINT)))),
+                                null))))))));
+    }
+
+    @Test
+    void parseProgramControlFlowIsStatementOfProgram() {
+        final IFunctionDeclarationFragment xs = new IFunctionDeclarationFragment("xs", ImmutableList.of(),
+                ImmutableList.of(), new IArrayType(false, INT));
+        assertThat(parseProgram("extern func xs(): [int]\nlet c = true\nif c { 1 }\nfor x in xs() { x }").statements())
+                .containsExactly(xs, new IAssignmentFragment("c", new ILiteralFragment(true, BOOLEAN)),
+                        new IIfFragment(new IVariableReferenceFragment("c", BOOLEAN),
+                                block(ImmutableList.of(new ILiteralFragment(1, INT))), null),
+                        new IForFragment("x", new IFunctionCallFragment(
+                                new IFunctionReferenceFragment(xs, ImmutableList.of(), xs.type()), ImmutableList.of()),
+                                block(ImmutableList.of(new IVariableReferenceFragment("x", INT)))));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            // the condition of an if is a boolean that is not nullable
+            "func f(x: int) { if x { } }",
+            "func f(c: boolean?) { if c { } }",
+            // an if has a block, and an else has a block or another if
+            "func f(c: boolean) { if c }",
+            "func f(c: boolean) { if c { } else }",
+            "func f() { else { } }",
+            // the expression in front of a block takes no trailing closure: there, a { starts the block
+            "extern func run(f: () -> boolean): boolean\nfunc g() { if run { true } { } }",
+            // a for loop iterates over an array that is not nullable, and not over a stream
+            "func f(x: int) { for y in x { } }",
+            "func f(xs: [int]?) { for x in xs { } }",
+            "func f(s: stream<int>) { for x in s { } }",
+            "func f(xs: [int]) { for x xs { } }",
+            // the loop variable is in scope only in the body
+            "func f(xs: [int]) { for x in xs { }; x }",
+            // a consume consumes a stream, in a stream block, and not in a function or a closure within one
+            "func f(s: stream<int>) { consume s { case .value(x): x } }",
+            "func f(xs: [int]): stream<int> { stream { consume xs { case .value(x): yield x } } }",
+            "func f(s: stream<int>): stream<int> {\n    stream {\n"
+                    + "        let c = { () -> void in consume s { case .value(x): x } }\n        yield 1\n    }\n}",
+            // a consume has one value case, which binds a name, at most one end case, which binds none, and one stopped
+            // case, which binds one
+            "func f(s: stream<int>): stream<int> {\n"
+                    + "    stream { consume s { case .end: yield break; case .stopped(reason): yield break reason } }\n"
+                    + "}",
+            "func f(s: stream<int>): stream<int> {\n"
+                    + "    stream { consume s { case .value(x): yield x; case .value(y): x } }\n}",
+            "func f(s: stream<int>): stream<int> { stream { consume s { case .value: yield 1 } } }",
+            "func f(s: stream<int>): stream<int> { stream { consume s { case .value(x): yield x; case .end(y): x } } }",
+            "func f(s: stream<int>): stream<int> {\n"
+                    + "    stream { consume s { case .value(x): yield x; case .stopped: x } }\n}",
+            "func f(s: stream<int>): stream<int> { stream { consume s { case .value(x): yield x; case .done: x } } }",
+            "func f(s: stream<int>): stream<int> { stream { consume s { } } }",
+            // a binding is in scope only in its case
+            "func f(s: stream<int>): stream<int> {\n"
+                    + "    stream { consume s { case .value(x): yield x; case .end: yield x } }\n}",
+            // the reason of a stop has to be communicated outward: every consume has a stopped case, whose statements
+            // end with a yield break on every path
+            "func f(s: stream<int>): stream<int> { stream { consume s { case .value(x): yield x } } }",
+            "func f(s: stream<int>): stream<int> {\n"
+                    + "    stream { consume s { case .value(x): yield x; case .end: yield break } }\n}",
+            "func f(s: stream<int>): stream<int> {\n"
+                    + "    stream { consume s { case .value(x): yield x; case .stopped(reason): } }\n}",
+            "func f(s: stream<int>): stream<int> {\n"
+                    + "    stream { consume s { case .value(x): yield x; case .stopped(reason): yield 1 } }\n}",
+            "func f(s: stream<int>): stream<int> {\n    stream {\n"
+                    + "        consume s { case .value(x): yield x; case .stopped(reason): yield break reason; "
+                    + "yield 1 }\n    }\n}",
+            "func f(s: stream<int>, c: boolean): stream<int> {\n    stream {\n"
+                    + "        consume s { case .value(x): yield x; case .stopped(reason): "
+                    + "if c { yield break reason } }\n    }\n}",
+            "func f(s: stream<int>, xs: [int]): stream<int> {\n    stream {\n"
+                    + "        consume s { case .value(x): yield x; case .stopped(reason): "
+                    + "for y in xs { yield break } }\n    }\n}",
+            "func f(s: stream<int>): stream<int> {\n    stream {\n"
+                    + "        consume s {\n            case .value(x):\n                yield x\n"
+                    + "            case .stopped(reason):\n                yield break\n                reason\n"
+                    + "        }\n    }\n}",
+            // a yield break is in a stream block, and its reason is a stopReason
+            "yield break",
+            "func f() { yield break }",
+            "func f(): stream<int> { stream { yield break 1 } }",
+            // the end of a stream is not a reason, so the enum of all the no-next reasons of a cursor is not a
+            // stopReason
+            "extern func e(): enum<SOURCE_EXHAUSTED = 0, RETURN_LIMIT_REACHED = 1, TIME_LIMIT_REACHED = 2, "
+                    + "SCAN_LIMIT_REACHED = 3, BYTE_LIMIT_REACHED = 4>\n"
+                    + "func f(): stream<int> { stream { yield break e() } }",
+            "func f(): stream<int> {\n    stream {\n        let c = { () -> void in yield break }\n"
+                    + "        yield 1\n    }\n}",
+            // stopReason is a type alias that FRL-IR declares itself, in the scope of the statements of a program
+            "extern type stopReason",
+            "typealias stopReason = int",
+            // a statement of control flow does not make a function a place for a yield
+            "func f(c: boolean) { if c { yield 1 } }",
+            // in a function body or a program, the statements of the blocks of an if or a for are typed one by one, as
+            // the statements around the if or the for are, so a later statement cannot make 42 a bigint
+            "extern func h(x: bigint)\nfunc f(c: boolean) { if c { let a = 42; h(a) } }",
+            "extern func h(x: bigint)\nfunc f(c: boolean) { if c { } else { let a = 42; h(a) } }",
+            "extern func h(x: bigint)\nfunc f(c: boolean, d: boolean) { if c { } else if d { let a = 42; h(a) } }",
+            "extern func h(x: bigint)\nfunc f(xs: [int]) { for x in xs { let a = 42; h(a) } }",
+            "extern func h(x: bigint)\nfunc f(xs: [int], c: boolean) { for x in xs { if c { let a = 42; h(a) } } }",
+            "extern func h(x: bigint)\nlet c = true\nif c { let a = 42; h(a) }",
+            // nor can the body of a for loop determine the element type of its array there
+            "extern func numbers<T>(x: T): [T]\nextern func h(x: bigint)\nfunc f() { for x in numbers(1) { h(x) } }",
+            "extern func empty<T>(): [T]\nextern func h(x: bigint)\nfunc f() { for x in empty() { h(x) } }",
+    })
+    void parseProgramInvalidControlFlowFails(@Nonnull final String text) {
+        assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Nonnull
     static Stream<Arguments> validAssignments() {
         final IAssignmentFragment bigintX = new IAssignmentFragment("x", new ILiteralFragment(42L, BIGINT));
         return Stream.of(
@@ -606,6 +1000,104 @@ class FrlIrProgramParsingTest {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Nonnull
+    static Stream<Arguments> validTypeAliases() {
+        final IRecordType row = new IRecordType(false, ImmutableList.of(IRecordType.Field.of(BIGINT, "id"),
+                IRecordType.Field.of(STRING.withNullability(true), "name")));
+        return Stream.of(
+                // an alias names a type of any kind, a nullable one included
+                Arguments.of("typealias row = record<id: bigint, name: string?>", new ITypeAliasFragment("row", row)),
+                Arguments.of("typealias name = string?", new ITypeAliasFragment("name", STRING.withNullability(true))),
+                Arguments.of("typealias numbers = stream<int>",
+                        new ITypeAliasFragment("numbers", new IStreamType(INT))),
+                Arguments.of("typealias f = (int) -> bigint",
+                        new ITypeAliasFragment("f", new IFunctionType(false, ImmutableList.of(INT), BIGINT))),
+                // as in Swift, void can have another name, which is then only a result type
+                Arguments.of("typealias nothing = void", new ITypeAliasFragment("nothing", VOID)),
+                // an alias can be split across lines wherever it cannot end, and its name can be between backticks
+                Arguments.of("typealias\nrow\n=\nrecord<id: bigint, name: string?>",
+                        new ITypeAliasFragment("row", row)),
+                Arguments.of("typealias `first row` = int", new ITypeAliasFragment("first row", INT)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("validTypeAliases")
+    void parseProgramTypeAliasCreatesTypeAlias(@Nonnull final String text,
+                                               @Nonnull final ITypeAliasFragment expected) {
+        assertThat(parseProgram(text).statements()).containsExactly(expected);
+    }
+
+    @Test
+    void parseProgramTypeAliasStandsForItsType() {
+        final IProgramFragment program = parseProgram("""
+                typealias row = record<id: bigint, name: string?>
+                typealias rows = [row]
+                extern func scan(): rows
+                extern func first(rs: rows): row?
+                let r = first(scan())""");
+        final IRecordType row = new IRecordType(false, ImmutableList.of(IRecordType.Field.of(BIGINT, "id"),
+                IRecordType.Field.of(STRING.withNullability(true), "name")));
+        final IArrayType rows = new IArrayType(false, row);
+        final IFunctionDeclarationFragment scan =
+                new IFunctionDeclarationFragment("scan", ImmutableList.of(), ImmutableList.of(), rows);
+        final IFunctionDeclarationFragment first = new IFunctionDeclarationFragment("first", ImmutableList.of(),
+                ImmutableList.of(parameter("rs", rows)), row.withNullability(true));
+        // the aliases remain statements of the program, and a type that names an alias is the type of the alias, so
+        // row? is the record type made nullable
+        assertThat(program.statements()).containsExactly(new ITypeAliasFragment("row", row),
+                new ITypeAliasFragment("rows", rows), scan, first,
+                new IAssignmentFragment("r", new IFunctionCallFragment(
+                        new IFunctionReferenceFragment(first, ImmutableList.of(), first.type()),
+                        ImmutableList.of(new IFunctionCallFragment(
+                                new IFunctionReferenceFragment(scan, ImmutableList.of(), scan.type()),
+                                ImmutableList.of())))));
+    }
+
+    @Test
+    void parseProgramInnerTypeAliasHidesOuterOne() {
+        final IProgramFragment program = parseProgram("""
+                typealias t = int
+                func f<T>(xs: [T]) {
+                    typealias t = [T]
+                    let ys: t = xs
+                }
+                let t: t = 1""");
+        final IArrayType arrayOfT = new IArrayType(false, T);
+        // in f, t is the alias of its body, which can name a type parameter of f; after f, t is the outer alias again
+        assertThat(program.statements()).containsExactly(new ITypeAliasFragment("t", INT),
+                new IFunctionDefinitionFragment("f", ImmutableList.of(T), ImmutableList.of(parameter("xs", arrayOfT)),
+                        VOID, block(ImmutableList.of(new ITypeAliasFragment("t", arrayOfT),
+                                new IAssignmentFragment("ys", new IVariableReferenceFragment("xs", arrayOfT))))),
+                // types and values have separate namespaces, so a variable can have the name of a type alias
+                new IAssignmentFragment("t", new ILiteralFragment(1, INT)));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "typealias row",                                                // an alias has a type
+            "typealias = int",                                              // and a name
+            "typealias row =",
+            "typealias row: int",                                           // the type follows an `=`
+            "typealias int = bigint",                                       // a keyword is not a name
+            "typealias row<T> = [T]",                                       // an alias has no type parameters
+            "typealias row = row",                                          // an alias is in scope from the next
+            "typealias row = [row]",                                        // statement on, so its type cannot refer
+            "extern func f(): row\ntypealias row = int",                    // to it
+            "func f() { typealias t = int }\nextern func g(x: t)",          // and only in its block
+            "typealias t = u",                                              // the type is in scope
+            "typealias t = int\ntypealias t = int",                         // a scope declares a type name only once,
+            "extern type t\ntypealias t = int",                             // also among extern types and aliases
+            "typealias t = int\nextern type t",
+            "typealias name = string?\nextern func f(): name?",             // a type cannot be made nullable twice,
+            "typealias numbers = stream<int>\nextern func f(): numbers?",   // and a stream type never
+            "typealias nothing = void\nextern func f(x: nothing)",          // void is only a result type
+            "typealias nothing = void\nextern func f(): nothing?",
+            "typealias t = int\nlet x: t = \"a\"",                          // a value of t is a value of its type
+    })
+    void parseProgramInvalidTypeAliasFails(@Nonnull final String text) {
+        assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
             "let x",                                     // no expression
@@ -665,5 +1157,27 @@ class FrlIrProgramParsingTest {
     private static IAnnotationFragment annotation(@Nonnull final String name,
                                                   @Nonnull final IAnnotationFragment.Argument argument) {
         return new IAnnotationFragment(name, ImmutableList.of(argument));
+    }
+
+    @Nonnull
+    private static IFunctionDefinitionFragment.Parameter parameter(@Nonnull final String name,
+                                                                   @Nonnull final IType type) {
+        return new IFunctionDefinitionFragment.Parameter(name, type);
+    }
+
+    @Nonnull
+    private static IBlockFragment block(@Nonnull final List<IStatementFragment> statements) {
+        return new IBlockFragment(statements);
+    }
+
+    /**
+     * Returns the last statement of the body of the function that a program defines last.
+     */
+    @Nonnull
+    private static IStatementFragment lastStatementOfLastFunction(@Nonnull final String text) {
+        final List<IStatementFragment> statements = parseProgram(text).statements();
+        final List<IStatementFragment> body =
+                ((IFunctionDefinitionFragment)statements.get(statements.size() - 1)).body().statements();
+        return body.get(body.size() - 1);
     }
 }

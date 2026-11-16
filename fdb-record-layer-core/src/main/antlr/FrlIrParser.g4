@@ -30,10 +30,11 @@ options { tokenVocab=FrlIrLexer; }
 // rules below allow NL* at exactly those places: a statement split across lines stays one statement. Where a statement
 // could end, a line break ends it; rules for statements that can end in more than one place must therefore not allow NL*
 // there. The one place within a construct where a line break is never allowed is before the `?` of a nullable type,
-// which stays on the line of its type, as in Swift. Two places allow a line break although a statement could end
+// which stays on the line of its type, as in Swift. Three places allow a line break although a statement could end
 // before it, because what follows cannot start a statement, so the parser still tells the statements apart:
 // - the parameters of a closure without parentheses, `{ x, y in }`, may break before a `,`, `->`, or `in`;
-// - a dot call may start a line, so that a chain of calls can put one call on each line (see `postfix`).
+// - a dot call may start a line, so that a chain of calls can put one call on each line (see `postfix`);
+// - the `else` of an if may stand on the line after the `}` (see `conditional`).
 // The opposite holds for the `(` of a call and for a trailing closure: both stay on the line of what they call, since
 // after `let x = f` a line break ends the statement, and a closure on the next line is a statement of its own.
 //
@@ -154,9 +155,10 @@ unitType
     : LPAREN NL* RPAREN
     ;
 
-// A type that has a name: a type parameter of an enclosing generic function, `T` in `func id<T>(x: T): T`, or an extern
-// type, `range` after `extern type range`. What a name stands for is decided after parsing: a name that is neither a
-// type parameter nor an extern type in scope is not a type.
+// A type that has a name: a type parameter of an enclosing generic function, `T` in `func id<T>(x: T): T`, an extern
+// type, `range` after `extern type range`, or a type alias, `row` after `typealias row = record<id: bigint>`, which
+// stands for its type. FRL-IR declares the alias `stopReason` itself (see `yieldBreak`). What a name stands for is
+// decided after parsing: a name that is none of these in scope is not a type.
 namedType
     : identifier
     ;
@@ -205,6 +207,16 @@ functionSignature
 // An extern type is a plain name without type parameters, and it can be used wherever a type can, also as `range?`.
 typeDeclaration
     : (annotation NL*)* EXTERN NL* TYPE NL* identifier
+    ;
+
+// `typealias row = record<id: bigint, name: string?>` names a type, as in Swift. The alias is not a type of its own: it
+// stands for its type wherever a type can be, so a value of type `row` is a value of the record type, and `row?` is the
+// record type made nullable. As with `(int?)?`, a type cannot be made nullable twice, so `row?` is an error if the type
+// is nullable already, and so it is if the type is a stream type. An alias is in scope from the next statement on, so
+// its type cannot refer to it, and it has no type parameters. Extern types and type aliases share their names in a
+// scope.
+typeAlias
+    : TYPEALIAS NL* identifier NL* EQUAL NL* type
     ;
 
 // `package abc` names the package that a program belongs to. It can only be the first statement of a program, so a
@@ -284,9 +296,14 @@ statement
     : functionDefinition     # functionDefinitionStatement
     | functionDeclaration    # functionDeclarationStatement
     | typeDeclaration        # typeDeclarationStatement
+    | typeAlias              # typeAliasStatement
     | packageDeclaration     # packageStatement
     | assignment             # assignmentStatement
     | yieldValue             # yieldStatement
+    | yieldBreak             # yieldBreakStatement
+    | conditional            # ifStatement
+    | forLoop                # forStatement
+    | consumeLoop            # consumeStatement
     | expression             # expressionStatement
     ;
 
@@ -299,10 +316,59 @@ assignment
 
 // `yield x` adds `x` to the stream of the stream block it is in, as `yield return` does in C#: the block stops there
 // until the next element of the stream is asked for. A yield belongs to the innermost stream block around it, and it
-// must be a statement of that block itself, not of a function or a closure in the block, which can be called when the
-// block is not running; that is the rule of C#, where a lambda cannot yield either.
+// must be a statement of that block itself, or of the blocks of its if, for, and consume statements, not of a function
+// or a closure in the block, which can be called when the block is not running; that is the rule of C#, where a lambda
+// cannot yield either.
 yieldValue
     : YIELD NL* expression
+    ;
+
+// `yield break` ends the stream of the stream block it is in, as in C#: it leaves the body of the stream block, as
+// `break` leaves a loop in Java, and the stream has no more elements, as when the body runs to its end. The end of a
+// stream is thus a matter of control flow rather than a reason. `yield break r` stops the stream instead, for the
+// reason `r`, which the `.stopped` case of a consume binds: the consumer of the stream gets the stop and can resume the
+// stream from its continuation. The reason is of type `stopReason`, an alias that FRL-IR declares for the enum of the
+// reasons why a cursor of the record layer stops before its end, its `NoNextReason`s other than `SOURCE_EXHAUSTED`:
+// `enum<RETURN_LIMIT_REACHED = 1, TIME_LIMIT_REACHED = 2, SCAN_LIMIT_REACHED = 3, BYTE_LIMIT_REACHED = 4>`. A yield
+// break can be where a yield can be. It can end its statement, so the reason stays on its line.
+yieldBreak
+    : YIELD NL* BREAK expression?
+    ;
+
+// `if c { } else { }` runs its first block if the boolean `c` is true, and the block after `else`, if there is one,
+// otherwise; `else if` adds another if. An if is a statement, not an expression, so it has no value. `else` cannot
+// start a statement, so it may stand on the line after the `}`. The statements of the blocks are typed as the
+// statements around the if are: in a function body or a program one by one, and in a closure or a stream block
+// together with the statement that the closure or the stream block is in.
+conditional
+    : IF NL* conditionExpression NL* thenBlock=block (NL* ELSE NL* (elseBlock=block | elseIf=conditional))?
+    ;
+
+// `for x in xs { }` runs its block for each element `x` of the array `xs`, in order. A stream is consumed with consume
+// instead, which deals with the ways in which a stream can end. The statements of the block are typed as those of the
+// blocks of an if.
+forLoop
+    : FOR NL* identifier NL* IN NL* conditionExpression NL* block
+    ;
+
+// `consume s { case .value(x): … case .end: … case .stopped(r): … }` pulls the elements of the stream `s` in a loop,
+// one case for each answer of `s`:
+// - `.value(x)` runs for every element `x`, and then the loop pulls the next element;
+// - `.end` runs once `s` has no more elements, and then the loop is left;
+// - `.stopped(r)` runs if `s` stops before its end, for the reason `r`.
+// A consume must have a `.value` and a `.stopped` case. Without an `.end` case, the loop is left at the end of `s`. The
+// statements of the `.stopped` case end with a `yield break` on every path, because the reason has to be communicated
+// outward: `yield break r` stops the stream block around the consume, and `yield break` ends its stream. A stop is not
+// the end: `s` can be resumed from its continuation, which is part of the continuation of the stream block. A resume
+// continues after the `yield break`, and the loop then pulls the next answer of `s`, as after `.value`. A consume can
+// therefore be only where a yield can be. A case does not fall through to the next one, and the statements of a
+// `.value` or an `.end` case may be empty.
+consumeLoop
+    : CONSUME NL* conditionExpression NL* LBRACE NL* consumeCase+ RBRACE
+    ;
+
+consumeCase
+    : CASE NL* DOT kind=identifier (LPAREN NL* binding=identifier NL* RPAREN)? NL* COLON statements
     ;
 
 //
@@ -353,9 +419,8 @@ postfix
 
 // The arguments of a call. As in Swift, a closure after the parentheses is a trailing closure, the last argument:
 // `fold(0) { a, x in a }` is `fold(0, { a, x in a })`, and without other arguments the parentheses can go, `run { 42 }`
-// is `run({ 42 })`, also in a dot call, `xs.map { x in x }`. A call has one trailing closure at most. Statements with a
-// condition, once FRL-IR has them, will take no trailing closure in the condition: there, a `{` starts the body, and a
-// closure argument goes into the parentheses, `if xs.contains({ x in x > 1 }) { }`.
+// is `run({ 42 })`, also in a dot call, `xs.map { x in x }`. A call has one trailing closure at most. The expression in
+// front of the block of an if, a for, or a consume takes no trailing closure, see `conditionExpression`.
 callArguments
     : arguments closure?
     | closure
@@ -363,6 +428,18 @@ callArguments
 
 arguments
     : LPAREN NL* (expression (NL* COMMA NL* expression)* NL*)? RPAREN
+    ;
+
+// The expression in front of the block of an if, a for, or a consume: an expression whose calls take no trailing
+// closure, as in Swift, because a `{` after it starts the block. A closure argument goes into the parentheses there,
+// `if xs.contains({ x in x == 1 }) { }`.
+conditionExpression
+    : primaryExpression conditionPostfix*
+    ;
+
+conditionPostfix
+    : arguments                         # conditionCallPostfix
+    | NL* DOT identifier arguments      # conditionDotCallPostfix
     ;
 
 // An integer literal can be of any numeric type, a floating-point literal of any floating-point type, and `nil` of any

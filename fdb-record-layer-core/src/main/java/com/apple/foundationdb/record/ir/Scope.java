@@ -26,6 +26,7 @@ import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IType;
+import com.apple.foundationdb.record.ir.fragments.ITypeAliasFragment;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
@@ -41,23 +42,25 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * What is in effect at a point of an FRL-IR program: the type parameters, the extern types, the variables, and the
- * functions that the enclosing constructs declare, the package of the program, the inference that types the
- * expressions there, and the element type of the stream that a yield there adds to. Scopes form a stack. Each scope
- * refers to the scope that encloses it, a lookup searches from the innermost scope outward, so an inner declaration
- * hides an outer one of the same name, and leaving a construct returns to the enclosing scope, which drops what the
- * construct declared.
+ * What is in effect at a point of an FRL-IR program: the type parameters, the extern types, the type aliases, the
+ * variables, and the functions that the enclosing constructs declare, the package of the program, the inference that
+ * types the expressions there, and the element type of the stream that a yield there adds to. Scopes form a stack.
+ * Each scope refers to the scope that encloses it, a lookup searches from the innermost scope outward, so an inner
+ * declaration hides an outer one of the same name, and leaving a construct returns to the enclosing scope, which drops
+ * what the construct declared.
  *
- * <p>Type parameters and extern types are types and the others are values, and the two have separate namespaces.
- * Within each namespace, a scope declares a name only once, so there is no overloading. A type parameter must not hide
- * a type parameter of an enclosing function: type parameters compare by name, so the two would be the same type. An
- * extern type refers to its declaration, so it can hide another type without that ambiguity.</p>
+ * <p>Type parameters, extern types, and type aliases are types and the others are values, and the two have separate
+ * namespaces. Within each namespace, a scope declares a name only once, so there is no overloading. A type parameter
+ * must not hide a type parameter of an enclosing function: type parameters compare by name, so the two would be the
+ * same type. An extern type refers to its declaration, and a type alias stands for its type, so either can hide another
+ * type without that ambiguity.</p>
  *
  * <p>The inference of a scope types the expressions in it, see {@code TypeInference}. A statement outside closures and
  * stream blocks has a scope of its own with a new inference. The scopes of the closures and stream blocks in the
  * statement inherit that inference, so that their statements join it. The scope of a function has no inference, so that
- * the statements of its body each start their own, also inside a closure. A variable belongs to the inference of the
- * scope that declares it, since its type is a term of that inference.</p>
+ * the statements of its body each start their own, also inside a closure, and neither have the blocks of an if or a for
+ * that starts its own, so that their statements are typed as those around the if or the for. A variable belongs to the
+ * inference of the scope that declares it, since its type is a term of that inference.</p>
  *
  * <p>The scope of a stream block holds the element type of its stream, the type of every value that a yield in the
  * block adds, and the scopes of the blocks in it inherit the element type. The scopes of functions and closures have
@@ -81,7 +84,8 @@ final class Scope {
 
     /**
      * The inference that types the expressions in this scope, or {@code null} where no statement is being inferred: in
-     * the scope of a program, of a function, and of a block of a function.
+     * the scope of a program, of a function, of a block of a function, and of a block of an if or a for that has an
+     * inference of its own.
      */
     @Nullable
     private final TypeInference inference;
@@ -100,15 +104,16 @@ final class Scope {
     private final TypeInference.Term yieldElementType;
 
     /**
-     * The extern types declared in this scope, by name. Like {@link #values}, they are declared while the statements of
-     * the scope are inferred.
+     * The extern types and the type aliases declared in this scope, by name: an extern type as the type of its
+     * declaration, and an alias as the type it stands for. Like {@link #values}, they are declared while the statements
+     * of the scope are inferred.
      */
     @Nonnull
-    private final Map<String, ITypeDeclarationFragment> externTypes = new LinkedHashMap<>();
+    private final Map<String, IType> namedTypes = new LinkedHashMap<>();
 
     /**
      * The variables and functions declared in this scope, by name. They are declared while the statements of the scope
-     * are inferred, so, like the extern types and the package, they are mutable parts of a scope.
+     * are inferred, so, like the named types and the package, they are mutable parts of a scope.
      */
     @Nonnull
     private final Map<String, Binding> values = new LinkedHashMap<>();
@@ -160,14 +165,28 @@ final class Scope {
     }
 
     /**
-     * Returns the scope of a block nested in this one, the body of a function or a closure, which has the inference of
-     * this scope and its element type of yields.
+     * Returns the scope of a block nested in this one, which has the inference of this scope and its element type of
+     * yields: the body of a function or a closure, or a block of a statement of control flow that joins the inference
+     * of this scope, such as an if in a closure.
      *
      * @return a new scope enclosed by this one
      */
     @Nonnull
     Scope enterBlock() {
         return new Scope(this, ImmutableMap.of(), inference, false, yieldElementType);
+    }
+
+    /**
+     * Returns the scope of a block of an if or a for whose statement is typed with an inference of its own, as a
+     * statement of a program or of a function body is. The scope has no inference, so that the statements of the block
+     * are typed one by one, as the statements around the if or the for are. It has the element type of yields of this
+     * scope, since the block runs as part of the block that the if or the for is in.
+     *
+     * @return a new scope enclosed by this one
+     */
+    @Nonnull
+    Scope enterBlockWithoutInference() {
+        return new Scope(this, ImmutableMap.of(), null, false, yieldElementType);
     }
 
     /**
@@ -302,22 +321,35 @@ final class Scope {
      * @param declaration the declaration of the type, whose name this scope must not declare yet as a type
      */
     void declareExternType(@Nonnull final ITypeDeclarationFragment declaration) {
+        declareNamedType(declaration.name(), new IExternType(declaration, false));
+    }
+
+    /**
+     * Declares a type alias in this scope, so that a type that names the alias is the type that the alias stands for.
+     *
+     * @param alias the type alias, whose name this scope must not declare yet as a type
+     */
+    void declareTypeAlias(@Nonnull final ITypeAliasFragment alias) {
+        declareNamedType(alias.name(), alias.type());
+    }
+
+    private void declareNamedType(@Nonnull final String name, @Nonnull final IType type) {
         if (isStatement) {
             // the scope of a statement always has an enclosing scope
-            Objects.requireNonNull(enclosing).declareExternType(declaration);
+            Objects.requireNonNull(enclosing).declareNamedType(name, type);
             return;
         }
-        Preconditions.checkArgument(!typeParameters.containsKey(declaration.name())
-                        && externTypes.putIfAbsent(declaration.name(), declaration) == null,
+        Preconditions.checkArgument(!typeParameters.containsKey(name) && namedTypes.putIfAbsent(name, type) == null,
                 "a name can be declared only once in a scope");
     }
 
     /**
-     * Returns the type of the given name: a type parameter or an extern type that is declared in this scope or, if there
-     * is none, in the nearest enclosing scope that declares one.
+     * Returns the type of the given name: a type parameter, an extern type, or the type that a type alias stands for,
+     * that is declared in this scope or, if there is none, in the nearest enclosing scope that declares one.
      *
      * @param name the name of the type
-     * @return the type, which is not nullable, or empty if no type of this name is in scope
+     * @return the type, or empty if no type of this name is in scope; a type parameter and an extern type are not
+     *         nullable, while the type of an alias can be
      */
     @Nonnull
     Optional<IType> lookupType(@Nonnull final String name) {
@@ -325,9 +357,9 @@ final class Scope {
         if (typeParameter != null) {
             return Optional.of(typeParameter);
         }
-        final ITypeDeclarationFragment externType = externTypes.get(name);
-        if (externType != null) {
-            return Optional.of(new IExternType(externType, false));
+        final IType namedType = namedTypes.get(name);
+        if (namedType != null) {
+            return Optional.of(namedType);
         }
         return enclosing == null ? Optional.empty() : enclosing.lookupType(name);
     }

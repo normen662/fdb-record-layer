@@ -92,7 +92,7 @@ public final class IFunctionDefinitionFragment implements IFunctionFragment {
         this.body = Objects.requireNonNull(body);
         this.annotations = ImmutableList.copyOf(annotations);
         Preconditions.checkArgument(body.isBodyOf(resultType), "the body of a function must end with an expression of "
-                + "its result type unless that is void, and it must not yield");
+                + "its result type unless that is void, and it must not yield or consume");
     }
 
     /**

@@ -27,6 +27,7 @@ import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IType;
+import com.apple.foundationdb.record.ir.fragments.ITypeAliasFragment;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
 import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Test;
@@ -116,6 +117,39 @@ class ScopeTest {
     }
 
     @Test
+    void lookupTypeFindsTypeOfTypeAlias() {
+        final IType nullableString = STRING.withNullability(true);
+        final Scope outer = Scope.root();
+        outer.declareTypeAlias(new ITypeAliasFragment("name", nullableString));
+        final Scope inner = outer.enterFunction(ImmutableList.of(T)).enterBlock();
+        // a type alias stands for its type, which can be nullable
+        assertThat(inner.lookupType("name")).contains(nullableString);
+        // an alias can hide a type parameter, which the lookup of type parameters still finds
+        inner.declareTypeAlias(new ITypeAliasFragment("T", INT));
+        assertThat(inner.lookupType("T")).contains(INT);
+        assertThat(inner.lookupTypeParameter("T")).containsSame(T);
+        assertThat(inner.exit().lookupType("T")).containsSame(T);
+    }
+
+    @Test
+    void declareTypeAliasNameOfTypeInOneScopeFails() {
+        // extern types and type aliases share their names in a scope
+        final Scope scope = Scope.root();
+        scope.declareExternType(RANGE);
+        scope.declareTypeAlias(new ITypeAliasFragment("row", INT));
+        assertThatThrownBy(() -> scope.declareTypeAlias(new ITypeAliasFragment("range", INT)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> scope.declareTypeAlias(new ITypeAliasFragment("row", STRING)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> scope.declareExternType(new ITypeDeclarationFragment("row", ImmutableList.of(), null)))
+                .isInstanceOf(IllegalArgumentException.class);
+        // nor can a scope declare an alias by the name of one of its type parameters
+        final Scope function = Scope.root().enterFunction(ImmutableList.of(T));
+        assertThatThrownBy(() -> function.declareTypeAlias(new ITypeAliasFragment("T", INT)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void lookupValueDeclaredInEnclosingScopeFindsDeclaration() {
         final Scope outer = Scope.root();
         outer.declareFunction(IDENTITY);
@@ -187,6 +221,21 @@ class ScopeTest {
     }
 
     @Test
+    void enterBlockWithoutInferenceStatementsOfBlockStartTheirOwn() {
+        final TypeInference inference = new TypeInference();
+        final Scope statement = Scope.root().enterStatement(inference);
+        // a block of an if or a for joins the inference of its statement, unless that statement has an inference of
+        // its own; the statements of the block then start their own
+        assertThat(statement.enterBlock().inference()).isSameAs(inference);
+        final Scope block = statement.enterBlockWithoutInference();
+        assertThat(block.inference()).isNull();
+        final TypeInference blockStatementInference = new TypeInference();
+        assertThat(block.enterStatement(blockStatementInference).inference()).isSameAs(blockStatementInference);
+        // the block runs as part of the block that its statement is in, so it keeps the element type of yields
+        assertThat(statement.enterStream(INT_TERM).enterBlockWithoutInference().yieldElementType()).isSameAs(INT_TERM);
+    }
+
+    @Test
     void yieldElementTypeStreamSetsItAndClosuresAndFunctionsDropIt() {
         final TypeInference inference = new TypeInference();
         final Scope stream = Scope.root().enterStatement(inference).enterStream(INT_TERM);
@@ -214,11 +263,13 @@ class ScopeTest {
         statement.declareVariable("x", INT_TERM);
         statement.declareFunction(IDENTITY);
         statement.declareExternType(RANGE);
+        statement.declareTypeAlias(new ITypeAliasFragment("row", INT));
         // what a statement declares is visible after it, and a variable belongs to the inference of its statement
         assertThat(statement.exit()).isSameAs(block);
         assertThat(block.lookupValue("x")).contains(new Scope.VariableBinding(INT_TERM, inference));
         assertThat(block.lookupValue("f")).isPresent();
         assertThat(block.lookupType("range")).isPresent();
+        assertThat(block.lookupType("row")).contains(INT);
         // a closure's variable belongs to the inference of the closure's statement too
         final Scope closure = statement.enterClosure();
         closure.declareVariable("y", STRING_TERM);

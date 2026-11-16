@@ -27,8 +27,10 @@ import com.apple.foundationdb.record.ir.fragments.IArrayType;
 import com.apple.foundationdb.record.ir.fragments.IAssignmentFragment;
 import com.apple.foundationdb.record.ir.fragments.IBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IClosureFragment;
+import com.apple.foundationdb.record.ir.fragments.IConsumeFragment;
 import com.apple.foundationdb.record.ir.fragments.IEnumType;
 import com.apple.foundationdb.record.ir.fragments.IExpressionFragment;
+import com.apple.foundationdb.record.ir.fragments.IForFragment;
 import com.apple.foundationdb.record.ir.fragments.IFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionCallFragment;
@@ -37,6 +39,7 @@ import com.apple.foundationdb.record.ir.fragments.IFunctionDefinitionFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionReferenceFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
+import com.apple.foundationdb.record.ir.fragments.IIfFragment;
 import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
 import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
@@ -46,19 +49,23 @@ import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
 import com.apple.foundationdb.record.ir.fragments.IType;
+import com.apple.foundationdb.record.ir.fragments.ITypeAliasFragment;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
 import com.apple.foundationdb.record.ir.fragments.IVariableReferenceFragment;
 import com.apple.foundationdb.record.ir.fragments.IVectorType;
+import com.apple.foundationdb.record.ir.fragments.IYieldBreakFragment;
 import com.apple.foundationdb.record.ir.fragments.IYieldFragment;
 import com.apple.foundationdb.record.ir.fragments.ParserHelpers;
 import com.apple.foundationdb.record.ir.generated.FrlIrParser;
 import com.apple.foundationdb.record.ir.generated.FrlIrParserBaseVisitor;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import org.antlr.v4.runtime.tree.ParseTree;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -69,18 +76,21 @@ import java.util.function.Supplier;
  *
  * <p>The visitor keeps the {@link Scope} of the construct it is in. A function definition declares its type parameters
  * and its parameters in a scope of their own, a block opens a scope for what its statements declare, and leaving a
- * construct returns to the enclosing scope. A name in a type is a type only if it is a type parameter or an extern type
- * in scope, so a misspelled type is an error. Names are resolved once, here: a reference to a function refers to the
- * definition or declaration that its name stands for where the reference is, and an extern type to its declaration.
- * A visitor holds the scope of one traversal, so each parse uses a new visitor.</p>
+ * construct returns to the enclosing scope. A name in a type is a type only if it is a type parameter, an extern type,
+ * or a type alias in scope, so a misspelled type is an error. Names are resolved once, here: a reference to a function
+ * refers to the definition or declaration that its name stands for where the reference is, an extern type to its
+ * declaration, and a type alias is replaced by its type. A visitor holds the scope of one traversal, so each parse uses
+ * a new visitor.</p>
  *
  * <p>Statements are typed as they are built. The visitor first infers a statement: it declares what the statement
  * declares, and it adds the statement's equations to the {@code TypeInference} of the statement's scope. It then
  * solves the inference and builds the fragments from the solved types. The statements of a closure or a stream block
  * join the inference of the statement that the closure or the stream block is in, so they are built only once that
  * statement is solved; every other statement, including every statement of a function body, is solved and built on
- * its own. A statement and an expression thus produce something to build later rather than a fragment, so they are
- * visited by visitors of their own, one method for each alternative of the grammar.</p>
+ * its own. The statements of the blocks of an if and a for are typed as the statements around the if or the for: they
+ * join the inference of the if or the for where that is the inference of a closure or a stream block, and are solved
+ * and built one by one otherwise. A statement and an expression thus produce something to build later rather than a
+ * fragment, so they are visited by visitors of their own, one method for each alternative of the grammar.</p>
  */
 @API(API.Status.EXPERIMENTAL)
 public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
@@ -99,8 +109,22 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     private static final String YIELD_OUTSIDE_STREAM =
             "a yield must be in a stream block, and not in a function or a closure within one";
 
+    /**
+     * The message of the exception if a consume is not a statement of a stream block.
+     */
     @Nonnull
-    private Scope scope = Scope.root();
+    private static final String CONSUME_OUTSIDE_STREAM =
+            "a consume must be in a stream block, and not in a function or a closure within one";
+
+    /**
+     * The message of the exception if the cases of a consume are not those that a consume can have.
+     */
+    @Nonnull
+    private static final String CONSUME_CASES =
+            "a consume has one .value(x) case and one .stopped(reason) case, and at most one .end case besides";
+
+    @Nonnull
+    private Scope scope = prelude();
 
     //
     // Programs and statements
@@ -110,6 +134,18 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     @Override
     public IProgramFragment visitProgram(@Nonnull final FrlIrParser.ProgramContext ctx) {
         return new IProgramFragment(statements(ctx.statements(), null).builder().get());
+    }
+
+    /**
+     * Returns the outermost scope, in which FRL-IR declares the types that it provides itself, rather than a program:
+     * the alias {@code stopReason} of the enum of the reasons why a stream stops, see
+     * {@link IConsumeFragment#STOP_REASON_TYPE}.
+     */
+    @Nonnull
+    private static Scope prelude() {
+        final Scope root = Scope.root();
+        root.declareTypeAlias(IConsumeFragment.STOP_REASON_ALIAS);
+        return root;
     }
 
     /**
@@ -147,11 +183,11 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     private PendingStatement statement(@Nonnull final FrlIrParser.StatementContext ctx,
                                        @Nullable final TypeInference.Term expectedValue) {
         if (scope.inference() != null) {
-            return new StatementInferenceVisitor(expectedValue).visit(ctx);
+            return new StatementInferenceVisitor(expectedValue, false).visit(ctx);
         }
         final TypeInference statementInference = new TypeInference();
         return inScope(scope.enterStatement(statementInference), () -> {
-            final PendingStatement pending = new StatementInferenceVisitor(expectedValue).visit(ctx);
+            final PendingStatement pending = new StatementInferenceVisitor(expectedValue, true).visit(ctx);
             statementInference.solve();
             final IStatementFragment statement = pending.builder().get();
             return new PendingStatement(() -> statement, pending.valueType());
@@ -226,6 +262,17 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
+     * Builds a type alias and declares it in the current scope. The type is read before the alias is declared, so it
+     * cannot refer to the alias.
+     */
+    @Nonnull
+    private ITypeAliasFragment typeAlias(@Nonnull final FrlIrParser.TypeAliasContext ctx) {
+        final ITypeAliasFragment alias = new ITypeAliasFragment(name(ctx.identifier()), type(ctx.type()));
+        scope.declareTypeAlias(alias);
+        return alias;
+    }
+
+    /**
      * Builds the package statement of a program and declares the package, which the outermost scope then holds. Only
      * the first statement of a program can name a package, so the package is in effect for everything the program
      * declares.
@@ -291,22 +338,42 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     //
 
     /**
+     * Infers the type of an expression, as the overload for a primary expression and its postfixes does.
+     */
+    @Nonnull
+    private Inferred infer(@Nonnull final FrlIrParser.ExpressionContext ctx,
+                           @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
+        return infer(ctx.primaryExpression(), ctx.postfix(), expected, mismatch);
+    }
+
+    /**
+     * Infers the type of the expression in front of the block of an if, a for, or a consume, whose calls take no
+     * trailing closure, as the overload for a primary expression and its postfixes does.
+     */
+    @Nonnull
+    private Inferred infer(@Nonnull final FrlIrParser.ConditionExpressionContext ctx,
+                           @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
+        return infer(ctx.primaryExpression(), ctx.conditionPostfix(), expected, mismatch);
+    }
+
+    /**
      * Infers the type of an expression, a primary expression followed by postfixes, each of which applies to the
      * expression before it: a call, a trailing closure, or a dot call. The expected type, if there is one, is the
      * context of the expression: the type stated for a variable, the type of a parameter, or the result type of a body.
      * It is the context of the last postfix, the one whose result the expression is.
      *
+     * @param postfixes the postfixes, of the {@code postfix} or the {@code conditionPostfix} rule
      * @param mismatch the message of the exception if the expression cannot have the expected type
      */
     @Nonnull
-    private Inferred infer(@Nonnull final FrlIrParser.ExpressionContext ctx,
+    private Inferred infer(@Nonnull final FrlIrParser.PrimaryExpressionContext primary,
+                           @Nonnull final List<? extends ParseTree> postfixes,
                            @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
-        final List<FrlIrParser.PostfixContext> postfixes = ctx.postfix();
         if (postfixes.isEmpty()) {
-            return new ExpressionInferenceVisitor(expected, mismatch).visit(ctx.primaryExpression());
+            return new ExpressionInferenceVisitor(expected, mismatch).visit(primary);
         }
         // what a postfix applies to has no context of its own: its type follows from the call
-        Inferred expression = new ExpressionInferenceVisitor(null, mismatch).visit(ctx.primaryExpression());
+        Inferred expression = new ExpressionInferenceVisitor(null, mismatch).visit(primary);
         final int last = postfixes.size() - 1;
         for (int i = 0; i <= last; i++) {
             expression = new PostfixInferenceVisitor(expression, i == last ? expected : null, mismatch)
@@ -356,8 +423,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             @Nonnull final FrlIrParser.CallArgumentsContext ctx) {
         final ImmutableList.Builder<Function<TypeInference.Term, Inferred>> arguments = ImmutableList.builder();
         if (ctx.arguments() != null) {
-            ctx.arguments().expression().forEach(argument ->
-                    arguments.add(parameterType -> infer(argument, parameterType, ARGUMENT_MISMATCH)));
+            arguments.addAll(callArguments(ctx.arguments()));
         }
         final FrlIrParser.ClosureContext trailingClosure = ctx.closure();
         if (trailingClosure != null) {
@@ -365,6 +431,20 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                     new ExpressionInferenceVisitor(parameterType, ARGUMENT_MISMATCH).inferClosure(trailingClosure));
         }
         return arguments.build();
+    }
+
+    /**
+     * Returns the arguments between the parentheses of a call, each of which is inferred with the type of its parameter
+     * as its context.
+     */
+    @Nonnull
+    private ImmutableList<Function<TypeInference.Term, Inferred>> callArguments(
+            @Nonnull final FrlIrParser.ArgumentsContext ctx) {
+        return ctx.expression()
+                .stream()
+                .<Function<TypeInference.Term, Inferred>>map(argument ->
+                        parameterType -> infer(argument, parameterType, ARGUMENT_MISMATCH))
+                .collect(ImmutableList.toImmutableList());
     }
 
     /**
@@ -513,8 +593,9 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
     /**
      * Resolves the name of a type: to the type parameter that the nearest enclosing function declares by that name, or
-     * to the extern type that the nearest enclosing scope declares by it. Its nullability is applied by the
-     * {@code valueType} around it.
+     * to the extern type or the type alias that the nearest enclosing scope declares by it; a type alias resolves to
+     * the type that it stands for. Its nullability is applied by the {@code valueType} around it, which rejects the
+     * {@code ?} after an alias of a nullable type.
      */
     @Nonnull
     @Override
@@ -761,9 +842,18 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
          */
         @Nullable
         private final TypeInference.Term expectedValue;
+        /**
+         * Whether the statement has an inference of its own, as a statement of a program or of a function body has,
+         * rather than joining the inference of a closure or a stream block. The statements of the blocks of an if or a
+         * for are then typed one by one as well, so that a statement in such a block is typed as it would be in place
+         * of the if or the for.
+         */
+        private final boolean hasOwnInference;
 
-        private StatementInferenceVisitor(@Nullable final TypeInference.Term expectedValue) {
+        private StatementInferenceVisitor(@Nullable final TypeInference.Term expectedValue,
+                                          final boolean hasOwnInference) {
             this.expectedValue = expectedValue;
+            this.hasOwnInference = hasOwnInference;
         }
 
         @Nonnull
@@ -785,6 +875,12 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         public PendingStatement visitTypeDeclarationStatement(
                 @Nonnull final FrlIrParser.TypeDeclarationStatementContext ctx) {
             return PendingStatement.built(typeDeclaration(ctx.typeDeclaration()));
+        }
+
+        @Nonnull
+        @Override
+        public PendingStatement visitTypeAliasStatement(@Nonnull final FrlIrParser.TypeAliasStatementContext ctx) {
+            return PendingStatement.built(typeAlias(ctx.typeAlias()));
         }
 
         @Nonnull
@@ -823,6 +919,170 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             final Inferred value = infer(ctx.yieldValue().expression(), elementType,
                     "a yielded value must be of the element type of its stream");
             return new PendingStatement(() -> new IYieldFragment(value.builder().get()), null);
+        }
+
+        /**
+         * Infers a yield break, which can be where a yield can be. Its reason, if it has one, is a {@code stopReason},
+         * which is the context of the reason.
+         */
+        @Nonnull
+        @Override
+        public PendingStatement visitYieldBreakStatement(@Nonnull final FrlIrParser.YieldBreakStatementContext ctx) {
+            if (scope.yieldElementType() == null) {
+                throw new IllegalArgumentException(YIELD_OUTSIDE_STREAM);
+            }
+            final FrlIrParser.ExpressionContext reason = ctx.yieldBreak().expression();
+            if (reason == null) {
+                return PendingStatement.built(new IYieldBreakFragment(null));
+            }
+            final Inferred inferredReason = infer(reason, TypeInference.known(IConsumeFragment.STOP_REASON_TYPE),
+                    "the reason of a yield break must be a stopReason");
+            return new PendingStatement(() -> new IYieldBreakFragment(inferredReason.builder().get()), null);
+        }
+
+        @Nonnull
+        @Override
+        public PendingStatement visitIfStatement(@Nonnull final FrlIrParser.IfStatementContext ctx) {
+            final Supplier<IIfFragment> conditional = conditional(ctx.conditional());
+            return new PendingStatement(conditional::get, null);
+        }
+
+        /**
+         * Infers an if, also one that follows an {@code else}, which becomes the only statement of the else block. The
+         * condition is a boolean, which is its context. The condition of an else if joins the inference of the if, as
+         * the condition of the if does; the two conditions share no inference variables, so their types are those that
+         * each would have on its own.
+         */
+        @Nonnull
+        private Supplier<IIfFragment> conditional(@Nonnull final FrlIrParser.ConditionalContext ctx) {
+            final Inferred condition = infer(ctx.conditionExpression(),
+                    TypeInference.known(new IPrimitiveType(IPrimitiveType.Kind.BOOLEAN, false)),
+                    "the condition of an if must be a boolean");
+            final Supplier<IBlockFragment> thenBlock = block(ctx.thenBlock);
+            final Supplier<IBlockFragment> elseBlock;
+            if (ctx.elseIf != null) {
+                final Supplier<IIfFragment> elseIf = inScope(scope.enterBlock(), () -> conditional(ctx.elseIf));
+                elseBlock = () -> new IBlockFragment(ImmutableList.of(elseIf.get()));
+            } else if (ctx.elseBlock != null) {
+                elseBlock = block(ctx.elseBlock);
+            } else {
+                elseBlock = null;
+            }
+            return () -> new IIfFragment(condition.builder().get(), thenBlock.get(),
+                    elseBlock == null ? null : elseBlock.get());
+        }
+
+        /**
+         * Infers a for loop. The sequence is an array, whose element type is the type of the loop variable. The
+         * variable is declared after the sequence is inferred, so the sequence cannot refer to it, and it is declared
+         * in a scope of the loop, which the body is nested in, as the parameters of a closure are. If the loop has an
+         * inference of its own, the statements of the body are typed one by one, so the inference of the loop is
+         * solved before them, and the variable has the type that the sequence determines without the body.
+         */
+        @Nonnull
+        @Override
+        public PendingStatement visitForStatement(@Nonnull final FrlIrParser.ForStatementContext ctx) {
+            final FrlIrParser.ForLoopContext loop = ctx.forLoop();
+            final TypeInference inference = inference();
+            final TypeInference.Term elementType = inference.unknown();
+            final Inferred sequence = infer(loop.conditionExpression(), inference.array(elementType),
+                    "a for loop must iterate over an array that is not nullable");
+            final TypeInference.Term variableType;
+            if (hasOwnInference) {
+                inference.solve();
+                variableType = TypeInference.known(TypeInference.resolve(elementType));
+            } else {
+                variableType = elementType;
+            }
+            final String variable = name(loop.identifier());
+            final Supplier<IBlockFragment> body = inScope(blockScope(), () -> {
+                scope.declareVariable(variable, variableType);
+                return block(loop.block());
+            });
+            return new PendingStatement(() -> new IForFragment(variable, sequence.builder().get(), body.get()), null);
+        }
+
+        /**
+         * Infers a consume, which can be where a yield can be, since its stopped case stops or ends the stream block
+         * that it is in. The consumed expression is a stream, whose element type is the type of the binding of the
+         * value case; the binding of the stopped case is a {@code stopReason}. The consume itself checks that the
+         * stopped case ends with a yield break on every path once it is built.
+         */
+        @Nonnull
+        @Override
+        public PendingStatement visitConsumeStatement(@Nonnull final FrlIrParser.ConsumeStatementContext ctx) {
+            if (scope.yieldElementType() == null) {
+                throw new IllegalArgumentException(CONSUME_OUTSIDE_STREAM);
+            }
+            final FrlIrParser.ConsumeLoopContext loop = ctx.consumeLoop();
+            final TypeInference inference = inference();
+            final TypeInference.Term elementType = inference.unknown();
+            final Inferred stream = infer(loop.conditionExpression(), inference.stream(elementType),
+                    "a consume must consume a stream");
+            Supplier<IConsumeFragment.Case> valueCase = null;
+            Supplier<IConsumeFragment.Case> endCase = null;
+            Supplier<IConsumeFragment.Case> stoppedCase = null;
+            for (final FrlIrParser.ConsumeCaseContext consumeCase : loop.consumeCase()) {
+                switch (name(consumeCase.kind)) {
+                    case "value" -> {
+                        Preconditions.checkArgument(valueCase == null && consumeCase.binding != null, CONSUME_CASES);
+                        valueCase = consumeCase(consumeCase, elementType);
+                    }
+                    case "end" -> {
+                        Preconditions.checkArgument(endCase == null && consumeCase.binding == null, CONSUME_CASES);
+                        endCase = consumeCase(consumeCase, null);
+                    }
+                    case "stopped" -> {
+                        Preconditions.checkArgument(stoppedCase == null && consumeCase.binding != null, CONSUME_CASES);
+                        stoppedCase = consumeCase(consumeCase, TypeInference.known(IConsumeFragment.STOP_REASON_TYPE));
+                    }
+                    default -> throw new IllegalArgumentException(CONSUME_CASES);
+                }
+            }
+            Preconditions.checkArgument(valueCase != null && stoppedCase != null, CONSUME_CASES);
+            final Supplier<IConsumeFragment.Case> value = valueCase;
+            final Supplier<IConsumeFragment.Case> end = endCase;
+            final Supplier<IConsumeFragment.Case> stopped = stoppedCase;
+            return new PendingStatement(() -> new IConsumeFragment(stream.builder().get(), value.get(),
+                    end == null ? null : end.get(), stopped.get()), null);
+        }
+
+        /**
+         * Infers a case of a consume. Its binding, if it has one, is declared with the given type in a scope of the
+         * case, which the statements of the case are nested in.
+         */
+        @Nonnull
+        private Supplier<IConsumeFragment.Case> consumeCase(@Nonnull final FrlIrParser.ConsumeCaseContext ctx,
+                                                            @Nullable final TypeInference.Term bindingType) {
+            final String binding = ctx.binding == null ? null : name(ctx.binding);
+            final PendingStatements statements = inScope(scope.enterBlock(), () -> {
+                if (binding != null) {
+                    scope.declareVariable(binding, Objects.requireNonNull(bindingType));
+                }
+                return inScope(scope.enterBlock(), () -> statements(ctx.statements(), null));
+            });
+            return () -> new IConsumeFragment.Case(binding, new IBlockFragment(statements.builder().get()));
+        }
+
+        /**
+         * Infers the statements of a block of an if or a for. The block has a scope of its own, which inherits the
+         * element type of yields of the current scope, since the block runs as part of the block that the statement is
+         * in. The statements of the block join the inference of the statement, unless the statement has an inference
+         * of its own; they are then typed one by one, in a scope without an inference.
+         */
+        @Nonnull
+        private Supplier<IBlockFragment> block(@Nonnull final FrlIrParser.BlockContext ctx) {
+            final PendingStatements statements = inScope(blockScope(), () -> statements(ctx.statements(), null));
+            return () -> new IBlockFragment(statements.builder().get());
+        }
+
+        /**
+         * Returns the scope of a block of the statement, or of the scope that declares the variable of a for loop
+         * around its body, see {@link #block}.
+         */
+        @Nonnull
+        private Scope blockScope() {
+            return hasOwnInference ? scope.enterBlockWithoutInference() : scope.enterBlock();
         }
 
         @Nonnull
@@ -1019,9 +1279,10 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Infers a postfix of an expression, one method for each alternative of the {@code postfix} rule. Every postfix is a
-     * call: a call of the expression before it, with its arguments and its trailing closure, or a dot call of a function
-     * whose first argument is the expression before it.
+     * Infers a postfix of an expression, one method for each alternative of the {@code postfix} and the
+     * {@code conditionPostfix} rules. Every postfix is a call: a call of the expression before it, with its arguments
+     * and, outside the expression in front of a block, its trailing closure, or a dot call of a function whose first
+     * argument is the expression before it.
      */
     private final class PostfixInferenceVisitor extends FrlIrParserBaseVisitor<Inferred> {
         /**
@@ -1053,24 +1314,44 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             return inferCall(before, callArguments(ctx.callArguments()), expected, mismatch);
         }
 
+        @Nonnull
+        @Override
+        public Inferred visitDotCallPostfix(@Nonnull final FrlIrParser.DotCallPostfixContext ctx) {
+            return dotCall(ctx.identifier(), callArguments(ctx.callArguments()));
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitConditionCallPostfix(@Nonnull final FrlIrParser.ConditionCallPostfixContext ctx) {
+            return inferCall(before, callArguments(ctx.arguments()), expected, mismatch);
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitConditionDotCallPostfix(@Nonnull final FrlIrParser.ConditionDotCallPostfixContext ctx) {
+            return dotCall(ctx.identifier(), callArguments(ctx.arguments()));
+        }
+
         /**
          * Infers a dot call, {@code x.f(1)}, which calls the function {@code f} with {@code x} as its first argument. The
          * name is looked up among the functions only, so that a variable of the name does not hide the function.
          * {@code x} is inferred before the function is known, so its type gets no context from the function's first
          * parameter until it is unified with that parameter.
+         *
+         * @param arguments the arguments after the first one, in order
          */
         @Nonnull
-        @Override
-        public Inferred visitDotCallPostfix(@Nonnull final FrlIrParser.DotCallPostfixContext ctx) {
-            final Scope.FunctionBinding function = scope.lookupFunction(name(ctx.identifier()))
+        private Inferred dotCall(@Nonnull final FrlIrParser.IdentifierContext function,
+                                 @Nonnull final List<Function<TypeInference.Term, Inferred>> arguments) {
+            final Scope.FunctionBinding binding = scope.lookupFunction(name(function))
                     .orElseThrow(() -> new IllegalArgumentException("unknown function"));
             final Function<TypeInference.Term, Inferred> receiver = parameterType -> {
                 inference().unify(before.type(), parameterType, ARGUMENT_MISMATCH);
                 return before;
             };
-            return inferCall(functionReference(function), ImmutableList.<Function<TypeInference.Term, Inferred>>builder()
+            return inferCall(functionReference(binding), ImmutableList.<Function<TypeInference.Term, Inferred>>builder()
                     .add(receiver)
-                    .addAll(callArguments(ctx.callArguments()))
+                    .addAll(arguments)
                     .build(), expected, mismatch);
         }
     }
@@ -1125,8 +1406,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     private record PendingStatement(@Nonnull Supplier<IStatementFragment> builder,
                                     @Nullable TypeInference.Term valueType) {
         /**
-         * Returns a statement that is built already: a definition or a declaration, which involves no inference and
-         * has no value.
+         * Returns a statement that is built already, which involves no inference and has no value: a definition, a
+         * declaration, a type alias, or a yield break without a reason.
          */
         @Nonnull
         static PendingStatement built(@Nonnull final IStatementFragment statement) {

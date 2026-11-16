@@ -21,6 +21,7 @@
 package com.apple.foundationdb.record.ir.fragments;
 
 import com.apple.foundationdb.half.Half;
+import com.apple.foundationdb.record.RecordCursor;
 import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -28,6 +29,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+import java.util.Arrays;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -96,7 +99,21 @@ class IFragmentTest {
                 pinned(() -> new IAssignmentFragment("x", literal42()), -405760496),
                 pinned(() -> new IYieldFragment(literal42()), 467444080),
                 pinned(() -> new IStreamBlockFragment(intType(),
-                        new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42())))), 1105828874));
+                        new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42())))), 1105828874),
+                pinned(() -> new IYieldBreakFragment(null), -2130007403),
+                pinned(() -> new IYieldBreakFragment(new IVariableReferenceFragment("reason", stopReasonType())),
+                        -558334027),
+                pinned(IFragmentTest::stopReasonType, -1783468642),
+                pinned(() -> new ITypeAliasFragment("id", bigintType()), 1852341318),
+                pinned(() -> new IIfFragment(new IVariableReferenceFragment("c", booleanType()), emptyBlock(), null),
+                        -1255283727),
+                pinned(() -> new IForFragment("x",
+                        new IVariableReferenceFragment("xs", new IArrayType(false, intType())), emptyBlock()),
+                        1651197367),
+                pinned(() -> new IConsumeFragment.Case("x", emptyBlock()), -1344930928),
+                pinned(() -> new IConsumeFragment.Case(null, emptyBlock()), -1344934648),
+                pinned(() -> new IConsumeFragment(new IVariableReferenceFragment("s", new IStreamType(intType())),
+                        new IConsumeFragment.Case("x", emptyBlock()), null, stoppedCase()), 1470978896));
     }
 
     @ParameterizedTest
@@ -140,6 +157,14 @@ class IFragmentTest {
         final IPackageStatementFragment abc = abcPackage();
         final ITypeDeclarationFragment range = rangeDeclaration();
         final IExternType rangeType = new IExternType(range, false);
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", booleanType());
+        final IIfFragment anIf = new IIfFragment(c, emptyBlock, null);
+        final IVariableReferenceFragment xs = new IVariableReferenceFragment("xs", new IArrayType(false, intType));
+        final IForFragment aFor = new IForFragment("x", xs, emptyBlock);
+        final IVariableReferenceFragment s = new IVariableReferenceFragment("s", new IStreamType(intType));
+        final IConsumeFragment.Case valueCase = new IConsumeFragment.Case("x", emptyBlock);
+        final IConsumeFragment.Case stoppedCase = stoppedCase();
+        final IConsumeFragment aConsume = new IConsumeFragment(s, valueCase, null, stoppedCase);
         return Stream.of(
                 // primitive types: the kind, the nullability
                 Arguments.of(intType, bigintType),
@@ -233,6 +258,9 @@ class IFragmentTest {
                 Arguments.of(rangeType, new IExternType(new ITypeDeclarationFragment("interval", range.annotations(),
                         range.packageStatement()), false)),
                 Arguments.of(rangeType, rangeType.withNullability(true)),
+                // type aliases: the name, the type
+                Arguments.of(new ITypeAliasFragment("id", bigintType), new ITypeAliasFragment("key", bigintType)),
+                Arguments.of(new ITypeAliasFragment("id", bigintType), new ITypeAliasFragment("id", intType)),
                 // closures: the parameters, the result type, the body
                 Arguments.of(closure, new IClosureFragment(ImmutableList.of(), closure.resultType(), closure.body())),
                 Arguments.of(closure, new IClosureFragment(closure.parameters(), voidType(), closure.body())),
@@ -274,6 +302,31 @@ class IFragmentTest {
                         new IStreamBlockFragment(bigintType, emptyBlock)),
                 Arguments.of(new IStreamBlockFragment(intType, emptyBlock), new IStreamBlockFragment(intType,
                         new IBlockFragment(ImmutableList.of(new IYieldFragment(literal))))),
+                // yield breaks: the reason
+                Arguments.of(new IYieldBreakFragment(null),
+                        new IYieldBreakFragment(new IVariableReferenceFragment("reason", stopReasonType()))),
+                // ifs: the condition, the then block, the else block
+                Arguments.of(anIf, new IIfFragment(new IVariableReferenceFragment("d", booleanType()), emptyBlock,
+                        null)),
+                Arguments.of(anIf, new IIfFragment(c, nonEmptyBlock, null)),
+                Arguments.of(anIf, new IIfFragment(c, emptyBlock, emptyBlock)),
+                // for loops: the variable, the sequence, the body
+                Arguments.of(aFor, new IForFragment("y", xs, emptyBlock)),
+                Arguments.of(aFor, new IForFragment("x", new IVariableReferenceFragment("ys", xs.type()), emptyBlock)),
+                Arguments.of(aFor, new IForFragment("x", xs, nonEmptyBlock)),
+                // consumes: the stream, the value case, the end case, the stopped case; their cases: the binding, the
+                // body
+                Arguments.of(aConsume, new IConsumeFragment(new IVariableReferenceFragment("t", s.type()), valueCase,
+                        null, stoppedCase)),
+                Arguments.of(aConsume, new IConsumeFragment(s, new IConsumeFragment.Case("y", emptyBlock), null,
+                        stoppedCase)),
+                Arguments.of(aConsume, new IConsumeFragment(s, valueCase, new IConsumeFragment.Case(null, emptyBlock),
+                        stoppedCase)),
+                Arguments.of(aConsume, new IConsumeFragment(s, valueCase, null,
+                        new IConsumeFragment.Case("other", stoppedCase.body()))),
+                Arguments.of(valueCase, new IConsumeFragment.Case("y", emptyBlock)),
+                Arguments.of(valueCase, new IConsumeFragment.Case(null, emptyBlock)),
+                Arguments.of(valueCase, new IConsumeFragment.Case("x", nonEmptyBlock)),
                 // fragments of different kinds whose parts are equal
                 Arguments.of(emptyBlock, new IProgramFragment(ImmutableList.of())),
                 Arguments.of(new IFunctionDefinitionFragment.Parameter("x", intType), closureX),
@@ -287,7 +340,8 @@ class IFragmentTest {
                 Arguments.of(typeParameter("range"),
                         new IExternType(new ITypeDeclarationFragment("range", ImmutableList.of(), null), false)),
                 Arguments.of(new IPackageStatementFragment("range", ImmutableList.of()),
-                        new ITypeDeclarationFragment("range", ImmutableList.of(), null)));
+                        new ITypeDeclarationFragment("range", ImmutableList.of(), null)),
+                Arguments.of(new ITypeAliasFragment("x", intType), new IVariableReferenceFragment("x", intType)));
     }
 
     @ParameterizedTest
@@ -309,6 +363,7 @@ class IFragmentTest {
     @Nonnull
     static Stream<Arguments> bodiesAndResultTypes() {
         final IBlockFragment valueIsLiteral = new IBlockFragment(ImmutableList.of(literal42()));
+        final IVariableReferenceFragment condition = new IVariableReferenceFragment("c", booleanType());
         return Stream.of(
                 // a value of the result type
                 Arguments.of(valueIsLiteral, intType(), true),
@@ -326,7 +381,18 @@ class IFragmentTest {
                 // a block that yields is the body of no function or closure, since a yield belongs to a stream block
                 Arguments.of(new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42()))), voidType(), false),
                 Arguments.of(new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42()))),
-                        new IStreamType(intType()), false));
+                        new IStreamType(intType()), false),
+                // also not in a block of a statement of control flow, and it cannot break a stream or consume one
+                // either; a statement of control flow without them is a statement like any other
+                Arguments.of(new IBlockFragment(ImmutableList.of(new IIfFragment(condition,
+                        new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42()))), null))), voidType(),
+                        false),
+                Arguments.of(new IBlockFragment(ImmutableList.of(new IYieldBreakFragment(null))), voidType(), false),
+                Arguments.of(new IBlockFragment(ImmutableList.of(new IConsumeFragment(
+                        new IVariableReferenceFragment("s", new IStreamType(intType())),
+                        new IConsumeFragment.Case("x", emptyBlock()), null, stoppedCase()))), voidType(), false),
+                Arguments.of(new IBlockFragment(ImmutableList.of(new IIfFragment(condition, valueIsLiteral, null))),
+                        voidType(), true));
     }
 
     @ParameterizedTest
@@ -349,6 +415,17 @@ class IFragmentTest {
                 new IStreamBlockFragment(intType(), new IBlockFragment(ImmutableList.of(yieldOf42)));
         assertThat(stream.body().yields()).containsExactly(yieldOf42);
         assertThat(new IBlockFragment(ImmutableList.of(stream)).yields()).isEmpty();
+        // the blocks of statements of control flow run as part of the block, so their yields are yields of the block
+        final IIfFragment ifYields = new IIfFragment(new IVariableReferenceFragment("c", booleanType()),
+                new IBlockFragment(ImmutableList.of(yieldOf42)), new IBlockFragment(ImmutableList.of(yieldOf7)));
+        assertThat(new IBlockFragment(ImmutableList.of(new IForFragment("x",
+                new IVariableReferenceFragment("xs", new IArrayType(false, intType())),
+                new IBlockFragment(ImmutableList.of(ifYields))))).yields()).containsExactly(yieldOf42, yieldOf7);
+        assertThat(new IBlockFragment(ImmutableList.of(new IConsumeFragment(
+                new IVariableReferenceFragment("s", new IStreamType(intType())),
+                new IConsumeFragment.Case("x", new IBlockFragment(ImmutableList.of(yieldOf42))),
+                new IConsumeFragment.Case(null, new IBlockFragment(ImmutableList.of(yieldOf7))), stoppedCase())))
+                .yields()).containsExactly(yieldOf42, yieldOf7);
     }
 
     @Test
@@ -392,6 +469,54 @@ class IFragmentTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new IStreamBlockFragment(voidType(), emptyBlock()))
                 .isInstanceOf(IllegalArgumentException.class);
+        // the same holds for the blocks of statements of control flow, and for yield breaks and consumes
+        final IIfFragment ifYields =
+                new IIfFragment(new IVariableReferenceFragment("c", booleanType()), yieldsLiteral, null);
+        final IVariableReferenceFragment s = new IVariableReferenceFragment("s", new IStreamType(intType()));
+        assertThatThrownBy(() -> new IProgramFragment(ImmutableList.of(ifYields)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IStreamBlockFragment(bigintType(), new IBlockFragment(ImmutableList.of(ifYields))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IFunctionDefinitionFragment("f", ImmutableList.of(), ImmutableList.of(),
+                voidType(), new IBlockFragment(ImmutableList.of(new IYieldBreakFragment(null)))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IClosureFragment(ImmutableList.of(), voidType(), new IBlockFragment(
+                ImmutableList.of(new IConsumeFragment(s, new IConsumeFragment.Case("x", emptyBlock()), null,
+                        stoppedCase()))))).isInstanceOf(IllegalArgumentException.class);
+        // the condition of an if is a boolean that is not nullable, and a for loop iterates over an array that is not
+        // nullable
+        assertThatThrownBy(() -> new IIfFragment(literal42(), emptyBlock(), null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IIfFragment(new IVariableReferenceFragment("c",
+                booleanType().withNullability(true)), emptyBlock(), null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IForFragment("x", literal42(), emptyBlock()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IForFragment("x",
+                new IVariableReferenceFragment("xs", new IArrayType(true, intType())), emptyBlock()))
+                .isInstanceOf(IllegalArgumentException.class);
+        // a consume consumes a stream; its value case and its stopped case bind a name, and its end case binds none
+        assertThatThrownBy(() -> new IConsumeFragment(literal42(), new IConsumeFragment.Case("x", emptyBlock()), null,
+                stoppedCase())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IConsumeFragment(s, new IConsumeFragment.Case(null, emptyBlock()), null,
+                stoppedCase())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IConsumeFragment(s, new IConsumeFragment.Case("x", emptyBlock()),
+                new IConsumeFragment.Case("y", emptyBlock()), stoppedCase()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IConsumeFragment(s, new IConsumeFragment.Case("x", emptyBlock()), null,
+                new IConsumeFragment.Case(null, stoppedCase().body()))).isInstanceOf(IllegalArgumentException.class);
+        // every consume has a stopped case, since the reason of a stop has to be communicated outward
+        assertThatThrownBy(() -> new IConsumeFragment(s, new IConsumeFragment.Case("x", emptyBlock()), null, null))
+                .isInstanceOf(NullPointerException.class);
+        // the reason of a yield break is a stopReason, which is not nullable, and no other enum is one
+        assertThatThrownBy(() -> new IYieldBreakFragment(literal42())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IYieldBreakFragment(new IVariableReferenceFragment("reason",
+                stopReasonType().withNullability(true)))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IYieldBreakFragment(new IVariableReferenceFragment("reason",
+                new IEnumType(false, ImmutableList.of(new IEnumType.Value("TIME_LIMIT_REACHED", 2))))))
+                .isInstanceOf(IllegalArgumentException.class);
+        // the name of a type alias can be written
+        assertThatThrownBy(() -> new ITypeAliasFragment("", intType())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ITypeAliasFragment("a`b", intType())).isInstanceOf(IllegalArgumentException.class);
         // the parameters of a declared function have distinct names
         assertThatThrownBy(() -> new IFunctionDeclarationFragment("f", ImmutableList.of(),
                 ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", intType()),
@@ -430,6 +555,116 @@ class IFragmentTest {
                 .hasToString("`first range`");
     }
 
+    @Test
+    void stopReasonTypeMirrorsNoNextReasonsOfLimits() {
+        // a value for each reason why a cursor stops before its end, of the same name, numbered by its ordinal; the end
+        // of a stream is not a stop, so SOURCE_EXHAUSTED has no value
+        assertThat(IConsumeFragment.STOP_REASON_TYPE.values()).containsExactlyElementsOf(
+                Arrays.stream(RecordCursor.NoNextReason.values())
+                        .filter(RecordCursor.NoNextReason::isLimitReached)
+                        .map(reason -> new IEnumType.Value(reason.name(), reason.ordinal()))
+                        .collect(ImmutableList.toImmutableList()));
+        assertThat(IConsumeFragment.STOP_REASON_TYPE).isEqualTo(stopReasonType());
+        // a program names the enum by the alias stopReason
+        assertThat(IConsumeFragment.STOP_REASON_ALIAS)
+                .isEqualTo(new ITypeAliasFragment("stopReason", stopReasonType()));
+    }
+
+    @Test
+    void blocksOfControlFlowAreTheBlocksInOrder() {
+        final IBlockFragment first = new IBlockFragment(ImmutableList.of(literal42()));
+        final IBlockFragment second = new IBlockFragment(ImmutableList.of(new ILiteralFragment(7, intType())));
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", booleanType());
+        assertThat(new IIfFragment(c, first, null).blocks()).containsExactly(first);
+        assertThat(new IIfFragment(c, first, second).blocks()).containsExactly(first, second);
+        assertThat(new IForFragment("x", new IVariableReferenceFragment("xs", new IArrayType(false, intType())), first)
+                .blocks()).containsExactly(first);
+        final IVariableReferenceFragment s = new IVariableReferenceFragment("s", new IStreamType(intType()));
+        final IConsumeFragment.Case stopped = stoppedCase();
+        assertThat(new IConsumeFragment(s, new IConsumeFragment.Case("x", first), null, stopped).blocks())
+                .containsExactly(first, stopped.body());
+        assertThat(new IConsumeFragment(s, new IConsumeFragment.Case("x", first),
+                new IConsumeFragment.Case(null, second), stopped).blocks())
+                .containsExactly(first, second, stopped.body());
+    }
+
+    /**
+     * Returns bodies of stopped cases that end with a yield break on every path.
+     */
+    @Nonnull
+    static Stream<IBlockFragment> stoppedCaseBodiesEndingWithYieldBreak() {
+        final IYieldBreakFragment stop =
+                new IYieldBreakFragment(new IVariableReferenceFragment("reason", stopReasonType()));
+        final IYieldBreakFragment end = new IYieldBreakFragment(null);
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", booleanType());
+        final IBlockFragment elseIf = new IBlockFragment(ImmutableList.of(new IIfFragment(c,
+                new IBlockFragment(ImmutableList.of(end)), new IBlockFragment(ImmutableList.of(stop)))));
+        return Stream.of(
+                // a yield break with a reason stops the stream block, and one without a reason ends its stream
+                new IBlockFragment(ImmutableList.of(stop)),
+                new IBlockFragment(ImmutableList.of(end)),
+                // what comes before the yield break does not matter
+                new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42()), stop)),
+                // both blocks of an if end with a yield break, also those of an else if
+                new IBlockFragment(ImmutableList.of(new IIfFragment(c, new IBlockFragment(ImmutableList.of(stop)),
+                        new IBlockFragment(ImmutableList.of(end))))),
+                new IBlockFragment(ImmutableList.of(new IIfFragment(c, new IBlockFragment(ImmutableList.of(stop)),
+                        elseIf))),
+                // a consume whose end case ends with a yield break: its stopped case does too, and its value case
+                // returns to its loop
+                new IBlockFragment(ImmutableList.of(consumeOfT(new IConsumeFragment.Case(null,
+                        new IBlockFragment(ImmutableList.of(stop)))))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("stoppedCaseBodiesEndingWithYieldBreak")
+    void constructorStoppedCaseEndingWithYieldBreakSucceeds(@Nonnull final IBlockFragment body) {
+        final IConsumeFragment.Case stoppedCase = new IConsumeFragment.Case("reason", body);
+        assertThat(new IConsumeFragment(new IVariableReferenceFragment("s", new IStreamType(intType())),
+                new IConsumeFragment.Case("x", emptyBlock()), null, stoppedCase).stoppedCase()).isSameAs(stoppedCase);
+    }
+
+    /**
+     * Returns bodies of stopped cases with a path that does not end with a yield break.
+     */
+    @Nonnull
+    static Stream<IBlockFragment> stoppedCaseBodiesCompletingNormally() {
+        final IYieldBreakFragment stop =
+                new IYieldBreakFragment(new IVariableReferenceFragment("reason", stopReasonType()));
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", booleanType());
+        return Stream.of(
+                emptyBlock(),
+                new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42()))),
+                // a statement after the yield break
+                new IBlockFragment(ImmutableList.of(stop, new IYieldFragment(literal42()))),
+                // an if without an else, or with an else that completes normally
+                new IBlockFragment(ImmutableList.of(new IIfFragment(c, new IBlockFragment(ImmutableList.of(stop)),
+                        null))),
+                new IBlockFragment(ImmutableList.of(new IIfFragment(c, new IBlockFragment(ImmutableList.of(stop)),
+                        emptyBlock()))),
+                // a for loop completes normally after its last element
+                new IBlockFragment(ImmutableList.of(new IForFragment("x",
+                        new IVariableReferenceFragment("xs", new IArrayType(false, intType())),
+                        new IBlockFragment(ImmutableList.of(stop))))),
+                // a consume leaves its loop at the end of its stream, without an end case or after one that completes
+                // normally
+                new IBlockFragment(ImmutableList.of(consumeOfT(null))),
+                new IBlockFragment(ImmutableList.of(consumeOfT(new IConsumeFragment.Case(null, emptyBlock())))),
+                // the yield breaks of a stream block end or stop the stream of that stream block
+                new IBlockFragment(ImmutableList.of(new IStreamBlockFragment(intType(),
+                        new IBlockFragment(ImmutableList.of(new IYieldBreakFragment(null)))))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("stoppedCaseBodiesCompletingNormally")
+    void constructorStoppedCaseCompletingNormallyFails(@Nonnull final IBlockFragment body) {
+        // the reason of a stop has to be communicated outward, so every path through the stopped case ends with a yield
+        // break
+        assertThatThrownBy(() -> new IConsumeFragment(new IVariableReferenceFragment("s", new IStreamType(intType())),
+                new IConsumeFragment.Case("x", emptyBlock()), null, new IConsumeFragment.Case("reason", body)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     /**
      * Returns the arguments of {@link #equalsAndHashCodeCopiesAreEqualWithPinnedHashCode}: two fragments that
      * {@code builder} builds one after the other, which are equal but share no parts, and the hash code they must have.
@@ -442,6 +677,21 @@ class IFragmentTest {
     @Nonnull
     private static IPrimitiveType intType() {
         return new IPrimitiveType(IPrimitiveType.Kind.INT, false);
+    }
+
+    @Nonnull
+    private static IPrimitiveType booleanType() {
+        return new IPrimitiveType(IPrimitiveType.Kind.BOOLEAN, false);
+    }
+
+    /**
+     * Returns a type equal to {@code stopReason} that shares no parts with {@link IConsumeFragment#STOP_REASON_TYPE}.
+     */
+    @Nonnull
+    private static IEnumType stopReasonType() {
+        return new IEnumType(false, ImmutableList.of(new IEnumType.Value("RETURN_LIMIT_REACHED", 1),
+                new IEnumType.Value("TIME_LIMIT_REACHED", 2), new IEnumType.Value("SCAN_LIMIT_REACHED", 3),
+                new IEnumType.Value("BYTE_LIMIT_REACHED", 4)));
     }
 
     @Nonnull
@@ -519,5 +769,26 @@ class IFragmentTest {
     @Nonnull
     private static ILiteralFragment literal42() {
         return new ILiteralFragment(42, intType());
+    }
+
+    /**
+     * Returns {@code case .stopped(reason): yield break}, a stopped case that ends the stream.
+     */
+    @Nonnull
+    private static IConsumeFragment.Case stoppedCase() {
+        return new IConsumeFragment.Case("reason",
+                new IBlockFragment(ImmutableList.of(new IYieldBreakFragment(null))));
+    }
+
+    /**
+     * Returns a consume of the stream {@code t} with the given end case, whose value case has no statements, and whose
+     * stopped case stops for the reason of the stop of {@code t}.
+     */
+    @Nonnull
+    private static IConsumeFragment consumeOfT(@Nullable final IConsumeFragment.Case endCase) {
+        return new IConsumeFragment(new IVariableReferenceFragment("t", new IStreamType(intType())),
+                new IConsumeFragment.Case("y", emptyBlock()), endCase,
+                new IConsumeFragment.Case("other", new IBlockFragment(ImmutableList.of(new IYieldBreakFragment(
+                        new IVariableReferenceFragment("other", stopReasonType()))))));
     }
 }
