@@ -82,15 +82,21 @@ import java.util.function.Supplier;
  * declaration, and a type alias is replaced by its type. A visitor holds the scope of one traversal, so each parse uses
  * a new visitor.</p>
  *
- * <p>Statements are typed as they are built. The visitor first infers a statement: it declares what the statement
- * declares, and it adds the statement's equations to the {@code TypeInference} of the statement's scope. It then
- * solves the inference and builds the fragments from the solved types. The statements of a closure or a stream block
- * join the inference of the statement that the closure or the stream block is in, so they are built only once that
- * statement is solved; every other statement, including every statement of a function body, is solved and built on
- * its own. The statements of the blocks of an if and a for are typed as the statements around the if or the for: they
- * join the inference of the if or the for where that is the inference of a closure or a stream block, and are solved
- * and built one by one otherwise. A statement and an expression thus produce something to build later rather than a
- * fragment, so they are visited by visitors of their own, one method for each alternative of the grammar.</p>
+ * <p>The visitor types each statement in three steps, see {@code TypeInference} for the details and an example:</p>
+ * <ol>
+ *     <li>Infer: the visitor examines the statement. It declares the names of the statement in the scope, and it
+ *     states the equations of the statement in the {@code TypeInference} of the scope. The result is a builder, not a
+ *     fragment, because the types are not known yet.</li>
+ *     <li>Solve: the visitor calls {@code solve()} on the inference.</li>
+ *     <li>Build: the visitor calls the builder. The builder resolves the terms, and it makes the fragments.</li>
+ * </ol>
+ * A statement of a program or of a function body gets its own inference, and the visitor builds it immediately. A
+ * statement of a closure or a stream block uses the inference of the statement that the closure or the stream block is
+ * in. The visitor builds it together with that statement. The statements of the blocks of an if or a for are typed as
+ * the statements around the if or the for. The inference of a statement or an expression gives a builder, not a
+ * fragment. So separate visitors infer them, with one method for each alternative of the grammar:
+ * {@code StatementInferenceVisitor}, {@code ExpressionInferenceVisitor}, {@code PostfixInferenceVisitor}, and
+ * {@code ClosureParameterInferenceVisitor}.
  */
 @API(API.Status.EXPERIMENTAL)
 public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
@@ -175,9 +181,14 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Infers a statement. A statement of a closure or a stream block joins the inference of the statement that the
-     * closure or the stream block is in, which its scope carries. Any other statement gets a scope with an inference of
-     * its own, and it is inferred, solved, and built right away.
+     * Infers a statement. If the current scope has an inference, the statement uses this inference. This is the case
+     * in a closure, in a stream block, and in a block of an if or a for that uses the inference of its statement. The
+     * builder of the statement then runs when the visitor builds the statement that owns the inference. If the current
+     * scope has no inference, the statement gets a new inference in a new statement scope. The visitor then infers,
+     * solves, and builds the statement immediately.
+     *
+     * <p>Example: in a function body, each statement gets a new inference. In {@code run { let a = 42; h(a) }}, the two
+     * statements of the closure use the inference of the statement {@code run { ... }}.</p>
      */
     @Nonnull
     private PendingStatement statement(@Nonnull final FrlIrParser.StatementContext ctx,
@@ -383,10 +394,16 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Infers the type of a call: the callee must be a function of the types of the arguments, and the result type of
-     * that function is the type of the call. The callee, and the expected type of the call, are unified with the
-     * function type before the arguments are inferred, so that a closure among the arguments, a trailing closure
-     * included, has the type of its parameter as its context.
+     * Infers the type of a call. The method makes a new variable for each argument and one for the result. It unifies
+     * the type of the callee with the function type of these variables, and the result variable with the expected
+     * type. Then it infers the arguments, each with its variable as the expected type. So a closure among the
+     * arguments, also a trailing closure, has the type of its parameter as its context before the visitor examines
+     * its body.
+     *
+     * <p>Example: in {@code apply({ x in h(x) }, 42)} with {@code apply<T, U>(f: (T) -> U, x: T): U}, the method makes
+     * {@code vP1}, {@code vP2}, and {@code vR}. It unifies {@code ((vT) -> vU, vT) -> vU} with
+     * {@code (vP1, vP2) -> vR}. So the closure gets the expected type {@code vP1}, which stands for
+     * {@code (vT) -> vU}, and {@code 42} gets {@code vP2}, which stands for the same type as {@code vT}.</p>
      *
      * @param arguments the arguments in order, each of which is inferred given the type of its parameter
      */
@@ -833,20 +850,29 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     //
 
     /**
-     * Infers a statement, one method for each alternative of the {@code statement} rule.
+     * Infers a statement, with one method for each alternative of the {@code statement} rule. Each method states the
+     * equations of the statement in the inference of the current scope, and it declares the names of the statement.
+     * It returns a {@link PendingStatement}: a builder for the fragment, and the term of the value if the statement is
+     * an expression.
+     *
+     * <p>Example: for {@code let a = 42}, the visitor makes the variable {@code vL} of the literal, and it declares
+     * {@code a} with the term {@code vL}. In a function body, the statement has its own inference. So {@code solve()}
+     * gives {@code vL := int} before the next statement. In a closure, the statement uses the inference of the
+     * statement around the closure. So a later statement {@code h(a)} with {@code h(y: bigint)} can still give
+     * {@code vL := bigint}.</p>
      */
     private final class StatementInferenceVisitor extends FrlIrParserBaseVisitor<PendingStatement> {
         /**
          * The expected type of the value of the statement, if the statement is the last one of a body whose value has
-         * an expected type.
+         * an expected type. Example: in {@code func f(): bigint { 42 }}, the statement {@code 42} has the expected
+         * type {@code bigint}.
          */
         @Nullable
         private final TypeInference.Term expectedValue;
         /**
-         * Whether the statement has an inference of its own, as a statement of a program or of a function body has,
-         * rather than joining the inference of a closure or a stream block. The statements of the blocks of an if or a
-         * for are then typed one by one as well, so that a statement in such a block is typed as it would be in place
-         * of the if or the for.
+         * Whether the statement has its own inference, as a statement of a program or of a function body has. If it
+         * has, the statements of the blocks of an if or a for also get their own inferences. So a statement in such a
+         * block gets the same types as at the place of the if or the for.
          */
         private final boolean hasOwnInference;
 
@@ -973,11 +999,16 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         }
 
         /**
-         * Infers a for loop. The sequence is an array, whose element type is the type of the loop variable. The
-         * variable is declared after the sequence is inferred, so the sequence cannot refer to it, and it is declared
-         * in a scope of the loop, which the body is nested in, as the parameters of a closure are. If the loop has an
-         * inference of its own, the statements of the body are typed one by one, so the inference of the loop is
-         * solved before them, and the variable has the type that the sequence determines without the body.
+         * Infers a for loop. The sequence is an array, and the element type of the array is the type of the loop
+         * variable. The visitor declares the variable after it infers the sequence, so the sequence cannot refer to
+         * it. The variable is in a scope of the loop, and the body is in a scope nested in it, as for the parameters
+         * of a closure.
+         *
+         * <p>If the loop has its own inference, the statements of the body get their own inferences too. Then the
+         * visitor calls {@code solve()} for the loop before it infers the body, and the variable gets a {@code Known}
+         * term. Example: with {@code numbers<T>(x: T): [T]}, the loop {@code for x in numbers(1) { h(x) }} in a
+         * function body makes {@code x} an int, so {@code h(y: bigint)} fails. In a closure, the body uses the
+         * inference of the loop, and {@code h(x)} makes {@code x} a bigint.</p>
          */
         @Nonnull
         @Override
@@ -1095,12 +1126,18 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Infers a primary expression, one method for each alternative of the {@code primaryExpression} and the
-     * {@code literal} rules.
+     * Infers a primary expression, with one method for each alternative of the {@code primaryExpression} and the
+     * {@code literal} rules. The result is an {@link Inferred}: the term of the expression, and a builder for its
+     * fragment. If the context requires a type, the visitor unifies the term with it, see {@link #fit}.
+     *
+     * <p>Example: the literal {@code 42} gets a new variable {@code vL} whose constraint permits only numeric types. In
+     * {@code f(42)} with {@code f(x: bigint)}, the expected type of {@code 42} stands for {@code bigint}. So
+     * {@code fit} gives {@code vL := bigint}, and after {@code solve()} the builder makes the literal {@code 42L}.</p>
      */
     private final class ExpressionInferenceVisitor extends FrlIrParserBaseVisitor<Inferred> {
         /**
-         * The type that the context of the expression requires, if any.
+         * The type that the context of the expression requires, if any. Examples: the type of a parameter, the type
+         * stated for a variable, and the result type of a body.
          */
         @Nullable
         private final TypeInference.Term expected;
@@ -1162,13 +1199,18 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         }
 
         /**
-         * Infers the type of a name. A variable has the type it was declared with. A reference to a function has the
-         * type of the function, in which new inference variables stand for the type parameters of the function; what
-         * they are solved as becomes the type arguments of the reference.
-         *
-         * <p>A variable that a closure or a stream block declares can have a type that the inference of their statement
-         * has not determined yet. A function nested in the closure or the stream block is typed by inferences of its
-         * own, so it can use such a variable only once the type is known.</p>
+         * Infers the type of a name. For a function, the method makes a reference with a new variable for each type
+         * parameter, see {@code TypeInference.instantiate}. For a variable, the method uses the term of the binding of
+         * the variable in the scope. The owner of the binding decides how:
+         * <ul>
+         *     <li>If the binding has no owner, or if the owner is the current inference, the reference uses the term
+         *     itself. Later equations of the statement can then still bind the variables in the term.</li>
+         *     <li>If the owner is another inference, the term must be resolved, and the reference uses a copy of its
+         *     type. So the current inference cannot bind a variable of another inference.</li>
+         * </ul>
+         * Example: in a function body, {@code let a = 42} and {@code let b = a} have different inferences. So
+         * {@code b} gets a copy of the type of {@code a}, which is {@code int}. A function nested in a closure can use
+         * a variable of the closure only if the type of the variable is known already.
          */
         @Nonnull
         @Override
@@ -1222,13 +1264,17 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         }
 
         /**
-         * Infers the type of a closure, also of a trailing closure. A parameter type or a result type that the closure
-         * does not state is a new inference variable. The closure's function type is unified with the expected type
-         * before the body is inferred, so that the context determines the types that the closure leaves out and the
-         * body sees them; the closure does not need {@link #fit} afterwards. The scope of the closure inherits the
-         * inference of the statement that the closure is in, so the body joins it, but not the element type of a stream
-         * block around the closure: a closure cannot yield. A result type that neither the closure nor the context
-         * states becomes the type of the value of the body, or {@code void} if the body has no value.
+         * Infers the type of a closure, also of a trailing closure. A parameter or a result without a stated type gets
+         * a new variable. The method unifies the function type of the closure with the expected type before it
+         * infers the body. So the context fixes the types that the closure leaves out, and the body sees them. The
+         * closure then needs no {@link #fit}. The scope of the closure uses the inference of the statement that the
+         * closure is in, so the statements of the body use it too. The scope has no element type of yields, because a
+         * closure cannot yield. If neither the closure nor the context states the result type, the result type is the
+         * type of the value of the body, or {@code void} if the body has no value.
+         *
+         * <p>Example: the closure {@code { x in h(x) }} with the expected type {@code (vT) -> vU} gets the term
+         * {@code (vX) -> vC}. The method unifies the two, which gives {@code vX := vT} and {@code vC := vU}. Then the
+         * body {@code h(x)} with {@code h(y: bigint): string} gives {@code vT := bigint} and {@code vU := string}.</p>
          */
         @Nonnull
         private Inferred inferClosure(@Nonnull final FrlIrParser.ClosureContext closure) {
@@ -1279,10 +1325,16 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Infers a postfix of an expression, one method for each alternative of the {@code postfix} and the
-     * {@code conditionPostfix} rules. Every postfix is a call: a call of the expression before it, with its arguments
-     * and, outside the expression in front of a block, its trailing closure, or a dot call of a function whose first
-     * argument is the expression before it.
+     * Infers a postfix of an expression, with one method for each alternative of the {@code postfix} and the
+     * {@code conditionPostfix} rules. Each postfix is a call. It is a call of the expression before it, or a dot call
+     * of a function with the expression before it as the first argument. A trailing closure is the last argument,
+     * except in the expression in front of a block. Each call goes through {@link FrlIrFragmentVisitor#inferCall}, so
+     * each argument has the type of its parameter as its expected type.
+     *
+     * <p>Example: in {@code xs.map { x in x }} with {@code map<T, U>(xs: [T], f: (T) -> U): [U]} and
+     * {@code xs: [int]}, the dot call unifies the type of {@code xs} with the first parameter, which gives
+     * {@code vT := int}. The closure then has an expected type that stands for {@code (int) -> vU}. So its parameter
+     * {@code x} is an int, and its body gives {@code vU := int}.</p>
      */
     private final class PostfixInferenceVisitor extends FrlIrParserBaseVisitor<Inferred> {
         /**
@@ -1357,8 +1409,10 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Returns the parameters of a closure, one method for each alternative of the {@code closureParameterClause} rule.
-     * A parameter that does not state its type has a new inference variable as its type.
+     * Returns the parameters of a closure, with one method for each alternative of the {@code closureParameterClause}
+     * rule. A parameter with a stated type gets a {@code Known} term. A parameter without a stated type gets a new
+     * variable, which the context of the closure or its body fixes later. Example: in {@code { (x, y: int) in x }},
+     * {@code x} gets a new variable {@code vX}, and {@code y} gets the term {@code known(int)}.
      */
     private final class ClosureParameterInferenceVisitor
             extends FrlIrParserBaseVisitor<ImmutableList<ClosureParameter>> {
@@ -1388,25 +1442,29 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * An expression whose type is being inferred: its type as a term of the inference of its statement, and how to
-     * build the expression once the statement is solved and its types are known.
+     * An expression during inference: the term of its type, and a builder for its fragment. The builder calls
+     * {@code resolve} on its terms, so call it only after {@code solve()} ran for the inference of the statement.
+     * Example: the literal {@code 42} gives the term {@code vL}, and a builder that makes an {@code ILiteralFragment}
+     * with the type that {@code vL} resolves to.
      *
-     * @param type the type of the expression
-     * @param builder builds the expression; it must be called only after the inference is solved
+     * @param type the term of the type of the expression
+     * @param builder builds the expression; call it only after the inference is solved
      */
     private record Inferred(@Nonnull TypeInference.Term type, @Nonnull Supplier<IExpressionFragment> builder) {
     }
 
     /**
-     * A statement whose types are being inferred, and how to build it once they are known.
+     * A statement during inference: a builder for its fragment, and the term of its value. Only an expression
+     * statement has a value. If the statement is the last one of a body, its value is the value of the body.
      *
-     * @param builder builds the statement; it must be called only after the inference is solved
-     * @param valueType the type of the statement's value if the statement is an expression, and {@code null} otherwise
+     * @param builder builds the statement; call it only after the inference is solved
+     * @param valueType the term of the value of the statement if the statement is an expression, and {@code null}
+     *        otherwise
      */
     private record PendingStatement(@Nonnull Supplier<IStatementFragment> builder,
                                     @Nullable TypeInference.Term valueType) {
         /**
-         * Returns a statement that is built already, which involves no inference and has no value: a definition, a
+         * Returns a statement that is built already. Such a statement has no terms and no value: a definition, a
          * declaration, a type alias, or a yield break without a reason.
          */
         @Nonnull
@@ -1416,10 +1474,12 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Statements whose types are being inferred, and how to build them once they are known.
+     * Statements during inference: one builder for all of them, and the term of their value. The value is the value of
+     * the last statement if that statement is an expression. Example: the body of {@code { x in h(x) }} has the value
+     * term of {@code h(x)}, the result type of the call.
      *
-     * @param builder builds the statements; it must be called only after the inference is solved
-     * @param valueType the type of the value of the statements, the value of the last one if it is an expression, and
+     * @param builder builds the statements; call it only after the inference is solved
+     * @param valueType the term of the value of the statements, the value of the last one if it is an expression, and
      *        {@code null} if they have no value
      */
     private record PendingStatements(@Nonnull Supplier<ImmutableList<IStatementFragment>> builder,
@@ -1440,10 +1500,11 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * A parameter of a closure whose type is being inferred.
+     * A parameter of a closure during inference.
      *
      * @param name the name of the parameter
-     * @param type the type of the parameter, an inference variable if the closure does not state it
+     * @param type the term of the type of the parameter: a {@code Known} term if the closure states the type, and a
+     *        new variable otherwise
      */
     private record ClosureParameter(@Nonnull String name, @Nonnull TypeInference.Term type) {
     }

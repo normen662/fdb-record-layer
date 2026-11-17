@@ -40,45 +40,86 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Infers the types of one statement: the type of every literal in it, the type arguments of every reference to a
- * generic function in it, and the types that its closures leave out.
+ * Infers the types of one statement, together with the closures and stream blocks in it. The visitor makes one
+ * inference for each statement that it types on its own, see {@code FrlIrFragmentVisitor}. An inference finds the
+ * types that a program leaves out:
+ * <ul>
+ *     <li>the type of each literal;</li>
+ *     <li>the type arguments of each reference to a generic function;</li>
+ *     <li>the parameter types and the result type of each closure that does not state them.</li>
+ * </ul>
  *
- * <p>A type that is not known yet is an inference variable. A statement requires types to be equal: the type of an
- * argument and the type of its parameter, the type stated for a variable and the type of its expression. FRL-IR has
- * neither subtypes nor promotions, so every requirement is an equation, and {@link #unify} solves the equations as they
- * are added; their order does not matter. The variable of a literal can only become a type that the literal can denote.
- * Once the statement has added all of its equations, {@link #solve()} gives every literal whose type is still open the
- * default type of the literal, and {@link #resolve} turns the terms of the statement into types.</p>
+ * <p>A type that the visitor does not know yet is an inference variable, a {@link Variable}. A {@link Term} is a type
+ * that can contain inference variables. FRL-IR has no subtypes and no type promotion. So each requirement on types is
+ * an equation: two terms must stand for the same type. {@link #unify} solves each equation immediately. It binds open
+ * variables, or it fails if the two terms cannot stand for the same type. The order of the equations does not change
+ * the result.</p>
  *
- * <p>The unit of inference is a statement outside closures and stream blocks, together with every closure and stream
- * block in it: their statements join the inference of the statement that they are in, because the types of a closure's
- * parameters, and the element type of a stream block, can come from anywhere in that statement, as in
- * {@code apply({ x in x }, 1)}. Every other statement, including every statement of a function body, is solved on its
- * own: what it declares has a type when the statement is complete, and later statements do not change it. So in a
- * function body {@code let a = 42} makes {@code a} an int, while in a closure a later {@code let b: bigint = a} can
- * still make it a bigint.</p>
+ * <p>An inference has three phases:</p>
+ * <ol>
+ *     <li>The visitor makes terms, and it states equations between them with {@link #unify}.</li>
+ *     <li>The visitor calls {@link #solve()}, which gives a default type to each open variable with a literal
+ *     constraint.</li>
+ *     <li>The builders of the fragments call {@link #resolve}, which converts each term to an {@link IType}.</li>
+ * </ol>
  *
- * <p>Nullability is a property of a type rather than a wrapper around it, so a type parameter {@code T} that occurs as
- * {@code T?} stands for its type made nullable. Matching {@code T?} with {@code int?} makes {@code T} an {@code int},
- * unless {@code T} must be nullable itself.</p>
+ * <p>Example: the third line of this program states no type.</p>
+ * <pre>{@code
+ * extern func apply<T, U>(f: (T) -> U, x: T): U
+ * extern func h(y: bigint): string
+ * let s = apply({ x in h(x) }, 42)
+ * }</pre>
+ * In the steps below, {@code vT}, {@code vU}, and the other names that start with {@code v} are inference variables.
+ * {@code A := B} means that {@link #unify} binds the variable {@code A} to the term {@code B}.
+ * <ol>
+ *     <li>The reference to {@code apply} gets the term {@code ((vT) -> vU, vT) -> vU}, see {@link #instantiate}.</li>
+ *     <li>The call unifies this term with {@code (vP1, vP2) -> vR}, which gives {@code vP1 := (vT) -> vU},
+ *     {@code vT := vP2}, and {@code vU := vR}. The visitor does this before it infers the arguments. So each argument
+ *     has an expected type.</li>
+ *     <li>The closure gets the term {@code (vX) -> vC}. The visitor unifies it with the expected type {@code vP1},
+ *     which gives {@code vX := vP2} and {@code vC := vR}.</li>
+ *     <li>The body {@code h(x)} gives a string, and this value is the result of the closure: {@code vR := string}. The
+ *     argument {@code x} must be a bigint: {@code vP2 := bigint}.</li>
+ *     <li>The literal {@code 42} gets {@code vL}, whose constraint permits only numeric types. Its expected type is
+ *     {@code vP2}, which is a bigint now: {@code vL := bigint}.</li>
+ *     <li>{@link #solve()} changes nothing, because no variable is open.</li>
+ *     <li>{@link #resolve} gives the types: {@code x} is a bigint, the closure is {@code (bigint) -> string},
+ *     {@code 42} is a bigint, the type arguments of {@code apply} are {@code bigint} and {@code string}, and {@code s}
+ *     is a string.</li>
+ * </ol>
+ *
+ * <p>The unit of inference is a statement outside closures and stream blocks, together with each closure and each
+ * stream block in it. Their statements use the inference of the statement that they are in, because the context of a
+ * closure can come from any part of that statement, as in {@code apply({ x in x }, 1)}. Each other statement has its
+ * own inference, also each statement of a function body. So {@code let a = 42} in a function body makes {@code a} an
+ * int. In a closure, a later {@code let b: bigint = a} can still make {@code a} a bigint.</p>
+ *
+ * <p>Nullability is a property of a type, not a wrapper around a type. So a type parameter {@code T} that occurs as
+ * {@code T?} stands for its type, made nullable. The equation {@code T? = int?} makes {@code T} an {@code int}, unless
+ * {@code T} must be nullable itself.</p>
  */
 final class TypeInference {
 
     /**
-     * The order in which a literal picks its default type among the types it can denote.
+     * The order in which an open variable picks its default type in {@link #solve()}: the first kind in this list
+     * that its constraint permits. So an integer literal gets {@code int}, and a floating-point literal gets
+     * {@code double}.
      */
     @Nonnull
     private static final ImmutableList<IPrimitiveType.Kind> DEFAULT_KINDS = ImmutableList.of(IPrimitiveType.Kind.INT,
             IPrimitiveType.Kind.DOUBLE, IPrimitiveType.Kind.STRING, IPrimitiveType.Kind.BOOLEAN);
 
     /**
-     * The inference variables of the statement, in the order they were created.
+     * The inference variables that this inference made, in the order of their creation. {@link #solve()} examines
+     * them.
      */
     @Nonnull
     private final List<Variable> variables = new ArrayList<>();
 
     /**
-     * Returns a term for a type that is known. Such a term belongs to no inference, so any inference can use it.
+     * Returns a term for a known type. Such a term contains no variables, so each inference can use it, and no
+     * inference can change it. The visitor uses it, for example, for a stated type, as in {@code let x: bigint = 42},
+     * and for the type of a function parameter.
      *
      * @param type the type
      * @return a term without inference variables
@@ -89,7 +130,8 @@ final class TypeInference {
     }
 
     /**
-     * Returns whether a term stands for a type that is known, i.e. whether it contains no open inference variable.
+     * Returns whether a term contains no open variable, so that {@link #resolve} cannot fail for it. The visitor uses
+     * this method before it copies the type of a variable of another inference.
      *
      * @param term the term
      * @return {@code true} if the term can be resolved without solving anything
@@ -117,8 +159,9 @@ final class TypeInference {
     }
 
     /**
-     * Returns a term for the type of a literal, a new inference variable that can only become a type that the literal
-     * can denote.
+     * Returns a term for the type of a literal: a new variable with the constraint of the literal kind. The constraint
+     * permits only the types that the literal can have. Example: {@code 42} gets a variable that can become a numeric
+     * type, and {@code nil} gets a variable that can become only a nullable type.
      *
      * @param kind the kind of the literal
      * @return a term for the type of the literal
@@ -129,7 +172,8 @@ final class TypeInference {
     }
 
     /**
-     * Returns a term for a type that is not known yet, such as the result type of a call, a new inference variable.
+     * Returns a term for a type that is not known yet: a new variable without a constraint. Example: the visitor makes
+     * one for the result type of a call, and one for each parameter of a closure that does not state its type.
      *
      * @return a term for an unknown type
      */
@@ -173,8 +217,14 @@ final class TypeInference {
     }
 
     /**
-     * Returns the type of a reference to a function, in which a new inference variable stands for each type parameter
-     * of the function. The variables become the type arguments of the reference.
+     * Returns the type of a reference to a generic function. The method makes a new variable for each type parameter,
+     * and it puts this variable in each place of the type parameter. These variables are the type arguments of the
+     * reference. Each reference makes new variables, so each call can have different type arguments.
+     *
+     * <p>Example: for {@code apply<T, U>(f: (T) -> U, x: T): U}, the method makes {@code vT} and {@code vU}. It returns
+     * the term {@code ((vT) -> vU, vT) -> vU} and the type arguments {@code vT} and {@code vU}. The two places of
+     * {@code T} hold two different {@code VariableTerm} records, but both refer to {@code vT}. So one binding of
+     * {@code vT} changes both places.</p>
      *
      * @param typeParameters the type parameters of the function
      * @param type the type of the function, in terms of its type parameters
@@ -193,7 +243,16 @@ final class TypeInference {
     }
 
     /**
-     * Requires two terms to stand for the same type.
+     * Requires two terms to stand for the same type. The method binds open variables of the two terms where
+     * necessary. It changes only variables, and it binds each variable one time at most. One call can bind several
+     * variables. Example: the equation {@code (vA, vB) -> vC = (int, vD) -> [string]} gives {@code vA := int},
+     * {@code vB := vD}, and {@code vC := [string]}.
+     *
+     * <p>If the equation fails, the method does not undo the bindings that it made before the failure. The exception
+     * then stops the parse, so no code uses that state.</p>
+     *
+     * <p>The method can bind each variable in the two terms, also a variable of another inference. So the visitor
+     * gives it only terms of the current inference and copies of resolved types.</p>
      *
      * @param first a term
      * @param second another term
@@ -207,8 +266,15 @@ final class TypeInference {
     }
 
     /**
-     * Gives every inference variable that is still open and belongs to a literal the default type of the literal. The
-     * statement calls this after it added all of its equations, and before it resolves its terms.
+     * Gives a default type to each open variable whose constraint has a default type, see {@link #DEFAULT_KINDS}. Only
+     * the constraints of number, string, and boolean literals have one. The visitor calls this method after the
+     * statement stated all of its equations, and before the builders resolve the terms. The method can run more than
+     * one time, and each call changes only the variables that are open at that time. A for loop with its own inference
+     * uses this, because it must know the type of its variable before it infers its body.
+     *
+     * <p>Example: in {@code let x = 42}, no equation fixes the variable of {@code 42}, so this method binds it to
+     * {@code int}. In {@code let x = nil}, the variable of {@code nil} has no default type. It stays open, and
+     * {@link #resolve} fails.</p>
      */
     void solve() {
         for (final Variable variable : variables) {
@@ -220,12 +286,14 @@ final class TypeInference {
     }
 
     /**
-     * Returns the type that a term stands for, once {@link #solve()} has run for the inference that the term's variables
-     * belong to.
+     * Returns the type that a term stands for. The method follows the bindings of the variables in the term, and it
+     * converts the result to an {@link IType}. Call it only after {@link #solve()} ran for the inference of these
+     * variables. Example: if {@code vX := vP2} and {@code vP2 := bigint}, the term {@code (vX) -> vX} resolves to
+     * {@code (bigint) -> bigint}.
      *
      * @param term the term
      * @return the type of the term
-     * @throws IllegalArgumentException if the statement does not determine the type, as for {@code let x = nil}
+     * @throws IllegalArgumentException if a variable in the term is still open, as for {@code let x = nil}
      */
     @Nonnull
     static IType resolve(@Nonnull final Term term) {
@@ -463,8 +531,11 @@ final class TypeInference {
     }
 
     /**
-     * Returns the term that a term stands for: a bound variable stands for what it is bound to, made nullable where it
-     * occurs as {@code T?}.
+     * Returns the term that a term stands for at its top level. The method follows the bindings of variables until it
+     * gets a term that is not a bound variable. It does not go into the parts of a compound term, and it changes
+     * nothing. For a variable that occurs as {@code T?}, it makes the result nullable. Example: if
+     * {@code vX := vP2} and {@code vP2 := [vT]}, the term {@code vX} prunes to {@code [vT]}, also if {@code vT} is
+     * open.
      */
     @Nonnull
     private static Term prune(@Nonnull final Term term) {
@@ -583,13 +654,28 @@ final class TypeInference {
     }
 
     /**
-     * A type in which inference variables can stand for the parts that are not known yet.
+     * A type that can contain inference variables. An {@link IType} cannot contain them, so the fragments contain no
+     * terms. The visitor gets terms from {@link TypeInference#known}, {@link TypeInference#unknown},
+     * {@link TypeInference#literal}, {@link TypeInference#function}, {@link TypeInference#array},
+     * {@link TypeInference#stream}, and {@link TypeInference#instantiate}. It gives the terms back to
+     * {@link TypeInference}, and it does not look into them. Only {@link TypeInference} does that.
+     *
+     * <p>A {@code Known} term holds a type without variables. A {@code VariableTerm} refers to a variable. Each type
+     * that contains other types has a compound term kind, with a term for each part: {@code ArrayTerm},
+     * {@code RecordTerm}, {@code FunctionTerm}, and {@code StreamTerm}. A {@code VariableTerm} can be in each part
+     * position. So a term can describe a type with unknown parts, for example {@code [vT]}, an array of an unknown
+     * element type.</p>
+     *
+     * <p>All terms are immutable records. But a {@code VariableTerm} refers to a {@link Variable}, which is mutable. So
+     * the type that a term stands for changes when {@link TypeInference#unify} binds a variable in it. Example: after
+     * {@code vT := int}, the term {@code [vT]} stands for {@code [int]}, and the term itself is unchanged.</p>
      */
     interface Term {
     }
 
     /**
-     * The type of a reference to a function, with an inference variable for each type parameter of the function.
+     * The type of a reference to a function, with an inference variable for each type parameter of the function, see
+     * {@link TypeInference#instantiate}.
      *
      * @param type the type of the reference
      * @param typeArguments the variables for the type parameters of the function, in order
@@ -598,13 +684,15 @@ final class TypeInference {
     }
 
     /**
-     * A type without inference variables.
+     * A type without inference variables. No inference can change it.
      */
     private record Known(@Nonnull IType type) implements Term {
     }
 
     /**
-     * An inference variable, which stands for its type made nullable if {@code isNullable}, as {@code T?} does.
+     * A reference to an inference variable. It stands for the type of the variable, made nullable if
+     * {@code isNullable}, as {@code T?} does. Several terms can refer to one variable, so one binding changes all of
+     * them.
      */
     private record VariableTerm(@Nonnull Variable variable, boolean isNullable) implements Term {
     }
@@ -626,8 +714,19 @@ final class TypeInference {
     }
 
     /**
-     * An inference variable: a type that is not known yet, until the variable is bound. The constraint restricts the
-     * terms it can be bound to.
+     * An inference variable: a type that the inference does not know yet. It is the only mutable object of an
+     * inference, and only {@link TypeInference} changes it.
+     * <ul>
+     *     <li>{@code binding} is null while the variable is open. {@link TypeInference#unify} sets it one time, to a
+     *     term of any kind: a {@code Known} term, a {@code VariableTerm} that links the variable to another open
+     *     variable, or a compound term that can contain other variables. {@link TypeInference#solve()} can set it to
+     *     a default type.</li>
+     *     <li>{@code constraint} limits the terms that the variable can get. While the variable is open,
+     *     {@link TypeInference#unify} can narrow it. When {@link TypeInference#unify} links two open variables, the
+     *     constraint of the first variable moves to the second.</li>
+     * </ul>
+     * Example: the literal {@code 42} gets a variable whose constraint permits only numeric types. So {@code bigint} is
+     * a permitted binding, and {@code string} is not.
      */
     private static final class Variable {
         @Nullable
