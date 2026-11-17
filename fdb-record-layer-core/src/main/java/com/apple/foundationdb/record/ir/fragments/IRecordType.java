@@ -34,7 +34,8 @@ import java.util.stream.Collectors;
 
 /**
  * A record type, generic over any number of field types: {@code record<id(1): bigint, name: string?, int>}. Records
- * have no name of their own.
+ * have no name of their own. A field access can name a field, so the named fields of a record have distinct names, as
+ * the labels of a tuple in Swift do.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IRecordType implements IType {
@@ -48,11 +49,17 @@ public final class IRecordType implements IType {
      * Creates a record type.
      *
      * @param isNullable whether values of this type can be null
-     * @param fields the fields in order
+     * @param fields the fields in order; the named fields must have distinct names
      */
     public IRecordType(final boolean isNullable, @Nonnull final List<Field> fields) {
         this.isNullable = isNullable;
         this.fields = ImmutableList.copyOf(fields);
+        final List<String> names = this.fields.stream()
+                .map(Field::name)
+                .flatMap(Optional::stream)
+                .collect(ImmutableList.toImmutableList());
+        Preconditions.checkArgument(names.stream().distinct().count() == names.size(),
+                "the fields of a record must have distinct names");
     }
 
     @Override

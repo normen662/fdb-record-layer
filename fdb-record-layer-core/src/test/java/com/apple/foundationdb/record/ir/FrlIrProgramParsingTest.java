@@ -27,6 +27,7 @@ import com.apple.foundationdb.record.ir.fragments.IBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IClosureFragment;
 import com.apple.foundationdb.record.ir.fragments.IConsumeFragment;
 import com.apple.foundationdb.record.ir.fragments.IExternType;
+import com.apple.foundationdb.record.ir.fragments.IFieldAccessFragment;
 import com.apple.foundationdb.record.ir.fragments.IForFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionCallFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDeclarationFragment;
@@ -531,9 +532,17 @@ class FrlIrProgramParsingTest {
         final IType nullableString = STRING.withNullability(true);
         final IFunctionDeclarationFragment numbers = new IFunctionDeclarationFragment("numbers", ImmutableList.of(T),
                 ImmutableList.of(parameter("x", T)), new IArrayType(false, T));
+        final IFunctionDeclarationFragment row = new IFunctionDeclarationFragment("row", ImmutableList.of(),
+                ImmutableList.of(), new IRecordType(false, ImmutableList.of(IRecordType.Field.of(arrayOfInt, "xs"))));
+        final IFunctionCallFragment callRow = new IFunctionCallFragment(
+                new IFunctionReferenceFragment(row, ImmutableList.of(), row.type()), ImmutableList.of());
         return Stream.of(
                 // a for loop runs its block for each element of an array, which is the value of the loop variable
                 Arguments.of("func f(xs: [int]) { for x in xs { x } }", forXInXs),
+                // the array can be a field of a record: the block after the field access is the block of the loop
+                Arguments.of("extern func row(): record<xs: [int]>\nfunc f() { for x in row().xs { x } }",
+                        new IForFragment("x", new IFieldAccessFragment(callRow, 0),
+                                block(ImmutableList.of(new IVariableReferenceFragment("x", INT))))),
                 // a loop can be split across lines wherever it cannot end
                 Arguments.of("func f(xs: [int]) {\n    for\n    x\n    in\n    xs\n    {\n        x\n    }\n}",
                         forXInXs),

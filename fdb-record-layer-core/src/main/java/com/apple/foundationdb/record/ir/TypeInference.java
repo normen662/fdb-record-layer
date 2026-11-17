@@ -27,6 +27,7 @@ import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
 import com.apple.foundationdb.record.ir.fragments.IType;
+import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -108,6 +109,12 @@ final class TypeInference {
     @Nonnull
     private static final ImmutableList<IPrimitiveType.Kind> DEFAULT_KINDS = ImmutableList.of(IPrimitiveType.Kind.INT,
             IPrimitiveType.Kind.DOUBLE, IPrimitiveType.Kind.STRING, IPrimitiveType.Kind.BOOLEAN);
+
+    /**
+     * The message of the exception if a field access names no field of its record.
+     */
+    @Nonnull
+    static final String NO_SUCH_FIELD = "a field access needs the name or the ordinal of a field of its record";
 
     /**
      * The inference variables that this inference made, in the order of their creation. {@link #solve()} examines
@@ -321,6 +328,74 @@ final class TypeInference {
         }
         // an open variable: no equation of the statement determines it, and it has no default
         throw new IllegalArgumentException("the type cannot be inferred");
+    }
+
+    /**
+     * Returns the ordinal of the field with the given name in the record that a term stands for. Example: in
+     * {@code record<id: bigint, name: string?>}, the field {@code name} has the ordinal 1.
+     *
+     * @param record the term of the record, which must stand for a record structure, see {@link #recordFields}
+     * @param name the name of the field
+     * @return the ordinal of the field, its position in the record type
+     * @throws IllegalArgumentException if the term does not stand for a record that is not nullable, or if the record
+     *         has no field of this name
+     */
+    static int fieldOrdinal(@Nonnull final Term record, @Nonnull final String name) {
+        final List<FieldTerm> fields = recordFields(record);
+        for (int i = 0; i < fields.size(); i++) {
+            if (fields.get(i).name().equals(Optional.of(name))) {
+                return i;
+            }
+        }
+        throw new IllegalArgumentException(NO_SUCH_FIELD);
+    }
+
+    /**
+     * Returns the term of the type of the field at an ordinal of the record that a term stands for. The term of the
+     * field can still contain variables. Example: if the record has the term {@code record<a: vT, b: int>}, the field
+     * at ordinal 0 has the term {@code vT}, and a later equation of the statement can bind {@code vT}.
+     *
+     * @param record the term of the record, which must stand for a record structure, see {@link #recordFields}
+     * @param ordinal the position of the field in the record type, starting at 0
+     * @return the term of the type of the field
+     * @throws IllegalArgumentException if the term does not stand for a record that is not nullable, or if the record
+     *         has no field at this ordinal
+     */
+    @Nonnull
+    static Term fieldType(@Nonnull final Term record, final int ordinal) {
+        final List<FieldTerm> fields = recordFields(record);
+        Preconditions.checkArgument(ordinal >= 0 && ordinal < fields.size(), NO_SUCH_FIELD);
+        return fields.get(ordinal).type();
+    }
+
+    /**
+     * Returns the fields of the record that a term stands for. The term must stand for a record structure: a known
+     * record type, or a record term whose field types can still contain variables. An open variable is not enough,
+     * because many record types can have a field with a given name. So the visitor requires the record structure to be
+     * known where a program accesses a field, as Swift does.
+     */
+    @Nonnull
+    private static List<FieldTerm> recordFields(@Nonnull final Term record) {
+        final Term structure = decompose(prune(record));
+        if (structure instanceof VariableTerm variableTerm && canBeRecord(variableTerm)) {
+            throw new IllegalArgumentException("the type of a record must be known where a field of it is accessed");
+        }
+        if (!(structure instanceof RecordTerm recordTerm) || recordTerm.isNullable()) {
+            throw new IllegalArgumentException("a field access needs a record that is not nullable");
+        }
+        return recordTerm.fields();
+    }
+
+    /**
+     * Returns whether an open variable can still get a record type that is not nullable. It cannot if it occurs as
+     * {@code T?}, or if its constraint permits only primitive types or only nullable types. Examples: the literal
+     * {@code 1} gets a variable whose constraint permits only numeric types, and {@code nil} gets a variable whose
+     * constraint permits only nullable types. So {@code 1.f} and {@code nil.f} fail because the value is not a record
+     * that is not nullable, not because its type is not known.
+     */
+    private static boolean canBeRecord(@Nonnull final VariableTerm variableTerm) {
+        final Constraint constraint = variableTerm.variable().constraint;
+        return !variableTerm.isNullable() && constraint.kinds() == null && !constraint.isNullable();
     }
 
     @Nonnull

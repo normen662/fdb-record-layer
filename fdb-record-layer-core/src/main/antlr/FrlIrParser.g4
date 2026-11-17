@@ -413,14 +413,21 @@ streamBlock
 // - A call, `f(1)`. Anything of a function type can be called, `f(1)(2)` and `{ (x: int) in x }(1)` included.
 // - A dot call: `x.f(1)` calls the function `f` with `x` as its first argument. The first argument has no label, also
 //   if the first parameter has one. The name after the `.` is looked up among the functions only, so that a variable
-//   cannot hide a function there. Without arguments or a trailing closure, `x.f` is not a call; that form is left to
-//   the fields of records.
-// A dot call may start a line, which continues the expression of the line before. The `(` of a call and a trailing
-// closure stay on the line of what they call. The sign of a literal belongs to the literal, so `-1.f()` is `f(-1)`,
-// unlike in Swift.
+//   cannot hide a function there. So `x.f(1)` is a dot call also if the record `x` has a field `f`.
+// - A field access by name, `x.name`, or by ordinal, `x.0`. The ordinal is the position of the field in the record
+//   type, named or not. So `x.0` is the field at position 0, and `x._0` is the field with the name `_0`. The type of
+//   `x` must be a record type that is not nullable, and it must be known at the access. The lexer reads `0.1` in
+//   `x.0.1` as one floating-point literal, so an access by ordinal also takes such a literal: `x.0.1` is the field at
+//   position 1 of the field at position 0.
+// A dot call and a field access may start a line, which continues the expression of the line before. The `(` of a
+// call and a trailing closure stay on the line of what they call. The sign of a literal belongs to the literal, so
+// `-1.f()` is `f(-1)`, unlike in Swift.
 postfix
     : callArguments                         # callPostfix
     | NL* DOT identifier callArguments      # dotCallPostfix
+    | NL* DOT identifier                    # fieldPostfix
+    | NL* DOT INTEGER_LITERAL               # ordinalPostfix
+    | NL* DOT FLOATING_LITERAL              # ordinalPairPostfix
     ;
 
 // The arguments of a call. As in Swift, a closure after the parentheses is a trailing closure, the last argument. A
@@ -447,7 +454,7 @@ argument
 
 // The expression in front of the block of an if, a for, or a consume: an expression whose calls take no trailing
 // closure, as in Swift, because a `{` after it starts the block. A closure argument goes into the parentheses there,
-// `if xs.contains({ x in x == 1 }) { }`.
+// `if xs.contains({ x in x == 1 }) { }`. Field accesses are the same as in other expressions, `for t in r.reviews { }`.
 conditionExpression
     : primaryExpression conditionPostfix*
     ;
@@ -455,6 +462,9 @@ conditionExpression
 conditionPostfix
     : arguments                         # conditionCallPostfix
     | NL* DOT identifier arguments      # conditionDotCallPostfix
+    | NL* DOT identifier                # conditionFieldPostfix
+    | NL* DOT INTEGER_LITERAL           # conditionOrdinalPostfix
+    | NL* DOT FLOATING_LITERAL          # conditionOrdinalPairPostfix
     ;
 
 // An integer literal can be of any numeric type, a floating-point literal of any floating-point type, and `nil` of any

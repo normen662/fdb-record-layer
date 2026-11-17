@@ -99,6 +99,8 @@ class IFragmentTest {
                 pinned(() -> new IFunctionCallFragment(identityReference(), ImmutableList.of(literal42())),
                         -1090698174),
                 pinned(() -> new IAssignmentFragment("x", literal42()), -405760496),
+                pinned(() -> new IFieldAccessFragment(new IVariableReferenceFragment("r", recordOfIdAndString()), 1),
+                        -2146132560),
                 pinned(() -> new IYieldFragment(literal42()), 467444080),
                 pinned(() -> new IStreamBlockFragment(intType(),
                         new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42())))), 1105828874),
@@ -167,6 +169,7 @@ class IFragmentTest {
         final IConsumeFragment.Case valueCase = new IConsumeFragment.Case("x", emptyBlock);
         final IConsumeFragment.Case stoppedCase = stoppedCase();
         final IConsumeFragment aConsume = new IConsumeFragment(s, valueCase, null, stoppedCase);
+        final IVariableReferenceFragment r = new IVariableReferenceFragment("r", recordOfIdAndString());
         return Stream.of(
                 // primitive types: the kind, the nullability
                 Arguments.of(intType, bigintType),
@@ -299,6 +302,10 @@ class IFragmentTest {
                 // assignments: the name, the expression
                 Arguments.of(new IAssignmentFragment("x", literal), new IAssignmentFragment("y", literal)),
                 Arguments.of(new IAssignmentFragment("x", literal), new IAssignmentFragment("x", call)),
+                // field accesses: the record, the ordinal
+                Arguments.of(new IFieldAccessFragment(r, 1),
+                        new IFieldAccessFragment(new IVariableReferenceFragment("q", r.type()), 1)),
+                Arguments.of(new IFieldAccessFragment(r, 1), new IFieldAccessFragment(r, 0)),
                 // yields: the value
                 Arguments.of(new IYieldFragment(literal), new IYieldFragment(new ILiteralFragment(43, intType))),
                 // stream blocks: the element type, the block
@@ -526,6 +533,16 @@ class IFragmentTest {
                 ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", intType()),
                         new IFunctionDefinitionFragment.Parameter("x", intType())), voidType()))
                 .isInstanceOf(IllegalArgumentException.class);
+        // the named fields of a record have distinct names, since a field access can name a field
+        assertThatThrownBy(() -> new IRecordType(false, ImmutableList.of(IRecordType.Field.of(intType(), "a"),
+                IRecordType.Field.of(bigintType(), "a")))).isInstanceOf(IllegalArgumentException.class);
+        // a field access needs a record that is not nullable, and the ordinal of a field of that record
+        final IVariableReferenceFragment r = new IVariableReferenceFragment("r", recordOfIdAndString());
+        assertThatThrownBy(() -> new IFieldAccessFragment(literal42(), 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IFieldAccessFragment(new IVariableReferenceFragment("r",
+                recordOfIdAndString().withNullability(true)), 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IFieldAccessFragment(r, -1)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IFieldAccessFragment(r, 2)).isInstanceOf(IllegalArgumentException.class);
         // a reference gives each type parameter of its function a type argument
         assertThatThrownBy(() -> new IFunctionReferenceFragment(identityFunction(), ImmutableList.of(),
                 new IFunctionType(false, ImmutableList.of(intType()), intType())))
@@ -560,6 +577,28 @@ class IFragmentTest {
         assertThat(new IFunctionDefinitionFragment.Parameter(null, "x", intType()).label()).isEmpty();
         assertThat(new IFunctionDefinitionFragment.Parameter("x", intType()))
                 .isEqualTo(new IFunctionDefinitionFragment.Parameter("x", "x", intType()));
+    }
+
+    @Test
+    void fieldOfFieldAccessIsFieldAtItsOrdinal() {
+        final IVariableReferenceFragment r = new IVariableReferenceFragment("r", recordOfIdAndString());
+        final IFieldAccessFragment id = new IFieldAccessFragment(r, 0);
+        assertThat(id.field()).isEqualTo(IRecordType.Field.of(bigintType(), "id", 1));
+        assertThat(id.type()).isEqualTo(bigintType());
+        // the ordinal also accesses a field without a name
+        final IFieldAccessFragment unnamed = new IFieldAccessFragment(r, 1);
+        assertThat(unnamed.record()).isEqualTo(r);
+        assertThat(unnamed.ordinal()).isEqualTo(1);
+        assertThat(unnamed.field()).isEqualTo(IRecordType.Field.unnamedOf(stringType().withNullability(true)));
+        assertThat(unnamed.type()).isEqualTo(stringType().withNullability(true));
+    }
+
+    @Test
+    void constructorFieldsWithoutNamesSucceeds() {
+        // only the named fields of a record must have distinct names, since a field without a name has only its ordinal
+        final IRecordType record = new IRecordType(false,
+                ImmutableList.of(IRecordType.Field.unnamedOf(intType()), IRecordType.Field.unnamedOf(intType())));
+        assertThat(record.fields()).hasSize(2);
     }
 
     @Test
@@ -783,6 +822,16 @@ class IFragmentTest {
     @Nonnull
     private static ILiteralFragment literal42() {
         return new ILiteralFragment(42, intType());
+    }
+
+    /**
+     * Returns {@code record<id(1): bigint, string?>}, a record with a named field at ordinal 0 and a field without a
+     * name at ordinal 1.
+     */
+    @Nonnull
+    private static IRecordType recordOfIdAndString() {
+        return new IRecordType(false, ImmutableList.of(IRecordType.Field.of(bigintType(), "id", 1),
+                IRecordType.Field.unnamedOf(stringType().withNullability(true))));
     }
 
     /**

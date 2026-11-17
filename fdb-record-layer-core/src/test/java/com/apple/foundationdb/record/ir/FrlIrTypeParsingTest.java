@@ -222,6 +222,8 @@ class FrlIrTypeParsingTest {
             // malformed records: a field number needs a name and is a plain number
             "record<id bigint>", "record<int,>", "record<id:>", "record<(1): int>", "record<id(x): int>",
             "record<id(-1): int>", "record<id(): int>",
+            // a field access can name a field, so the names of the fields are distinct
+            "record<a: int, a: string>", "record<a: int, `a`: int>",
             // malformed arrays
             "array<>", "array<int, int>", "[]", "[int, int]",
             // malformed vectors

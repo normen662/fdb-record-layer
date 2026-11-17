@@ -30,6 +30,7 @@ import com.apple.foundationdb.record.ir.fragments.IClosureFragment;
 import com.apple.foundationdb.record.ir.fragments.IConsumeFragment;
 import com.apple.foundationdb.record.ir.fragments.IEnumType;
 import com.apple.foundationdb.record.ir.fragments.IExpressionFragment;
+import com.apple.foundationdb.record.ir.fragments.IFieldAccessFragment;
 import com.apple.foundationdb.record.ir.fragments.IForFragment;
 import com.apple.foundationdb.record.ir.fragments.IFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionFragment;
@@ -69,6 +70,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 
 /**
  * Builds the fragments of an FRL-IR program from its parse tree: {@link #visitProgram} builds the
@@ -127,6 +129,13 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      */
     @Nonnull
     private static final String NO_LABEL = "_";
+
+    /**
+     * The form of a floating-point literal that stands for two field accesses by ordinal, as {@code 0.1} in
+     * {@code x.0.1}: two whole numbers with a point between them.
+     */
+    @Nonnull
+    private static final Pattern ORDINAL_PAIR = Pattern.compile("[0-9]+\\.[0-9]+");
 
     /**
      * The message of the exception if a yield is not a statement of a stream block.
@@ -362,6 +371,18 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         return NO_LABEL.equals(ctx.getText());
     }
 
+    /**
+     * Returns the ordinal that the digits of a field access by ordinal denote. A number beyond the range of an int is
+     * the ordinal of no field.
+     */
+    private static int ordinal(@Nonnull final String digits) {
+        try {
+            return Integer.parseInt(digits);
+        } catch (final NumberFormatException e) {
+            throw new IllegalArgumentException(TypeInference.NO_SUCH_FIELD, e);
+        }
+    }
+
     @Nonnull
     private ImmutableList<IGenericType> typeParameters(@Nullable final FrlIrParser.TypeParametersContext ctx) {
         return ctx == null
@@ -402,9 +423,9 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
     /**
      * Infers the type of an expression, a primary expression followed by postfixes, each of which applies to the
-     * expression before it: a call, a trailing closure, or a dot call. The expected type, if there is one, is the
-     * context of the expression: the type stated for a variable, the type of a parameter, or the result type of a body.
-     * It is the context of the last postfix, the one whose result the expression is.
+     * expression before it: a call, a trailing closure, a dot call, or a field access. The expected type, if there is
+     * one, is the context of the expression: the type stated for a variable, the type of a parameter, or the result
+     * type of a body. It is the context of the last postfix, the one whose result the expression is.
      *
      * @param postfixes the postfixes, of the {@code postfix} or the {@code conditionPostfix} rule
      * @param mismatch the message of the exception if the expression cannot have the expected type
@@ -1392,10 +1413,15 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
     /**
      * Infers a postfix of an expression, with one method for each alternative of the {@code postfix} and the
-     * {@code conditionPostfix} rules. Each postfix is a call. It is a call of the expression before it, or a dot call
-     * of a function with the expression before it as the first argument. A trailing closure is the last argument,
-     * except in the expression in front of a block. Each call goes through {@link FrlIrFragmentVisitor#inferCall}, so
-     * each argument has the type of its parameter as its expected type.
+     * {@code conditionPostfix} rules. A postfix is one of three things:
+     * <ul>
+     *     <li>a call of the expression before it;</li>
+     *     <li>a dot call of a function with the expression before it as the first argument;</li>
+     *     <li>a field access of the record before it, by name or by ordinal.</li>
+     * </ul>
+     * A trailing closure is the last argument of a call, except in the expression in front of a block. Each call goes
+     * through {@link FrlIrFragmentVisitor#inferCall}, so each argument has the type of its parameter as its expected
+     * type.
      *
      * <p>Example: in {@code xs.map { x in x }} with {@code map<T, U>(xs: [T], f: (T) -> U): [U]} and
      * {@code xs: [int]}, the dot call unifies the type of {@code xs} with the first parameter, which gives
@@ -1409,12 +1435,12 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         @Nonnull
         private final Inferred before;
         /**
-         * The type that the context of the call requires, if any.
+         * The type that the context of the postfix requires, if any.
          */
         @Nullable
         private final TypeInference.Term expected;
         /**
-         * The message of the exception if the call cannot have the expected type.
+         * The message of the exception if the postfix cannot have the expected type.
          */
         @Nonnull
         private final String mismatch;
@@ -1440,6 +1466,24 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
         @Nonnull
         @Override
+        public Inferred visitFieldPostfix(@Nonnull final FrlIrParser.FieldPostfixContext ctx) {
+            return fieldByName(ctx.identifier());
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitOrdinalPostfix(@Nonnull final FrlIrParser.OrdinalPostfixContext ctx) {
+            return fieldAccess(before, ordinal(ctx.INTEGER_LITERAL().getText()), expected);
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitOrdinalPairPostfix(@Nonnull final FrlIrParser.OrdinalPairPostfixContext ctx) {
+            return fieldsByOrdinals(ctx.FLOATING_LITERAL().getText());
+        }
+
+        @Nonnull
+        @Override
         public Inferred visitConditionCallPostfix(@Nonnull final FrlIrParser.ConditionCallPostfixContext ctx) {
             return call(callArguments(ctx.arguments()));
         }
@@ -1448,6 +1492,66 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         @Override
         public Inferred visitConditionDotCallPostfix(@Nonnull final FrlIrParser.ConditionDotCallPostfixContext ctx) {
             return dotCall(ctx.identifier(), callArguments(ctx.arguments()));
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitConditionFieldPostfix(@Nonnull final FrlIrParser.ConditionFieldPostfixContext ctx) {
+            return fieldByName(ctx.identifier());
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitConditionOrdinalPostfix(@Nonnull final FrlIrParser.ConditionOrdinalPostfixContext ctx) {
+            return fieldAccess(before, ordinal(ctx.INTEGER_LITERAL().getText()), expected);
+        }
+
+        @Nonnull
+        @Override
+        public Inferred visitConditionOrdinalPairPostfix(
+                @Nonnull final FrlIrParser.ConditionOrdinalPairPostfixContext ctx) {
+            return fieldsByOrdinals(ctx.FLOATING_LITERAL().getText());
+        }
+
+        /**
+         * Infers a field access by name, {@code x.name}. The name gives the ordinal of the field in the record type of
+         * {@code x}, and the fragment holds only that ordinal.
+         */
+        @Nonnull
+        private Inferred fieldByName(@Nonnull final FrlIrParser.IdentifierContext name) {
+            return fieldAccess(before, TypeInference.fieldOrdinal(before.type(), name(name)), expected);
+        }
+
+        /**
+         * Infers two field accesses by ordinal that the lexer reads as one floating-point literal: {@code x.0.1} is
+         * the field at ordinal 1 of the field at ordinal 0. Only a literal of two whole numbers with a point between
+         * them is such a pair; a literal with an exponent is not.
+         */
+        @Nonnull
+        private Inferred fieldsByOrdinals(@Nonnull final String text) {
+            Preconditions.checkArgument(ORDINAL_PAIR.matcher(text).matches(), TypeInference.NO_SUCH_FIELD);
+            final int point = text.indexOf('.');
+            final Inferred first = fieldAccess(before, ordinal(text.substring(0, point)), null);
+            return fieldAccess(first, ordinal(text.substring(point + 1)), expected);
+        }
+
+        /**
+         * Infers an access to the field at an ordinal of a record. The type of the access is the term of the type of
+         * the field, which the record type of the record gives, see {@code TypeInference.fieldType}. If the context
+         * requires a type, the access must have it.
+         *
+         * @param record the record whose field the access reads
+         * @param ordinal the position of the field in the record type
+         * @param expectedType the type that the context of the access requires, or {@code null} if it requires none
+         */
+        @Nonnull
+        private Inferred fieldAccess(@Nonnull final Inferred record, final int ordinal,
+                                     @Nullable final TypeInference.Term expectedType) {
+            final TypeInference.Term type = TypeInference.fieldType(record.type(), ordinal);
+            if (expectedType != null) {
+                inference().unify(type, expectedType, mismatch);
+            }
+            return new Inferred(type, () -> new IFieldAccessFragment(record.builder().get(), ordinal));
         }
 
         /**

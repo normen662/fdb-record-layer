@@ -27,6 +27,7 @@ import com.apple.foundationdb.record.ir.fragments.IBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IClosureFragment;
 import com.apple.foundationdb.record.ir.fragments.IExpressionFragment;
 import com.apple.foundationdb.record.ir.fragments.IExternType;
+import com.apple.foundationdb.record.ir.fragments.IFieldAccessFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionCallFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDeclarationFragment;
@@ -36,6 +37,7 @@ import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
+import com.apple.foundationdb.record.ir.fragments.IRecordType;
 import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
@@ -546,6 +548,71 @@ class FrlIrExpressionParsingTest {
                         new IFunctionCallFragment(reference(score), ImmutableList.of(rowReference))))));
     }
 
+    @Nonnull
+    static Stream<Arguments> fieldAccesses() {
+        final String r = "extern func r(): record<id: bigint, name: string?>\n";
+        final IRecordType row = new IRecordType(false, ImmutableList.of(IRecordType.Field.of(BIGINT, "id"),
+                IRecordType.Field.of(STRING.withNullability(true), "name")));
+        final IFunctionCallFragment callR = new IFunctionCallFragment(
+                reference(declaration("r", ImmutableList.of(), ImmutableList.of(), row)), ImmutableList.of());
+        final String q = "extern func q(): record<a: int, _0: string>\n";
+        final IFunctionCallFragment callQ = new IFunctionCallFragment(reference(declaration("q", ImmutableList.of(),
+                ImmutableList.of(), new IRecordType(false, ImmutableList.of(IRecordType.Field.of(INT, "a"),
+                        IRecordType.Field.of(STRING, "_0"))))), ImmutableList.of());
+        final IFunctionCallFragment callN = new IFunctionCallFragment(reference(declaration("n", ImmutableList.of(),
+                ImmutableList.of(), new IRecordType(false, ImmutableList.of(IRecordType.Field.unnamedOf(INT),
+                        IRecordType.Field.unnamedOf(new IRecordType(false, ImmutableList.of(
+                                IRecordType.Field.unnamedOf(BIGINT), IRecordType.Field.unnamedOf(STRING)))))))),
+                ImmutableList.of());
+        final IRecordType box = new IRecordType(false, ImmutableList.of(IRecordType.Field.of(T, "value")));
+        final IRecordType boxOfBigint =
+                new IRecordType(false, ImmutableList.of(IRecordType.Field.of(BIGINT, "value")));
+        final IFunctionDeclarationFragment boxFunction = declaration("box", ImmutableList.of(T),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter(null, "x", T)), box);
+        final IFunctionDeclarationFragment withFunction = declaration("with", ImmutableList.of(T, U),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter(null, "x", T),
+                        parameter("f", function(ImmutableList.of(T), U))), U);
+        final IClosureFragment idOfV = closure(ImmutableList.of(new IClosureFragment.Parameter("v", row)), BIGINT,
+                new IFieldAccessFragment(new IVariableReferenceFragment("v", row), 0));
+        final IFunctionDeclarationFragment nameFunction = declaration("name", ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter(null, "x", row)), INT);
+        return Stream.of(
+                // an access by name gives the ordinal of the field, so it equals the access by that ordinal
+                Arguments.of(r + "let e = r().name", new IFieldAccessFragment(callR, 1)),
+                Arguments.of(r + "let e = r().1", new IFieldAccessFragment(callR, 1)),
+                Arguments.of(r + "let e = r().0", new IFieldAccessFragment(callR, 0)),
+                // an ordinal is a position, also of a named field: the field with the name _0 is at ordinal 1
+                Arguments.of(q + "let e = q()._0", new IFieldAccessFragment(callQ, 1)),
+                Arguments.of(q + "let e = q().0", new IFieldAccessFragment(callQ, 0)),
+                // fields without names; the lexer reads 1.0 as one literal, which stands for two ordinals
+                Arguments.of("extern func n(): record<int, record<bigint, string>>\nlet e = n().1.0",
+                        new IFieldAccessFragment(new IFieldAccessFragment(callN, 1), 0)),
+                Arguments.of("extern func n(): record<int, record<bigint, string>>\nlet e = n().1\n    .1",
+                        new IFieldAccessFragment(new IFieldAccessFragment(callN, 1), 1)),
+                // a field access may start a line, and the context of the expression is the context of the access
+                Arguments.of(r + "let e: string? = r()\n    .name", new IFieldAccessFragment(callR, 1)),
+                // the type of a field can still contain variables: the context makes 42 a bigint
+                Arguments.of("extern func box<T>(_ x: T): record<value: T>\nlet e: bigint = box(42).value",
+                        new IFieldAccessFragment(new IFunctionCallFragment(reference(boxFunction,
+                                ImmutableList.of(BIGINT), function(ImmutableList.of(BIGINT), boxOfBigint)),
+                                ImmutableList.of(new ILiteralFragment(42L, BIGINT))), 0)),
+                // a closure parameter has its type from the call before the visitor reaches the body of the closure
+                Arguments.of(r + "extern func with<T, U>(_ x: T, f: (T) -> U): U\nlet e = with(r()) { v in v.id }",
+                        new IFunctionCallFragment(reference(withFunction, ImmutableList.of(row, BIGINT),
+                                function(ImmutableList.of(row, function(ImmutableList.of(row), BIGINT)), BIGINT)),
+                                ImmutableList.of(callR, idOfV))),
+                // with arguments, a dot is a dot call of a function, also if the record has a field of the name
+                Arguments.of(r + "extern func name(_ x: record<id: bigint, name: string?>): int\nlet e = r().name()",
+                        new IFunctionCallFragment(reference(nameFunction), ImmutableList.of(callR))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("fieldAccesses")
+    void parseProgramFieldAccessReadsFieldAtOrdinal(@Nonnull final String text,
+                                                    @Nonnull final IExpressionFragment expected) {
+        assertThat(lastExpression(text)).isEqualTo(expected);
+    }
+
     @Test
     void parseProgramClosureOnNextLineIsStatementOfItsOwn() {
         final List<IStatementFragment> statements =
@@ -630,7 +697,7 @@ class FrlIrExpressionParsingTest {
             "let e = \"open",
             "let e = 1.",
             "let e = .5",
-            // without arguments or a trailing closure, a dot is not a call: that form is left to the fields of records
+            // without arguments or a trailing closure, a dot is a field access, not a call, and 1 is not a record
             "extern func inc(x: int): int\nlet e = 1.inc",
             // a dot call calls a function in scope, not a variable of function type
             "let e = 1.inc()",
@@ -644,6 +711,26 @@ class FrlIrExpressionParsingTest {
             "extern func inc(x: int): int\nlet e = inc { 1 }",
             // a call has one trailing closure at most; a second one calls the result of the call
             "extern func fold(x: int, f: (int) -> int): int\nlet e = fold(x: 1) { y in y } { z in z }",
+            // a field access needs a field of its record, by name or by ordinal
+            "extern func r(): record<id: bigint, name: string?>\nlet e = r().nope",
+            "extern func r(): record<id: bigint, name: string?>\nlet e = r().2",
+            "extern func r(): record<id: bigint, name: string?>\nlet e = r().99999999999",
+            "extern func r(): record<id: bigint, name: string?>\nlet e = r().1e0",
+            // a field access needs a record that is not nullable
+            "extern func r(): record<a: int>?\nlet e = r().a",
+            "extern func r(): record<a: int>?\nlet e = r().0",
+            "let x = 1\nlet e = x.a",
+            "let x = 1\nlet e = x.0",
+            // the type of nil, and a type T? whose T is still open, are nullable
+            "let e = nil.a",
+            "extern func f<T, U>(g: (T?) -> U, x: T): U\nlet e = f(g: { v in v.a }, x: 1)",
+            // the type of the record must be known at the access; in apply, the closure comes before the record
+            "let e = { v in v.a }",
+            APPLY + "extern func r(): record<id: bigint>\nlet e = apply(g: { v in v.id }, x: r())",
+            // with arguments, a dot is a dot call of a function, also if the record has a field of the name
+            "extern func k(): record<g: () -> int>\nlet e = k().g()",
+            // the type of the field is the type of the access
+            "extern func r(): record<id: bigint, name: string?>\nlet e: int = r().name",
     })
     void parseProgramInvalidExpressionFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
