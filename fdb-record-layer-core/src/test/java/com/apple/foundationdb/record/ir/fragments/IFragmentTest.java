@@ -65,17 +65,18 @@ class IFragmentTest {
                 pinned(() -> new IFunctionType(false, ImmutableList.of(intType(), typeParameter("T")),
                         typeParameter("T").withNullability(true)), -2116708027),
                 pinned(() -> new IStreamType(intType()), -943587233),
-                pinned(() -> new IFunctionDefinitionFragment.Parameter("x", typeParameter("T")), -853251890),
+                pinned(() -> new IFunctionDefinitionFragment.Parameter("x", typeParameter("T")), -1553751008),
+                pinned(() -> new IFunctionDefinitionFragment.Parameter(null, "x", intType()), -494753699),
                 pinned(IFragmentTest::emptyBlock, -1386164011),
-                pinned(IFragmentTest::identityFunction, -1049441388),
-                pinned(() -> new IProgramFragment(ImmutableList.of(identityFunction())), -2050522768),
+                pinned(IFragmentTest::identityFunction, -372574462),
+                pinned(() -> new IProgramFragment(ImmutableList.of(identityFunction())), -1373655842),
                 pinned(() -> new IFunctionDeclarationFragment("lookup", ImmutableList.of(),
                         ImmutableList.of(new IFunctionDefinitionFragment.Parameter("key", bigintType())),
-                        stringType().withNullability(true)), 688860876),
+                        stringType().withNullability(true)), -1659939661),
                 pinned(() -> new IFunctionDeclarationFragment("scan", ImmutableList.of(),
                         ImmutableList.of(new IFunctionDefinitionFragment.Parameter("range",
                                 new IExternType(rangeDeclaration(), false))),
-                        intType(), ImmutableList.of(), abcPackage()), 1790714996),
+                        intType(), ImmutableList.of(), abcPackage()), 1420675645),
                 pinned(() -> new IAnnotationFragment.Argument(null, "com.apple.foundationdb.record.ir"), 1230968439),
                 pinned(() -> new IAnnotationFragment.Argument("class", "com.apple.foundationdb.record.TupleRange"),
                         1319917643),
@@ -94,8 +95,9 @@ class IFragmentTest {
                         new IPrimitiveType(IPrimitiveType.Kind.HALF, false)), 1294493890),
                 pinned(() -> new ILiteralFragment(null, stringType().withNullability(true)), -686800226),
                 pinned(() -> new IVariableReferenceFragment("x", intType()), -73490170),
-                pinned(IFragmentTest::identityReference, 23787472),
-                pinned(() -> new IFunctionCallFragment(identityReference(), ImmutableList.of(literal42())), -761835920),
+                pinned(IFragmentTest::identityReference, 1952841662),
+                pinned(() -> new IFunctionCallFragment(identityReference(), ImmutableList.of(literal42())),
+                        -1090698174),
                 pinned(() -> new IAssignmentFragment("x", literal42()), -405760496),
                 pinned(() -> new IYieldFragment(literal42()), 467444080),
                 pinned(() -> new IStreamBlockFragment(intType(),
@@ -223,8 +225,10 @@ class IFragmentTest {
                         id.resultType(), new IBlockFragment(ImmutableList.of(new IVariableReferenceFragment("y", t))))),
                 Arguments.of(id, new IFunctionDefinitionFragment("id", id.typeParameters(), id.parameters(),
                         id.resultType(), id.body(), ImmutableList.of(annotation))),
-                // parameters of function definitions: the name, the type
-                Arguments.of(x, new IFunctionDefinitionFragment.Parameter("y", t)),
+                // parameters of function definitions: the label, the name, the type
+                Arguments.of(x, new IFunctionDefinitionFragment.Parameter("to", "x", t)),
+                Arguments.of(x, new IFunctionDefinitionFragment.Parameter(null, "x", t)),
+                Arguments.of(x, new IFunctionDefinitionFragment.Parameter("x", "y", t)),
                 Arguments.of(x, new IFunctionDefinitionFragment.Parameter("x", intType)),
                 // function declarations: the name, the type parameters, the parameters, the result type, the
                 // annotations, the package
@@ -546,6 +550,16 @@ class IFragmentTest {
                 new IAnnotationFragment.Argument("class", "c")));
         assertThat(annotation.argument("class")).contains("b");
         assertThat(annotation.argument("method")).isEmpty();
+    }
+
+    @Test
+    void labelOfParameterIsItsNameUnlessStated() {
+        // as in Swift, the label of `x: int` is its name; `to x: int` has the label `to`, and `_ x: int` has none
+        assertThat(new IFunctionDefinitionFragment.Parameter("x", intType()).label()).contains("x");
+        assertThat(new IFunctionDefinitionFragment.Parameter("to", "x", intType()).label()).contains("to");
+        assertThat(new IFunctionDefinitionFragment.Parameter(null, "x", intType()).label()).isEmpty();
+        assertThat(new IFunctionDefinitionFragment.Parameter("x", intType()))
+                .isEqualTo(new IFunctionDefinitionFragment.Parameter("x", "x", intType()));
     }
 
     @Test

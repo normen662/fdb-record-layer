@@ -245,8 +245,13 @@ typeParameters
     : LT NL* identifier (NL* COMMA NL* identifier)* NL* GT
     ;
 
+// A parameter of a function definition or a function declaration. As in Swift, a parameter has an argument label and a
+// name: in `to x: int`, the label is `to`, and the name is `x`. A call writes the label before its argument,
+// `f(to: 1)`, and the body uses the name. With one identifier, as in `x: int`, the label is the name. The label `_`
+// means that the parameter has no label: after `_ x: int`, a call writes its argument alone, `f(1)`. A label in
+// backticks is an ordinary label, also `_` in backticks.
 parameter
-    : identifier NL* COLON NL* type
+    : (label=identifier NL*)? name=identifier NL* COLON NL* type
     ;
 
 // `{ (x: int, y: int) -> bigint in x }`. A closure is an expression whose type is a function type, `(int, int) -> bigint`
@@ -406,9 +411,10 @@ streamBlock
 
 // The postfixes of an expression apply from left to right, each to the expression before it.
 // - A call, `f(1)`. Anything of a function type can be called, `f(1)(2)` and `{ (x: int) in x }(1)` included.
-// - A dot call: `x.f(1)` calls the function `f` with `x` as its first argument, `f(x, 1)`. The name after the `.` is
-//   looked up among the functions only, so that a variable cannot hide a function there. Without arguments or a
-//   trailing closure, `x.f` is not a call; that form is left to the fields of records.
+// - A dot call: `x.f(1)` calls the function `f` with `x` as its first argument. The first argument has no label, also
+//   if the first parameter has one. The name after the `.` is looked up among the functions only, so that a variable
+//   cannot hide a function there. Without arguments or a trailing closure, `x.f` is not a call; that form is left to
+//   the fields of records.
 // A dot call may start a line, which continues the expression of the line before. The `(` of a call and a trailing
 // closure stay on the line of what they call. The sign of a literal belongs to the literal, so `-1.f()` is `f(-1)`,
 // unlike in Swift.
@@ -417,17 +423,26 @@ postfix
     | NL* DOT identifier callArguments      # dotCallPostfix
     ;
 
-// The arguments of a call. As in Swift, a closure after the parentheses is a trailing closure, the last argument:
-// `fold(0) { a, x in a }` is `fold(0, { a, x in a })`, and without other arguments the parentheses can go, `run { 42 }`
-// is `run({ 42 })`, also in a dot call, `xs.map { x in x }`. A call has one trailing closure at most. The expression in
-// front of the block of an if, a for, or a consume takes no trailing closure, see `conditionExpression`.
+// The arguments of a call. As in Swift, a closure after the parentheses is a trailing closure, the last argument. A
+// trailing closure has no label: `fold(initial: 0) { a, x in a }` is `fold(initial: 0, combine: { a, x in a })` for
+// `fold(initial: int, combine: (int, int) -> int)`. Without other arguments, the parentheses can go, `run { 42 }`, also
+// in a dot call, `xs.map { x in x }`. A call has one trailing closure at most. The expression in front of the block of
+// an if, a for, or a consume takes no trailing closure, see `conditionExpression`.
 callArguments
     : arguments closure?
     | closure
     ;
 
+// The arguments between the parentheses of a call. As in Swift, an argument has the label of its parameter, `f(x: 1)`,
+// or no label if the parameter has none, `f(1)`. The arguments are in the order of the parameters. Only a function that
+// the call names has labels. So a call of a function value, such as a closure or a parameter of a function type, has
+// no labels.
 arguments
-    : LPAREN NL* (expression (NL* COMMA NL* expression)* NL*)? RPAREN
+    : LPAREN NL* (argument (NL* COMMA NL* argument)* NL*)? RPAREN
+    ;
+
+argument
+    : (label=identifier NL* COLON NL*)? expression
     ;
 
 // The expression in front of the block of an if, a for, or a consume: an expression whose calls take no trailing

@@ -215,7 +215,7 @@ class FrlIrProgramParsingTest {
     void parseProgramDeclaredFunctionCanBeCalled() {
         final IFunctionDeclarationFragment f = new IFunctionDeclarationFragment("f", ImmutableList.of(),
                 ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", BIGINT)), STRING);
-        assertThat(parseProgram("extern func f(x: bigint): string\nlet s = f(42)").statements()).containsExactly(f,
+        assertThat(parseProgram("extern func f(x: bigint): string\nlet s = f(x: 42)").statements()).containsExactly(f,
                 new IAssignmentFragment("s", new IFunctionCallFragment(
                         new IFunctionReferenceFragment(f, ImmutableList.of(), f.type()),
                         ImmutableList.of(new ILiteralFragment(42L, BIGINT)))));
@@ -231,6 +231,86 @@ class FrlIrProgramParsingTest {
             "extern func f()\nextern func f()",        // there is no overloading
     })
     void parseProgramInvalidFunctionDeclarationFails(@Nonnull final String text) {
+        assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Nonnull
+    static Stream<Arguments> parametersWithLabels() {
+        return Stream.of(
+                // as in Swift, the label of a parameter is its name, unless the parameter states a label before its
+                // name; the label _ means no label, but in backticks it is an ordinary label
+                Arguments.of("x: int", new IFunctionDefinitionFragment.Parameter("x", "x", INT)),
+                Arguments.of("to x: int", new IFunctionDefinitionFragment.Parameter("to", "x", INT)),
+                Arguments.of("_ x: int", new IFunctionDefinitionFragment.Parameter(null, "x", INT)),
+                Arguments.of("_: int", new IFunctionDefinitionFragment.Parameter(null, "_", INT)),
+                Arguments.of("`_` x: int", new IFunctionDefinitionFragment.Parameter("_", "x", INT)),
+                // the label and the name can be on different lines
+                Arguments.of("to\n    x: int", new IFunctionDefinitionFragment.Parameter("to", "x", INT)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("parametersWithLabels")
+    void parseProgramParameterHasLabel(@Nonnull final String parameter,
+                                       @Nonnull final IFunctionDefinitionFragment.Parameter expected) {
+        final IFunctionDeclarationFragment f =
+                (IFunctionDeclarationFragment)parseProgram("extern func f(" + parameter + ")").statements().get(0);
+        assertThat(f.parameters()).containsExactly(expected);
+    }
+
+    @Test
+    void parseProgramCallWritesLabelsOfParameters() {
+        final IProgramFragment program = parseProgram("""
+                extern func range<K>(closed: K, open: K): bigint
+                extern func inc(_ x: int): int
+                func move(to x: int): int { x }
+                let r = range(closed: 1, open: 2)
+                let i = inc(1)
+                let m = move(
+                    to:
+                        3
+                )""");
+        final IFunctionDeclarationFragment range = (IFunctionDeclarationFragment)program.statements().get(0);
+        final IFunctionDeclarationFragment inc = (IFunctionDeclarationFragment)program.statements().get(1);
+        final IFunctionDefinitionFragment move = (IFunctionDefinitionFragment)program.statements().get(2);
+        // the body of move uses the name x of its parameter, and the calls do not record the labels
+        assertThat(move.body().statements()).containsExactly(new IVariableReferenceFragment("x", INT));
+        assertThat(program.statements().subList(3, 6)).containsExactly(
+                new IAssignmentFragment("r", new IFunctionCallFragment(new IFunctionReferenceFragment(range,
+                        ImmutableList.of(INT), new IFunctionType(false, ImmutableList.of(INT, INT), BIGINT)),
+                        ImmutableList.of(new ILiteralFragment(1, INT), new ILiteralFragment(2, INT)))),
+                new IAssignmentFragment("i", new IFunctionCallFragment(
+                        new IFunctionReferenceFragment(inc, ImmutableList.of(), inc.type()),
+                        ImmutableList.of(new ILiteralFragment(1, INT)))),
+                new IAssignmentFragment("m", new IFunctionCallFragment(
+                        new IFunctionReferenceFragment(move, ImmutableList.of(), move.type()),
+                        ImmutableList.of(new ILiteralFragment(3, INT)))));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            // a call writes the label of each parameter, in the order of the parameters
+            "extern func f(x: int)\nf(1)",
+            "extern func f(x: int)\nf(y: 1)",
+            "extern func f(x: int, y: int)\nf(y: 1, x: 2)",
+            "extern func f(to x: int)\nf(x: 1)",
+            // and no label for a parameter without a label, also not _
+            "extern func f(_ x: int)\nf(x: 1)",
+            "extern func f(_ x: int)\nf(_: 1)",
+            // the label is not a name in the body
+            "func f(to x: int): int { to }",
+            // a dot call writes the labels of the parameters after the first one
+            "extern func f(x: int, y: int): int\nlet e = 1.f(2)",
+            // a function value has no labels, because a function type has none
+            "extern func g(x: int): int\nlet h = g\nlet e = h(x: 1)",
+            "let e = { (x: int) -> int in x }(x: 1)",
+            // a closure parameter has no label
+            "let e: (int) -> int = { (to x: int) in x }",
+            // labels do not make overloading possible
+            "extern func f(x: int)\nextern func f(y: int)",
+            // the parameters still have distinct names
+            "extern func f(a x: int, b x: int)",
+    })
+    void parseProgramInvalidLabelFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -427,7 +507,7 @@ class FrlIrProgramParsingTest {
                                 new IIfFragment(new IVariableReferenceFragment("d", BOOLEAN), two, null))))),
                 // the condition is an expression whose calls take no trailing closure; the block may start on the next
                 // line, since the if cannot end before it
-                Arguments.of("extern func not(b: boolean): boolean\nfunc f(c: boolean) { if not(c) { 1 } }", ifNotC),
+                Arguments.of("extern func not(b: boolean): boolean\nfunc f(c: boolean) { if not(b: c) { 1 } }", ifNotC),
                 Arguments.of("extern func not(b: boolean): boolean\nfunc f(c: boolean) { if c.not()\n{ 1 } }", ifNotC),
                 // in a function body, the statements of the blocks are typed one by one, as the statements around the
                 // if are, so 42 has the default type of its literal
@@ -471,7 +551,7 @@ class FrlIrProgramParsingTest {
                                 block(ImmutableList.of(new IVariableReferenceFragment("x", INT))))),
                 // in a function body, the array is typed before the statements of the block, which are typed one by
                 // one, so the type of the loop variable is the one that the array has on its own
-                Arguments.of("extern func numbers<T>(x: T): [T]\nfunc f() { for x in numbers(1) { x } }",
+                Arguments.of("extern func numbers<T>(x: T): [T]\nfunc f() { for x in numbers(x: 1) { x } }",
                         new IForFragment("x", new IFunctionCallFragment(new IFunctionReferenceFragment(numbers,
                                 ImmutableList.of(INT), new IFunctionType(false, ImmutableList.of(INT), arrayOfInt)),
                                 ImmutableList.of(new ILiteralFragment(1, INT))),
@@ -638,10 +718,10 @@ class FrlIrProgramParsingTest {
                     run {
                         if c {
                             let a = 42
-                            h(a)
+                            h(x: a)
                         }
-                        for x in numbers(1) {
-                            h(x)
+                        for x in numbers(x: 1) {
+                            h(x: x)
                         }
                     }
                 }""");
@@ -779,15 +859,16 @@ class FrlIrProgramParsingTest {
             "func f(c: boolean) { if c { yield 1 } }",
             // in a function body or a program, the statements of the blocks of an if or a for are typed one by one, as
             // the statements around the if or the for are, so a later statement cannot make 42 a bigint
-            "extern func h(x: bigint)\nfunc f(c: boolean) { if c { let a = 42; h(a) } }",
-            "extern func h(x: bigint)\nfunc f(c: boolean) { if c { } else { let a = 42; h(a) } }",
-            "extern func h(x: bigint)\nfunc f(c: boolean, d: boolean) { if c { } else if d { let a = 42; h(a) } }",
-            "extern func h(x: bigint)\nfunc f(xs: [int]) { for x in xs { let a = 42; h(a) } }",
-            "extern func h(x: bigint)\nfunc f(xs: [int], c: boolean) { for x in xs { if c { let a = 42; h(a) } } }",
-            "extern func h(x: bigint)\nlet c = true\nif c { let a = 42; h(a) }",
+            "extern func h(x: bigint)\nfunc f(c: boolean) { if c { let a = 42; h(x: a) } }",
+            "extern func h(x: bigint)\nfunc f(c: boolean) { if c { } else { let a = 42; h(x: a) } }",
+            "extern func h(x: bigint)\nfunc f(c: boolean, d: boolean) { if c { } else if d { let a = 42; h(x: a) } }",
+            "extern func h(x: bigint)\nfunc f(xs: [int]) { for x in xs { let a = 42; h(x: a) } }",
+            "extern func h(x: bigint)\nfunc f(xs: [int], c: boolean) { for x in xs { if c { let a = 42; h(x: a) } } }",
+            "extern func h(x: bigint)\nlet c = true\nif c { let a = 42; h(x: a) }",
             // nor can the body of a for loop determine the element type of its array there
-            "extern func numbers<T>(x: T): [T]\nextern func h(x: bigint)\nfunc f() { for x in numbers(1) { h(x) } }",
-            "extern func empty<T>(): [T]\nextern func h(x: bigint)\nfunc f() { for x in empty() { h(x) } }",
+            "extern func numbers<T>(x: T): [T]\nextern func h(x: bigint)\n"
+                    + "func f() { for x in numbers(x: 1) { h(x: x) } }",
+            "extern func empty<T>(): [T]\nextern func h(x: bigint)\nfunc f() { for x in empty() { h(x: x) } }",
     })
     void parseProgramInvalidControlFlowFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
@@ -858,7 +939,7 @@ class FrlIrProgramParsingTest {
                     let m = n
                     m
                 }
-                f(42)""");
+                f(n: 42)""");
         final IFunctionDefinitionFragment f = new IFunctionDefinitionFragment("f", ImmutableList.of(),
                 ImmutableList.of(new IFunctionDefinitionFragment.Parameter("n", BIGINT)), BIGINT,
                 new IBlockFragment(ImmutableList.of(
@@ -919,7 +1000,7 @@ class FrlIrProgramParsingTest {
                 extern func everything(): range
                 extern func count(r: range): bigint
                 let r = everything()
-                let n = count(r)""");
+                let n = count(r: r)""");
         final IExternType range =
                 new IExternType(new ITypeDeclarationFragment("range", ImmutableList.of(), null), false);
         assertThat(program.statements().get(3)).isEqualTo(new IAssignmentFragment("r", new IFunctionCallFragment(
@@ -994,7 +1075,7 @@ class FrlIrProgramParsingTest {
             "extern type range\nlet r: range = 42",              // a literal cannot be of an extern type
             "extern type range\nlet r: range? = 42",
             // two extern types are different types
-            "extern type r\nextern type s\nextern func f(x: r)\nextern func g(): s\nf(g())",
+            "extern type r\nextern type s\nextern func f(x: r)\nextern func g(): s\nf(x: g())",
     })
     void parseProgramInvalidExternTypeFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
@@ -1034,7 +1115,7 @@ class FrlIrProgramParsingTest {
                 typealias rows = [row]
                 extern func scan(): rows
                 extern func first(rs: rows): row?
-                let r = first(scan())""");
+                let r = first(rs: scan())""");
         final IRecordType row = new IRecordType(false, ImmutableList.of(IRecordType.Field.of(BIGINT, "id"),
                 IRecordType.Field.of(STRING.withNullability(true), "name")));
         final IArrayType rows = new IArrayType(false, row);

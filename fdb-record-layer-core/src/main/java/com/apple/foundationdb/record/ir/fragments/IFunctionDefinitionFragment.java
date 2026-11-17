@@ -26,8 +26,10 @@ import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
@@ -177,9 +179,18 @@ public final class IFunctionDefinitionFragment implements IFunctionFragment {
 
     /**
      * A parameter of a function definition or a function declaration, {@code x: int}. Such a parameter always states
-     * its type.
+     * its type. As in Swift, a parameter has an argument label and a name. A call writes the label before the argument,
+     * and the body uses the name. Examples:
+     * <ul>
+     *     <li>{@code x: int} has the label {@code x}, so a call writes {@code f(x: 1)};</li>
+     *     <li>{@code to x: int} has the label {@code to}, so a call writes {@code f(to: 1)};</li>
+     *     <li>{@code _ x: int} has no label, so a call writes {@code f(1)}.</li>
+     * </ul>
+     * The labels belong to the function, not to its type, so a call of a function value has no labels.
      */
     public static final class Parameter implements IFragment {
+        @Nullable
+        private final String label;
         @Nonnull
         private final String name;
         @Nonnull
@@ -188,15 +199,35 @@ public final class IFunctionDefinitionFragment implements IFunctionFragment {
         private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
         /**
-         * Creates a parameter.
+         * Creates a parameter whose label is its name, as {@code x: int} declares it.
          *
-         * @param name the name of the parameter
+         * @param name the name of the parameter, which is also its label
          * @param type the type of the parameter, which cannot be {@code void}
          */
         public Parameter(@Nonnull final String name, @Nonnull final IType type) {
+            this(name, name, type);
+        }
+
+        /**
+         * Creates a parameter.
+         *
+         * @param label the argument label of the parameter, or {@code null} if the parameter has no label
+         * @param name the name of the parameter
+         * @param type the type of the parameter, which cannot be {@code void}
+         */
+        public Parameter(@Nullable final String label, @Nonnull final String name, @Nonnull final IType type) {
+            this.label = label;
             this.name = Objects.requireNonNull(name);
             this.type = Objects.requireNonNull(type);
             Preconditions.checkArgument(!type.isVoid(), "void is only a result type");
+        }
+
+        /**
+         * {@return the argument label of the parameter, or empty if the parameter has no label}
+         */
+        @Nonnull
+        public Optional<String> label() {
+            return Optional.ofNullable(label);
         }
 
         /**
@@ -220,7 +251,8 @@ public final class IFunctionDefinitionFragment implements IFunctionFragment {
             if (this == other) {
                 return true;
             }
-            return other instanceof Parameter that && name.equals(that.name) && type.equals(that.type);
+            return other instanceof Parameter that && Objects.equals(label, that.label) && name.equals(that.name)
+                    && type.equals(that.type);
         }
 
         @Override
@@ -229,13 +261,13 @@ public final class IFunctionDefinitionFragment implements IFunctionFragment {
         }
 
         private int computeHashCode() {
-            return Objects.hash("function definition parameter", name, type);
+            return Objects.hash("function definition parameter", label, name, type);
         }
 
         @Nonnull
         @Override
         public String toString() {
-            return "Parameter[name=" + name + ", type=" + type + "]";
+            return "Parameter[label=" + label + ", name=" + name + ", type=" + type + "]";
         }
     }
 }

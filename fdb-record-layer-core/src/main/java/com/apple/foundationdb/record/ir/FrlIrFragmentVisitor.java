@@ -109,6 +109,26 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             "a call must call a function that is not nullable with arguments of the types of its parameters";
 
     /**
+     * The message of the exception if an argument of a call of a declared function does not have the label of its
+     * parameter.
+     */
+    @Nonnull
+    private static final String ARGUMENT_LABELS =
+            "an argument must have the label of its parameter, and no label if the parameter has none";
+
+    /**
+     * The message of the exception if a call of a function value has a label.
+     */
+    @Nonnull
+    private static final String FUNCTION_VALUE_LABELS = "the arguments of a call of a function value have no labels";
+
+    /**
+     * The label that means "no label" in a parameter, {@code _} without backticks.
+     */
+    @Nonnull
+    private static final String NO_LABEL = "_";
+
+    /**
      * The message of the exception if a yield is not a statement of a stream block.
      */
     @Nonnull
@@ -323,10 +343,23 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         return ctx.stream().map(this::visitAnnotation).collect(ImmutableList.toImmutableList());
     }
 
+    /**
+     * Creates a parameter of a function definition or a function declaration. Without a separate label, the label of
+     * the parameter is its name. The label {@code _} without backticks means that the parameter has no label.
+     */
     @Nonnull
     @Override
     public IFunctionDefinitionFragment.Parameter visitParameter(@Nonnull final FrlIrParser.ParameterContext ctx) {
-        return new IFunctionDefinitionFragment.Parameter(name(ctx.identifier()), type(ctx.type()));
+        final FrlIrParser.IdentifierContext label = ctx.label == null ? ctx.name : ctx.label;
+        return new IFunctionDefinitionFragment.Parameter(isNoLabel(label) ? null : name(label), name(ctx.name),
+                type(ctx.type()));
+    }
+
+    /**
+     * Returns whether an identifier is {@code _} without backticks, which means "no label" in the place of a label.
+     */
+    private static boolean isNoLabel(@Nonnull final FrlIrParser.IdentifierContext ctx) {
+        return NO_LABEL.equals(ctx.getText());
     }
 
     @Nonnull
@@ -408,8 +441,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * @param arguments the arguments in order, each of which is inferred given the type of its parameter
      */
     @Nonnull
-    private Inferred inferCall(@Nonnull final Inferred callee,
-                               @Nonnull final List<Function<TypeInference.Term, Inferred>> arguments,
+    private Inferred inferCall(@Nonnull final Inferred callee, @Nonnull final List<CallArgument> arguments,
                                @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
         final TypeInference inference = inference();
         final ImmutableList<TypeInference.Term> parameterTypes = arguments.stream()
@@ -422,7 +454,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         }
         final ImmutableList.Builder<Inferred> inferredArguments = ImmutableList.builder();
         for (int i = 0; i < parameterTypes.size(); i++) {
-            inferredArguments.add(arguments.get(i).apply(parameterTypes.get(i)));
+            inferredArguments.add(arguments.get(i).inference().apply(parameterTypes.get(i)));
         }
         final ImmutableList<Inferred> builtArguments = inferredArguments.build();
         return new Inferred(resultType, () -> new IFunctionCallFragment(callee.builder().get(), builtArguments.stream()
@@ -431,36 +463,70 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
+     * Checks the labels of the arguments of a call. A call of a declared function writes the label of each parameter
+     * before its argument, and no label for a parameter without a label. A trailing closure has no label. A call of a
+     * function value has no labels, because a function type has no labels.
+     *
+     * <p>Example: after {@code extern func range<K>(closed: K, open: K): range}, the call
+     * {@code range(closed: a, open: b)} is correct. The calls {@code range(a, b)} and {@code range(open: b, closed: a)}
+     * fail.</p>
+     *
+     * @param parameters the parameters of the declared function that the call names, or {@code null} if the callee is
+     *        a function value
+     * @param arguments the arguments that the call writes, in order
+     */
+    private static void checkLabels(@Nullable final List<IFunctionDefinitionFragment.Parameter> parameters,
+                                    @Nonnull final List<CallArgument> arguments) {
+        if (parameters == null) {
+            Preconditions.checkArgument(arguments.stream().allMatch(argument -> argument.label() == null),
+                    FUNCTION_VALUE_LABELS);
+            return;
+        }
+        if (parameters.size() != arguments.size()) {
+            // the unification of the callee with the arguments reports the wrong number of arguments
+            return;
+        }
+        for (int i = 0; i < arguments.size(); i++) {
+            final CallArgument argument = arguments.get(i);
+            Preconditions.checkArgument(argument.isTrailingClosure()
+                            || Objects.equals(argument.label(), parameters.get(i).label().orElse(null)),
+                    ARGUMENT_LABELS);
+        }
+    }
+
+    /**
      * Returns the arguments of a call: those between the parentheses, if there are parentheses, followed by the
      * trailing closure, if there is one. Each argument is inferred with the type of its parameter as its context, so a
      * trailing closure, like every closure, has that type before its body is inferred.
      */
     @Nonnull
-    private ImmutableList<Function<TypeInference.Term, Inferred>> callArguments(
-            @Nonnull final FrlIrParser.CallArgumentsContext ctx) {
-        final ImmutableList.Builder<Function<TypeInference.Term, Inferred>> arguments = ImmutableList.builder();
+    private ImmutableList<CallArgument> callArguments(@Nonnull final FrlIrParser.CallArgumentsContext ctx) {
+        final ImmutableList.Builder<CallArgument> arguments = ImmutableList.builder();
         if (ctx.arguments() != null) {
             arguments.addAll(callArguments(ctx.arguments()));
         }
         final FrlIrParser.ClosureContext trailingClosure = ctx.closure();
         if (trailingClosure != null) {
-            arguments.add(parameterType ->
-                    new ExpressionInferenceVisitor(parameterType, ARGUMENT_MISMATCH).inferClosure(trailingClosure));
+            arguments.add(new CallArgument(null, true, parameterType ->
+                    new ExpressionInferenceVisitor(parameterType, ARGUMENT_MISMATCH).inferClosure(trailingClosure)));
         }
         return arguments.build();
     }
 
     /**
-     * Returns the arguments between the parentheses of a call, each of which is inferred with the type of its parameter
-     * as its context.
+     * Returns the arguments between the parentheses of a call, each with its label, if it has one. Each argument is
+     * inferred with the type of its parameter as its context. A call cannot write the label {@code _} without
+     * backticks: it writes no label for a parameter without a label.
      */
     @Nonnull
-    private ImmutableList<Function<TypeInference.Term, Inferred>> callArguments(
-            @Nonnull final FrlIrParser.ArgumentsContext ctx) {
-        return ctx.expression()
+    private ImmutableList<CallArgument> callArguments(@Nonnull final FrlIrParser.ArgumentsContext ctx) {
+        return ctx.argument()
                 .stream()
-                .<Function<TypeInference.Term, Inferred>>map(argument ->
-                        parameterType -> infer(argument, parameterType, ARGUMENT_MISMATCH))
+                .map(argument -> {
+                    Preconditions.checkArgument(argument.label == null || !isNoLabel(argument.label), ARGUMENT_LABELS);
+                    return new CallArgument(argument.label == null ? null : name(argument.label), false,
+                            parameterType -> infer(argument.expression(), parameterType, ARGUMENT_MISMATCH));
+                })
                 .collect(ImmutableList.toImmutableList());
     }
 
@@ -479,7 +545,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                         .stream()
                         .map(TypeInference::resolve)
                         .collect(ImmutableList.toImmutableList()),
-                (IFunctionType)TypeInference.resolve(instantiation.type())));
+                (IFunctionType)TypeInference.resolve(instantiation.type())), function.function());
     }
 
     /**
@@ -1363,7 +1429,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         @Nonnull
         @Override
         public Inferred visitCallPostfix(@Nonnull final FrlIrParser.CallPostfixContext ctx) {
-            return inferCall(before, callArguments(ctx.callArguments()), expected, mismatch);
+            return call(callArguments(ctx.callArguments()));
         }
 
         @Nonnull
@@ -1375,7 +1441,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         @Nonnull
         @Override
         public Inferred visitConditionCallPostfix(@Nonnull final FrlIrParser.ConditionCallPostfixContext ctx) {
-            return inferCall(before, callArguments(ctx.arguments()), expected, mismatch);
+            return call(callArguments(ctx.arguments()));
         }
 
         @Nonnull
@@ -1385,23 +1451,38 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         }
 
         /**
+         * Infers a call of the expression before the postfix. If that expression names a declared function, the
+         * arguments have the labels of its parameters. Otherwise, the callee is a function value, and the arguments
+         * have no labels.
+         */
+        @Nonnull
+        private Inferred call(@Nonnull final List<CallArgument> arguments) {
+            final IFunctionFragment function = before.function();
+            checkLabels(function == null ? null : function.parameters(), arguments);
+            return inferCall(before, arguments, expected, mismatch);
+        }
+
+        /**
          * Infers a dot call, {@code x.f(1)}, which calls the function {@code f} with {@code x} as its first argument. The
          * name is looked up among the functions only, so that a variable of the name does not hide the function.
          * {@code x} is inferred before the function is known, so its type gets no context from the function's first
-         * parameter until it is unified with that parameter.
+         * parameter until it is unified with that parameter. The first argument has no label, also if the first
+         * parameter has a label. The other arguments have the labels of the other parameters.
          *
          * @param arguments the arguments after the first one, in order
          */
         @Nonnull
         private Inferred dotCall(@Nonnull final FrlIrParser.IdentifierContext function,
-                                 @Nonnull final List<Function<TypeInference.Term, Inferred>> arguments) {
+                                 @Nonnull final List<CallArgument> arguments) {
             final Scope.FunctionBinding binding = scope.lookupFunction(name(function))
                     .orElseThrow(() -> new IllegalArgumentException("unknown function"));
-            final Function<TypeInference.Term, Inferred> receiver = parameterType -> {
+            final List<IFunctionDefinitionFragment.Parameter> parameters = binding.function().parameters();
+            checkLabels(parameters.isEmpty() ? parameters : parameters.subList(1, parameters.size()), arguments);
+            final CallArgument receiver = new CallArgument(null, false, parameterType -> {
                 inference().unify(before.type(), parameterType, ARGUMENT_MISMATCH);
                 return before;
-            };
-            return inferCall(functionReference(binding), ImmutableList.<Function<TypeInference.Term, Inferred>>builder()
+            });
+            return inferCall(functionReference(binding), ImmutableList.<CallArgument>builder()
                     .add(receiver)
                     .addAll(arguments)
                     .build(), expected, mismatch);
@@ -1449,8 +1530,32 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      *
      * @param type the term of the type of the expression
      * @param builder builds the expression; call it only after the inference is solved
+     * @param function the declared function that the expression names, or {@code null} if the expression does not name
+     *        one. A call of the expression checks its arguments against the labels of the parameters of this function.
      */
-    private record Inferred(@Nonnull TypeInference.Term type, @Nonnull Supplier<IExpressionFragment> builder) {
+    private record Inferred(@Nonnull TypeInference.Term type, @Nonnull Supplier<IExpressionFragment> builder,
+                            @Nullable IFunctionFragment function) {
+        /**
+         * Creates an expression that does not name a declared function.
+         *
+         * @param type the term of the type of the expression
+         * @param builder builds the expression; call it only after the inference is solved
+         */
+        private Inferred(@Nonnull final TypeInference.Term type, @Nonnull final Supplier<IExpressionFragment> builder) {
+            this(type, builder, null);
+        }
+    }
+
+    /**
+     * An argument of a call during inference: the label that the call writes before the argument, and the function
+     * that infers the argument for the type of its parameter.
+     *
+     * @param label the label before the argument, or {@code null} if the call writes none
+     * @param isTrailingClosure whether the argument is a trailing closure, which has no label
+     * @param inference infers the argument, given the term of the type of its parameter
+     */
+    private record CallArgument(@Nullable String label, boolean isTrailingClosure,
+                                @Nonnull Function<TypeInference.Term, Inferred> inference) {
     }
 
     /**
