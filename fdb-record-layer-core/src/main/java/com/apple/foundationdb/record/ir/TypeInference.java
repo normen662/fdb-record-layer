@@ -664,13 +664,13 @@ final class TypeInference {
      * that contains other types has a compound term kind, with a term for each part: {@code ArrayTerm},
      * {@code RecordTerm}, {@code FunctionTerm}, and {@code StreamTerm}. A {@code VariableTerm} can be in each part
      * position. So a term can describe a type with unknown parts, for example {@code [vT]}, an array of an unknown
-     * element type.</p>
+     * element type. The interface is sealed, and these six records in this file are its only implementations.</p>
      *
      * <p>All terms are immutable records. But a {@code VariableTerm} refers to a {@link Variable}, which is mutable. So
      * the type that a term stands for changes when {@link TypeInference#unify} binds a variable in it. Example: after
      * {@code vT := int}, the term {@code [vT]} stands for {@code [int]}, and the term itself is unchanged.</p>
      */
-    interface Term {
+    sealed interface Term {
     }
 
     /**
