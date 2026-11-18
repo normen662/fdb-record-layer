@@ -773,7 +773,7 @@ class IFragmentTest {
     }
 
     /**
-     * Returns {@code func id<T>(x: T): T { x }}.
+     * Returns {@code func id<T>(x: T) -> T { x }}.
      */
     @Nonnull
     private static IFunctionDefinitionFragment identityFunction() {

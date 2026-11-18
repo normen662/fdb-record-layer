@@ -116,32 +116,33 @@ class FrlIrProgramParsingTest {
     static Stream<Arguments> validFunctionDefinitions() {
         return Stream.of(
                 // the value of the body is the result; the result type is the context of the last expression
-                Arguments.of("func f(x: int, y: string?): bigint { 7 }", new IFunctionDefinitionFragment("f",
+                Arguments.of("func f(x: int, y: string?) -> bigint { 7 }", new IFunctionDefinitionFragment("f",
                         ImmutableList.of(), ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", INT),
                                 new IFunctionDefinitionFragment.Parameter("y", STRING.withNullability(true))),
                         BIGINT, new IBlockFragment(ImmutableList.of(new ILiteralFragment(7L, BIGINT))))),
                 // a trailing semicolon does not drop the value
-                Arguments.of("func f(): int { 42; }", new IFunctionDefinitionFragment("f", ImmutableList.of(),
+                Arguments.of("func f() -> int { 42; }", new IFunctionDefinitionFragment("f", ImmutableList.of(),
                         ImmutableList.of(), INT, new IBlockFragment(ImmutableList.of(new ILiteralFragment(42, INT))))),
                 // without a result type, a function returns void, and a value of its body is discarded
                 Arguments.of("func g() { }", new IFunctionDefinitionFragment("g", ImmutableList.of(),
                         ImmutableList.of(), VOID, EMPTY_BLOCK)),
-                Arguments.of("func g(): () { }", new IFunctionDefinitionFragment("g", ImmutableList.of(),
+                Arguments.of("func g() -> () { }", new IFunctionDefinitionFragment("g", ImmutableList.of(),
                         ImmutableList.of(), VOID, EMPTY_BLOCK)),
                 Arguments.of("func g() { 42 }", new IFunctionDefinitionFragment("g", ImmutableList.of(),
                         ImmutableList.of(), VOID, new IBlockFragment(ImmutableList.of(new ILiteralFragment(42, INT))))),
-                // a function type after the colon keeps its arrow, and the body's closure takes its types from it
-                Arguments.of("func adder(x: int): (int) -> int { { y in x } }", new IFunctionDefinitionFragment("adder",
-                        ImmutableList.of(), ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", INT)),
+                // a result of a function type: `->` groups to the right, and the closure takes its types from it
+                Arguments.of("func adder(x: int) -> (int) -> int { { y in x } }", new IFunctionDefinitionFragment(
+                        "adder", ImmutableList.of(),
+                        ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", INT)),
                         new IFunctionType(false, ImmutableList.of(INT), INT),
                         new IBlockFragment(ImmutableList.of(new IClosureFragment(
                                 ImmutableList.of(new IClosureFragment.Parameter("y", INT)), INT,
                                 new IBlockFragment(ImmutableList.of(new IVariableReferenceFragment("x", INT)))))))),
                 // generic functions: type parameters are types within the signature
-                Arguments.of("func id<T>(x: T): T { x }", new IFunctionDefinitionFragment("id", ImmutableList.of(T),
+                Arguments.of("func id<T>(x: T) -> T { x }", new IFunctionDefinitionFragment("id", ImmutableList.of(T),
                         ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", T)), T,
                         new IBlockFragment(ImmutableList.of(new IVariableReferenceFragment("x", T))))),
-                Arguments.of("func map<T, U>(xs: [T], f: (T) -> U?, ys: [U?]): [U?] { ys }",
+                Arguments.of("func map<T, U>(xs: [T], f: (T) -> U?, ys: [U?]) -> [U?] { ys }",
                         new IFunctionDefinitionFragment("map", ImmutableList.of(T, U),
                                 ImmutableList.of(
                                         new IFunctionDefinitionFragment.Parameter("xs", new IArrayType(false, T)),
@@ -169,21 +170,21 @@ class FrlIrProgramParsingTest {
             "func (x: int) { }",              // no name
             "func f<>(x: int) { }",           // no type parameters between the angle brackets
             "func f(x) { }",                  // a parameter of a function definition states its type
-            "func f(x: int): { }",            // a colon needs a result type
-            "func f(x: int) -> int { }",      // the result type follows a colon, not an arrow
+            "func f(x: int) -> { }",          // an arrow needs a result type
+            "func f(x: int): int { x }",      // the result type follows an arrow, not a colon
             "func f(x: int)",                 // no block
             "func f(x: T) { }",               // T is not a type parameter of f
-            "func f<T>(x: U): T { }",         // nor is U
+            "func f<T>(x: U) -> T { }",       // nor is U
             "func f<T, T>(x: T) { }",         // type parameters have distinct names
             "f(x: int) { }",                  // no func keyword
             "func f(x: void) { }",            // void is only a result type
             // the body of a function whose result type is not void ends with a value of that type
-            "func f(): int { }",
-            "func f(): int { let x = 1 }",
-            "func f(): int { \"a\" }",
-            "func f(): int { func g() { } }",
-            "func f(): int { extern func g(): int }",
-            "func g(): int { 42 }\nfunc f(): int? { g() }",  // there is no promotion
+            "func f() -> int { }",
+            "func f() -> int { let x = 1 }",
+            "func f() -> int { \"a\" }",
+            "func f() -> int { func g() { } }",
+            "func f() -> int { extern func g() -> int }",
+            "func g() -> int { 42 }\nfunc f() -> int? { g() }",  // there is no promotion
     })
     void parseProgramInvalidFunctionDefinitionFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
@@ -192,17 +193,22 @@ class FrlIrProgramParsingTest {
     @Nonnull
     static Stream<Arguments> validFunctionDeclarations() {
         return Stream.of(
-                Arguments.of("extern func f(x: int): bigint", new IFunctionDeclarationFragment("f", ImmutableList.of(),
-                        ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", INT)), BIGINT)),
+                Arguments.of("extern func f(x: int) -> bigint", new IFunctionDeclarationFragment("f",
+                        ImmutableList.of(), ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", INT)),
+                        BIGINT)),
                 // without a result type, a declared function returns void
                 Arguments.of("extern func g<T>(x: T)", new IFunctionDeclarationFragment("g", ImmutableList.of(T),
                         ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", T)), VOID)),
                 // a declaration can be split across lines wherever it cannot end
-                Arguments.of("extern\nfunc\nh(\n    x: int,\n    y: int\n): (int) -> int",
+                Arguments.of("extern\nfunc\nh(\n    x: int,\n    y: int\n) -> (int) -> int",
                         new IFunctionDeclarationFragment("h", ImmutableList.of(),
                                 ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", INT),
                                         new IFunctionDefinitionFragment.Parameter("y", INT)),
-                                new IFunctionType(false, ImmutableList.of(INT), INT))));
+                                new IFunctionType(false, ImmutableList.of(INT), INT))),
+                // the `->` may start the next line, as in Swift, because no statement starts with `->`
+                Arguments.of("extern func f(x: int)\n    -> bigint", new IFunctionDeclarationFragment("f",
+                        ImmutableList.of(), ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", INT)),
+                        BIGINT)));
     }
 
     @ParameterizedTest
@@ -216,7 +222,7 @@ class FrlIrProgramParsingTest {
     void parseProgramDeclaredFunctionCanBeCalled() {
         final IFunctionDeclarationFragment f = new IFunctionDeclarationFragment("f", ImmutableList.of(),
                 ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", BIGINT)), STRING);
-        assertThat(parseProgram("extern func f(x: bigint): string\nlet s = f(x: 42)").statements()).containsExactly(f,
+        assertThat(parseProgram("extern func f(x: bigint) -> string\nlet s = f(x: 42)").statements()).containsExactly(f,
                 new IAssignmentFragment("s", new IFunctionCallFragment(
                         new IFunctionReferenceFragment(f, ImmutableList.of(), f.type()),
                         ImmutableList.of(new ILiteralFragment(42L, BIGINT)))));
@@ -224,7 +230,7 @@ class FrlIrProgramParsingTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "extern func f(x: int)\n: int",            // the `:` of the result type stays on the line of the `)`
+            "extern func f(x: int): int",              // the result type follows an arrow, not a colon
             "extern func f() { }",                     // a declaration has no body
             "extern f(x: int)",                        // no func keyword
             "extern func f(x: int, x: int)",           // the parameters have distinct names
@@ -261,9 +267,9 @@ class FrlIrProgramParsingTest {
     @Test
     void parseProgramCallWritesLabelsOfParameters() {
         final IProgramFragment program = parseProgram("""
-                extern func range<K>(closed: K, open: K): bigint
-                extern func inc(_ x: int): int
-                func move(to x: int): int { x }
+                extern func range<K>(closed: K, open: K) -> bigint
+                extern func inc(_ x: int) -> int
+                func move(to x: int) -> int { x }
                 let r = range(closed: 1, open: 2)
                 let i = inc(1)
                 let m = move(
@@ -298,11 +304,11 @@ class FrlIrProgramParsingTest {
             "extern func f(_ x: int)\nf(x: 1)",
             "extern func f(_ x: int)\nf(_: 1)",
             // the label is not a name in the body
-            "func f(to x: int): int { to }",
+            "func f(to x: int) -> int { to }",
             // a dot call writes the labels of the parameters after the first one
-            "extern func f(x: int, y: int): int\nlet e = 1.f(2)",
+            "extern func f(x: int, y: int) -> int\nlet e = 1.f(2)",
             // a function value has no labels, because a function type has none
-            "extern func g(x: int): int\nlet h = g\nlet e = h(x: 1)",
+            "extern func g(x: int) -> int\nlet h = g\nlet e = h(x: 1)",
             "let e = { (x: int) -> int in x }(x: 1)",
             // a closure parameter has no label
             "let e: (int) -> int = { (to x: int) in x }",
@@ -351,7 +357,7 @@ class FrlIrProgramParsingTest {
         final IProgramFragment program = parseProgram("""
                 func c(x: int,
                        y: int)
-                    : int
+                    -> int
                 {
                     x
                 }
@@ -380,7 +386,7 @@ class FrlIrProgramParsingTest {
     void parseProgramNestedFunctionSeesEnclosingTypeParameters() {
         final IProgramFragment program = parseProgram("""
                 func outer<T>(x: T) {
-                    func inner<U>(y: U, z: [T]): [T] { z }
+                    func inner<U>(y: U, z: [T]) -> [T] { z }
                 }""");
         final IArrayType arrayOfT = new IArrayType(false, T);
         assertThat(program.statements()).containsExactly(
@@ -414,14 +420,14 @@ class FrlIrProgramParsingTest {
         return Stream.of(
                 // a function returns the stream that its stream block constructs; the result type of the function is
                 // the context of the stream block, and so of the values that the block yields
-                Arguments.of("func numbers(): stream<bigint> {\n    stream {\n        yield 1\n"
+                Arguments.of("func numbers() -> stream<bigint> {\n    stream {\n        yield 1\n"
                                 + "        yield 2\n    }\n}",
                         function("numbers", new IStreamType(BIGINT), ImmutableList.of(new IStreamBlockFragment(BIGINT,
                                 new IBlockFragment(ImmutableList.of(
                                         new IYieldFragment(new ILiteralFragment(1L, BIGINT)),
                                         new IYieldFragment(new ILiteralFragment(2L, BIGINT)))))))),
                 // the code before the stream block runs when the function is called, and the block sees its variables
-                Arguments.of("func twice<T>(x: T): stream<T> {\n    let y = x\n"
+                Arguments.of("func twice<T>(x: T) -> stream<T> {\n    let y = x\n"
                                 + "    stream {\n        yield x\n        yield y\n    }\n}",
                         new IFunctionDefinitionFragment("twice", ImmutableList.of(T),
                                 ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", T)), new IStreamType(T),
@@ -431,19 +437,19 @@ class FrlIrProgramParsingTest {
                                                 new IYieldFragment(new IVariableReferenceFragment("x", T)),
                                                 new IYieldFragment(new IVariableReferenceFragment("y", T))))))))),
                 // a yield can be split across lines after its keyword
-                Arguments.of("func numbers(): stream<int> {\n    stream {\n        yield\n            1\n    }\n}",
+                Arguments.of("func numbers() -> stream<int> {\n    stream {\n        yield\n            1\n    }\n}",
                         function("numbers", streamOfInt, ImmutableList.of(new IStreamBlockFragment(INT,
                                 new IBlockFragment(ImmutableList.of(
                                         new IYieldFragment(new ILiteralFragment(1, INT)))))))),
                 // a function in a stream block can compute what the block yields
-                Arguments.of("func numbers(): stream<int> {\n    stream {\n        func one(): int { 1 }\n"
+                Arguments.of("func numbers() -> stream<int> {\n    stream {\n        func one() -> int { 1 }\n"
                                 + "        yield one()\n    }\n}",
                         function("numbers", streamOfInt, ImmutableList.of(new IStreamBlockFragment(INT,
                                 new IBlockFragment(ImmutableList.of(one, new IYieldFragment(new IFunctionCallFragment(
                                         new IFunctionReferenceFragment(one, ImmutableList.of(), one.type()),
                                         ImmutableList.of())))))))),
                 // a closure can return a stream block
-                Arguments.of("func numbers(): () -> stream<int> { { stream { yield 1 } } }", function("numbers",
+                Arguments.of("func numbers() -> () -> stream<int> { { stream { yield 1 } } }", function("numbers",
                         new IFunctionType(false, ImmutableList.of(), streamOfInt),
                         ImmutableList.of(new IClosureFragment(ImmutableList.of(), streamOfInt,
                                 new IBlockFragment(ImmutableList.of(new IStreamBlockFragment(INT,
@@ -462,13 +468,13 @@ class FrlIrProgramParsingTest {
     @ValueSource(strings = {
             // a yield is a statement of a stream block
             "yield 1",
-            "func f(): stream<int> { yield 1 }",
+            "func f() -> stream<int> { yield 1 }",
             "func f() { yield 1 }",
             "let e = { yield 1 }",
             // also within a stream block, a function or a closure cannot yield, since it can be called when the block
             // is not running
-            "func f(): stream<int> {\n    stream {\n        func g() { yield 1 }\n        yield 2\n    }\n}",
-            "extern func each(f: () -> void)\nfunc f(): stream<int> {\n    stream {\n"
+            "func f() -> stream<int> {\n    stream {\n        func g() { yield 1 }\n        yield 2\n    }\n}",
+            "extern func each(f: () -> void)\nfunc f() -> stream<int> {\n    stream {\n"
                     + "        each { yield 1 }\n    }\n}",
             // a yield is a statement with one value
             "let e = stream { yield }",
@@ -479,8 +485,8 @@ class FrlIrProgramParsingTest {
             // a stream block has no parameters: the yields add to its stream
             "let e = stream { downStream in yield 1 }",
             // the function returns the stream, so its result type must be the type of the stream
-            "func f(): int {\n    stream {\n        yield 1\n    }\n}",
-            "func f(): stream<int> {\n    stream {\n        yield \"a\"\n    }\n}",
+            "func f() -> int {\n    stream {\n        yield 1\n    }\n}",
+            "func f() -> stream<int> {\n    stream {\n        yield \"a\"\n    }\n}",
     })
     void parseProgramInvalidYieldFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
@@ -508,8 +514,10 @@ class FrlIrProgramParsingTest {
                                 new IIfFragment(new IVariableReferenceFragment("d", BOOLEAN), two, null))))),
                 // the condition is an expression whose calls take no trailing closure; the block may start on the next
                 // line, since the if cannot end before it
-                Arguments.of("extern func not(b: boolean): boolean\nfunc f(c: boolean) { if not(b: c) { 1 } }", ifNotC),
-                Arguments.of("extern func not(b: boolean): boolean\nfunc f(c: boolean) { if c.not()\n{ 1 } }", ifNotC),
+                Arguments.of("extern func not(b: boolean) -> boolean\nfunc f(c: boolean) { if not(b: c) { 1 } }",
+                        ifNotC),
+                Arguments.of("extern func not(b: boolean) -> boolean\nfunc f(c: boolean) { if c.not()\n{ 1 } }",
+                        ifNotC),
                 // in a function body, the statements of the blocks are typed one by one, as the statements around the
                 // if are, so 42 has the default type of its literal
                 Arguments.of("func f(c: boolean) { if c { let a = 42; a } }",
@@ -540,7 +548,7 @@ class FrlIrProgramParsingTest {
                 // a for loop runs its block for each element of an array, which is the value of the loop variable
                 Arguments.of("func f(xs: [int]) { for x in xs { x } }", forXInXs),
                 // the array can be a field of a record: the block after the field access is the block of the loop
-                Arguments.of("extern func row(): record<xs: [int]>\nfunc f() { for x in row().xs { x } }",
+                Arguments.of("extern func row() -> record<xs: [int]>\nfunc f() { for x in row().xs { x } }",
                         new IForFragment("x", new IFieldAccessFragment(callRow, 0),
                                 block(ImmutableList.of(new IVariableReferenceFragment("x", INT))))),
                 // a loop can be split across lines wherever it cannot end
@@ -560,7 +568,7 @@ class FrlIrProgramParsingTest {
                                 block(ImmutableList.of(new IVariableReferenceFragment("x", INT))))),
                 // in a function body, the array is typed before the statements of the block, which are typed one by
                 // one, so the type of the loop variable is the one that the array has on its own
-                Arguments.of("extern func numbers<T>(x: T): [T]\nfunc f() { for x in numbers(x: 1) { x } }",
+                Arguments.of("extern func numbers<T>(x: T) -> [T]\nfunc f() { for x in numbers(x: 1) { x } }",
                         new IForFragment("x", new IFunctionCallFragment(new IFunctionReferenceFragment(numbers,
                                 ImmutableList.of(INT), new IFunctionType(false, ImmutableList.of(INT), arrayOfInt)),
                                 ImmutableList.of(new ILiteralFragment(1, INT))),
@@ -630,7 +638,7 @@ class FrlIrProgramParsingTest {
     void parseProgramConsumeCreatesConsume(@Nonnull final String consume, @Nonnull final IConsumeFragment expected) {
         // a consume is a statement of a stream block
         final IStatementFragment streamBlock = lastStatementOfLastFunction(
-                "func f(s: stream<int>, c: boolean): stream<int> {\n    stream {\n" + consume + "\n    }\n}");
+                "func f(s: stream<int>, c: boolean) -> stream<int> {\n    stream {\n" + consume + "\n    }\n}");
         final List<IStatementFragment> statements = ((IStreamBlockFragment)streamBlock).body().statements();
         assertThat(statements.get(statements.size() - 1)).isEqualTo(expected);
     }
@@ -638,7 +646,7 @@ class FrlIrProgramParsingTest {
     @Test
     void parseProgramFlatmapStopsAtStopOfInnerStream() {
         final IProgramFragment program = parseProgram("""
-                func flatmap<T, R>(outer: stream<T>, innerProducer: (T) -> stream<R>): stream<R> {
+                func flatmap<T, R>(outer: stream<T>, innerProducer: (T) -> stream<R>) -> stream<R> {
                     stream {
                         consume outer {
                             case .value(nextOuter):
@@ -682,7 +690,7 @@ class FrlIrProgramParsingTest {
     @Test
     void parseProgramExplodeYieldsElementsOfArray() {
         final IProgramFragment program = parseProgram("""
-                func explode<T>(a: [T]): stream<T> {
+                func explode<T>(a: [T]) -> stream<T> {
                     stream {
                         for t in a {
                             yield t
@@ -706,12 +714,12 @@ class FrlIrProgramParsingTest {
                         new IYieldBreakFragment(new IFunctionCallFragment(new IFunctionReferenceFragment(timeout,
                                 ImmutableList.of(), timeout.type()), ImmutableList.of())))))))));
         // a stream block without yields takes its element type from its context
-        assertThat(parseProgram("extern func timeout(): stopReason\n"
-                + "func f(): stream<int> { stream { yield break timeout() } }")).isEqualTo(expected);
+        assertThat(parseProgram("extern func timeout() -> stopReason\n"
+                + "func f() -> stream<int> { stream { yield break timeout() } }")).isEqualTo(expected);
         // the alias stands for the enum, which a program can also spell out
-        assertThat(parseProgram("extern func timeout(): enum<RETURN_LIMIT_REACHED = 1, TIME_LIMIT_REACHED = 2, "
+        assertThat(parseProgram("extern func timeout() -> enum<RETURN_LIMIT_REACHED = 1, TIME_LIMIT_REACHED = 2, "
                 + "SCAN_LIMIT_REACHED = 3, BYTE_LIMIT_REACHED = 4>\n"
-                + "func f(): stream<int> { stream { yield break timeout() } }")).isEqualTo(expected);
+                + "func f() -> stream<int> { stream { yield break timeout() } }")).isEqualTo(expected);
     }
 
     @Test
@@ -721,7 +729,7 @@ class FrlIrProgramParsingTest {
         // the body of a for loop can determine the element type of its array
         final IProgramFragment program = parseProgram("""
                 extern func h(x: bigint)
-                extern func numbers<T>(x: T): [T]
+                extern func numbers<T>(x: T) -> [T]
                 extern func run(f: () -> void)
                 func f(c: boolean) {
                     run {
@@ -759,7 +767,7 @@ class FrlIrProgramParsingTest {
         // in a stream block, the statements of the blocks of an if join the inference of the statement that the stream
         // block is in, so a yield can make 42 a value of the element type
         final IProgramFragment program = parseProgram("""
-                func f(c: boolean): stream<bigint> {
+                func f(c: boolean) -> stream<bigint> {
                     stream {
                         if c {
                             let a = 42
@@ -780,7 +788,8 @@ class FrlIrProgramParsingTest {
     void parseProgramControlFlowIsStatementOfProgram() {
         final IFunctionDeclarationFragment xs = new IFunctionDeclarationFragment("xs", ImmutableList.of(),
                 ImmutableList.of(), new IArrayType(false, INT));
-        assertThat(parseProgram("extern func xs(): [int]\nlet c = true\nif c { 1 }\nfor x in xs() { x }").statements())
+        assertThat(parseProgram("extern func xs() -> [int]\nlet c = true\nif c { 1 }\n"
+                + "for x in xs() { x }").statements())
                 .containsExactly(xs, new IAssignmentFragment("c", new ILiteralFragment(true, BOOLEAN)),
                         new IIfFragment(new IVariableReferenceFragment("c", BOOLEAN),
                                 block(ImmutableList.of(new ILiteralFragment(1, INT))), null),
@@ -799,7 +808,7 @@ class FrlIrProgramParsingTest {
             "func f(c: boolean) { if c { } else }",
             "func f() { else { } }",
             // the expression in front of a block takes no trailing closure: there, a { starts the block
-            "extern func run(f: () -> boolean): boolean\nfunc g() { if run { true } { } }",
+            "extern func run(f: () -> boolean) -> boolean\nfunc g() { if run { true } { } }",
             // a for loop iterates over an array that is not nullable, and not over a stream
             "func f(x: int) { for y in x { } }",
             "func f(xs: [int]?) { for x in xs { } }",
@@ -809,57 +818,58 @@ class FrlIrProgramParsingTest {
             "func f(xs: [int]) { for x in xs { }; x }",
             // a consume consumes a stream, in a stream block, and not in a function or a closure within one
             "func f(s: stream<int>) { consume s { case .value(x): x } }",
-            "func f(xs: [int]): stream<int> { stream { consume xs { case .value(x): yield x } } }",
-            "func f(s: stream<int>): stream<int> {\n    stream {\n"
+            "func f(xs: [int]) -> stream<int> { stream { consume xs { case .value(x): yield x } } }",
+            "func f(s: stream<int>) -> stream<int> {\n    stream {\n"
                     + "        let c = { () -> void in consume s { case .value(x): x } }\n        yield 1\n    }\n}",
             // a consume has one value case, which binds a name, at most one end case, which binds none, and one stopped
             // case, which binds one
-            "func f(s: stream<int>): stream<int> {\n"
+            "func f(s: stream<int>) -> stream<int> {\n"
                     + "    stream { consume s { case .end: yield break; case .stopped(reason): yield break reason } }\n"
                     + "}",
-            "func f(s: stream<int>): stream<int> {\n"
+            "func f(s: stream<int>) -> stream<int> {\n"
                     + "    stream { consume s { case .value(x): yield x; case .value(y): x } }\n}",
-            "func f(s: stream<int>): stream<int> { stream { consume s { case .value: yield 1 } } }",
-            "func f(s: stream<int>): stream<int> { stream { consume s { case .value(x): yield x; case .end(y): x } } }",
-            "func f(s: stream<int>): stream<int> {\n"
+            "func f(s: stream<int>) -> stream<int> { stream { consume s { case .value: yield 1 } } }",
+            "func f(s: stream<int>) -> stream<int> { stream { consume s { case .value(x): yield x; "
+                    + "case .end(y): x } } }",
+            "func f(s: stream<int>) -> stream<int> {\n"
                     + "    stream { consume s { case .value(x): yield x; case .stopped: x } }\n}",
-            "func f(s: stream<int>): stream<int> { stream { consume s { case .value(x): yield x; case .done: x } } }",
-            "func f(s: stream<int>): stream<int> { stream { consume s { } } }",
+            "func f(s: stream<int>) -> stream<int> { stream { consume s { case .value(x): yield x; case .done: x } } }",
+            "func f(s: stream<int>) -> stream<int> { stream { consume s { } } }",
             // a binding is in scope only in its case
-            "func f(s: stream<int>): stream<int> {\n"
+            "func f(s: stream<int>) -> stream<int> {\n"
                     + "    stream { consume s { case .value(x): yield x; case .end: yield x } }\n}",
             // the reason of a stop has to be communicated outward: every consume has a stopped case, whose statements
             // end with a yield break on every path
-            "func f(s: stream<int>): stream<int> { stream { consume s { case .value(x): yield x } } }",
-            "func f(s: stream<int>): stream<int> {\n"
+            "func f(s: stream<int>) -> stream<int> { stream { consume s { case .value(x): yield x } } }",
+            "func f(s: stream<int>) -> stream<int> {\n"
                     + "    stream { consume s { case .value(x): yield x; case .end: yield break } }\n}",
-            "func f(s: stream<int>): stream<int> {\n"
+            "func f(s: stream<int>) -> stream<int> {\n"
                     + "    stream { consume s { case .value(x): yield x; case .stopped(reason): } }\n}",
-            "func f(s: stream<int>): stream<int> {\n"
+            "func f(s: stream<int>) -> stream<int> {\n"
                     + "    stream { consume s { case .value(x): yield x; case .stopped(reason): yield 1 } }\n}",
-            "func f(s: stream<int>): stream<int> {\n    stream {\n"
+            "func f(s: stream<int>) -> stream<int> {\n    stream {\n"
                     + "        consume s { case .value(x): yield x; case .stopped(reason): yield break reason; "
                     + "yield 1 }\n    }\n}",
-            "func f(s: stream<int>, c: boolean): stream<int> {\n    stream {\n"
+            "func f(s: stream<int>, c: boolean) -> stream<int> {\n    stream {\n"
                     + "        consume s { case .value(x): yield x; case .stopped(reason): "
                     + "if c { yield break reason } }\n    }\n}",
-            "func f(s: stream<int>, xs: [int]): stream<int> {\n    stream {\n"
+            "func f(s: stream<int>, xs: [int]) -> stream<int> {\n    stream {\n"
                     + "        consume s { case .value(x): yield x; case .stopped(reason): "
                     + "for y in xs { yield break } }\n    }\n}",
-            "func f(s: stream<int>): stream<int> {\n    stream {\n"
+            "func f(s: stream<int>) -> stream<int> {\n    stream {\n"
                     + "        consume s {\n            case .value(x):\n                yield x\n"
                     + "            case .stopped(reason):\n                yield break\n                reason\n"
                     + "        }\n    }\n}",
             // a yield break is in a stream block, and its reason is a stopReason
             "yield break",
             "func f() { yield break }",
-            "func f(): stream<int> { stream { yield break 1 } }",
+            "func f() -> stream<int> { stream { yield break 1 } }",
             // the end of a stream is not a reason, so the enum of all the no-next reasons of a cursor is not a
             // stopReason
-            "extern func e(): enum<SOURCE_EXHAUSTED = 0, RETURN_LIMIT_REACHED = 1, TIME_LIMIT_REACHED = 2, "
+            "extern func e() -> enum<SOURCE_EXHAUSTED = 0, RETURN_LIMIT_REACHED = 1, TIME_LIMIT_REACHED = 2, "
                     + "SCAN_LIMIT_REACHED = 3, BYTE_LIMIT_REACHED = 4>\n"
-                    + "func f(): stream<int> { stream { yield break e() } }",
-            "func f(): stream<int> {\n    stream {\n        let c = { () -> void in yield break }\n"
+                    + "func f() -> stream<int> { stream { yield break e() } }",
+            "func f() -> stream<int> {\n    stream {\n        let c = { () -> void in yield break }\n"
                     + "        yield 1\n    }\n}",
             // stopReason is a type alias that FRL-IR declares itself, in the scope of the statements of a program
             "extern type stopReason",
@@ -875,9 +885,9 @@ class FrlIrProgramParsingTest {
             "extern func h(x: bigint)\nfunc f(xs: [int], c: boolean) { for x in xs { if c { let a = 42; h(x: a) } } }",
             "extern func h(x: bigint)\nlet c = true\nif c { let a = 42; h(x: a) }",
             // nor can the body of a for loop determine the element type of its array there
-            "extern func numbers<T>(x: T): [T]\nextern func h(x: bigint)\n"
+            "extern func numbers<T>(x: T) -> [T]\nextern func h(x: bigint)\n"
                     + "func f() { for x in numbers(x: 1) { h(x: x) } }",
-            "extern func empty<T>(): [T]\nextern func h(x: bigint)\nfunc f() { for x in empty() { h(x: x) } }",
+            "extern func empty<T>() -> [T]\nextern func h(x: bigint)\nfunc f() { for x in empty() { h(x: x) } }",
     })
     void parseProgramInvalidControlFlowFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
@@ -944,7 +954,7 @@ class FrlIrProgramParsingTest {
     @Test
     void parseProgramReferenceRefersToDefinition() {
         final IProgramFragment program = parseProgram("""
-                func f(n: bigint): bigint {
+                func f(n: bigint) -> bigint {
                     let m = n
                     m
                 }
@@ -966,9 +976,9 @@ class FrlIrProgramParsingTest {
     @Test
     void parseProgramReferenceRefersToInnermostDefinition() {
         final IProgramFragment program = parseProgram("""
-                func f(): int { 1 }
-                func g(): int {
-                    func f(): int { 2 }
+                func f() -> int { 1 }
+                func g() -> int {
+                    func f() -> int { 2 }
                     f()
                 }""");
         final IFunctionDefinitionFragment innerF = new IFunctionDefinitionFragment("f", ImmutableList.of(),
@@ -983,8 +993,8 @@ class FrlIrProgramParsingTest {
     void parseProgramExternTypeIsTypeOfItsDeclaration() {
         final IProgramFragment program = parseProgram("""
                 extern type range
-                extern func bounds(range: range, other: range?): [record<low: range, high: range?>]
-                extern func merge(ranges: stream<range>, combine: (range, range) -> range): stream<range>""");
+                extern func bounds(range: range, other: range?) -> [record<low: range, high: range?>]
+                extern func merge(ranges: stream<range>, combine: (range, range) -> range) -> stream<range>""");
         final ITypeDeclarationFragment rangeDeclaration =
                 new ITypeDeclarationFragment("range", ImmutableList.of(), null);
         final IExternType range = new IExternType(rangeDeclaration, false);
@@ -1006,8 +1016,8 @@ class FrlIrProgramParsingTest {
     void parseProgramValueOfExternTypePassesBetweenFunctions() {
         final IProgramFragment program = parseProgram("""
                 extern type range
-                extern func everything(): range
-                extern func count(r: range): bigint
+                extern func everything() -> range
+                extern func count(r: range) -> bigint
                 let r = everything()
                 let n = count(r: r)""");
         final IExternType range =
@@ -1028,8 +1038,8 @@ class FrlIrProgramParsingTest {
                 @java(class:
                     "com.apple.foundationdb.record.TupleRange")
                 extern type range
-                @java(method: "scanRecords") extern func scan(range: range): bigint
-                @inline func id(x: int): int { x }""");
+                @java(method: "scanRecords") extern func scan(range: range) -> bigint
+                @inline func id(x: int) -> int { x }""");
         final IPackageStatementFragment abc = new IPackageStatementFragment("abc", ImmutableList.of(
                 annotation("java", new IAnnotationFragment.Argument(null, "com.apple.foundationdb.record.ir")),
                 annotation("swift", new IAnnotationFragment.Argument("module", "RecordLayerIR"))));
@@ -1084,7 +1094,7 @@ class FrlIrProgramParsingTest {
             "extern type range\nlet r: range = 42",              // a literal cannot be of an extern type
             "extern type range\nlet r: range? = 42",
             // two extern types are different types
-            "extern type r\nextern type s\nextern func f(x: r)\nextern func g(): s\nf(x: g())",
+            "extern type r\nextern type s\nextern func f(x: r)\nextern func g() -> s\nf(x: g())",
     })
     void parseProgramInvalidExternTypeFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
@@ -1122,8 +1132,8 @@ class FrlIrProgramParsingTest {
         final IProgramFragment program = parseProgram("""
                 typealias row = record<id: bigint, name: string?>
                 typealias rows = [row]
-                extern func scan(): rows
-                extern func first(rs: rows): row?
+                extern func scan() -> rows
+                extern func first(rs: rows) -> row?
                 let r = first(rs: scan())""");
         final IRecordType row = new IRecordType(false, ImmutableList.of(IRecordType.Field.of(BIGINT, "id"),
                 IRecordType.Field.of(STRING.withNullability(true), "name")));
@@ -1164,25 +1174,25 @@ class FrlIrProgramParsingTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "typealias row",                                                // an alias has a type
-            "typealias = int",                                              // and a name
+            "typealias row",                                                  // an alias has a type
+            "typealias = int",                                                // and a name
             "typealias row =",
-            "typealias row: int",                                           // the type follows an `=`
-            "typealias int = bigint",                                       // a keyword is not a name
-            "typealias row<T> = [T]",                                       // an alias has no type parameters
-            "typealias row = row",                                          // an alias is in scope from the next
-            "typealias row = [row]",                                        // statement on, so its type cannot refer
-            "extern func f(): row\ntypealias row = int",                    // to it
-            "func f() { typealias t = int }\nextern func g(x: t)",          // and only in its block
-            "typealias t = u",                                              // the type is in scope
-            "typealias t = int\ntypealias t = int",                         // a scope declares a type name only once,
-            "extern type t\ntypealias t = int",                             // also among extern types and aliases
+            "typealias row: int",                                             // the type follows an `=`
+            "typealias int = bigint",                                         // a keyword is not a name
+            "typealias row<T> = [T]",                                         // an alias has no type parameters
+            "typealias row = row",                                            // an alias is in scope from the next
+            "typealias row = [row]",                                          // statement on, so its type cannot refer
+            "extern func f() -> row\ntypealias row = int",                    // to it
+            "func f() { typealias t = int }\nextern func g(x: t)",            // and only in its block
+            "typealias t = u",                                                // the type is in scope
+            "typealias t = int\ntypealias t = int",                           // a scope declares a type name only once,
+            "extern type t\ntypealias t = int",                               // also among extern types and aliases
             "typealias t = int\nextern type t",
-            "typealias name = string?\nextern func f(): name?",             // a type cannot be made nullable twice,
-            "typealias numbers = stream<int>\nextern func f(): numbers?",   // and a stream type never
-            "typealias nothing = void\nextern func f(x: nothing)",          // void is only a result type
-            "typealias nothing = void\nextern func f(): nothing?",
-            "typealias t = int\nlet x: t = \"a\"",                          // a value of t is a value of its type
+            "typealias name = string?\nextern func f() -> name?",             // a type cannot be made nullable twice,
+            "typealias numbers = stream<int>\nextern func f() -> numbers?",   // and a stream type never
+            "typealias nothing = void\nextern func f(x: nothing)",            // void is only a result type
+            "typealias nothing = void\nextern func f() -> nothing?",
+            "typealias t = int\nlet x: t = \"a\"",                            // a value of t is a value of its type
     })
     void parseProgramInvalidTypeAliasFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
@@ -1190,24 +1200,24 @@ class FrlIrProgramParsingTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "let x",                                     // no expression
-            "let = 42",                                  // no name
-            "let x =",                                   // no expression after the `=`
-            "let x = 42 let y = 43",                     // statements on one line need a semicolon between them
-            "f(1) g(2)",                                 // also when they are expressions
+            "let x",                                       // no expression
+            "let = 42",                                    // no name
+            "let x =",                                     // no expression after the `=`
+            "let x = 42 let y = 43",                       // statements on one line need a semicolon between them
+            "f(1) g(2)",                                   // also when they are expressions
             "{ } { }",
-            "let x = x",                                 // the variable is not in scope in its own expression
-            "let x = 1\nlet x = 2",                      // a scope declares a name only once
-            "func f() { }\nlet f = 1",                   // variables and functions share their names
-            "func f() { }\nfunc f() { }",                // there is no overloading
-            "func f(x: int, x: int) { }",                // the parameters have distinct names
-            "let y = f(1)\nfunc f(x: int): int { x }",   // a function is in scope from its definition on
-            "func f(n: int): int { f(n) }",              // so it cannot call itself: FRL-IR has no recursion
-            "func f() { func g() { f() } }",             // not even from a nested function
-            "func f() { let x = 1 }\nlet y = x",         // a variable is in scope only in its block
-            "func f(x: int) { }\nf\n(1)",                // a `(` on the next line cannot start a statement
-            "func outer<T>() { func inner<T>() { } }",   // a type parameter must not hide one of an enclosing function
-            "extern func g()\nlet x = g()",              // a void call has no value to name
+            "let x = x",                                   // the variable is not in scope in its own expression
+            "let x = 1\nlet x = 2",                        // a scope declares a name only once
+            "func f() { }\nlet f = 1",                     // variables and functions share their names
+            "func f() { }\nfunc f() { }",                  // there is no overloading
+            "func f(x: int, x: int) { }",                  // the parameters have distinct names
+            "let y = f(1)\nfunc f(x: int) -> int { x }",   // a function is in scope from its definition on
+            "func f(n: int) -> int { f(n) }",              // so it cannot call itself: FRL-IR has no recursion
+            "func f() { func g() { f() } }",               // not even from a nested function
+            "func f() { let x = 1 }\nlet y = x",           // a variable is in scope only in its block
+            "func f(x: int) { }\nf\n(1)",                  // a `(` on the next line cannot start a statement
+            "func outer<T>() { func inner<T>() { } }",     // a type parameter cannot hide one of an enclosing function
+            "extern func g()\nlet x = g()",                // a void call has no value to name
             "extern func g()\nlet x: void = g()",
     })
     void parseProgramInvalidStatementFails(@Nonnull final String text) {

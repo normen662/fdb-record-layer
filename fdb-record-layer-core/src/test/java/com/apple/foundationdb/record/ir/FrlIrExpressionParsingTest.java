@@ -75,9 +75,9 @@ class FrlIrExpressionParsingTest {
     private static final IType VOID = new IPrimitiveType(IPrimitiveType.Kind.VOID, false);
     private static final IBlockFragment EMPTY_BLOCK = new IBlockFragment(ImmutableList.of());
 
-    private static final String ID = "extern func id<T>(x: T): T\n";
+    private static final String ID = "extern func id<T>(x: T) -> T\n";
     private static final String PAIR = "extern func pair<T>(a: T, b: T)\n";
-    private static final String APPLY = "extern func apply<T, U>(g: (T) -> U, x: T): U\n";
+    private static final String APPLY = "extern func apply<T, U>(g: (T) -> U, x: T) -> U\n";
 
     private static final IGenericType T = new IGenericType("T", false);
     private static final IGenericType U = new IGenericType("U", false);
@@ -137,7 +137,7 @@ class FrlIrExpressionParsingTest {
                 declaration("f", ImmutableList.of(T), ImmutableList.of(parameter("x", nullableT)), T);
         return Stream.of(
                 // a parameter is the context of its argument
-                Arguments.of("extern func f(x: bigint): int\nlet e = f(x: 42)",
+                Arguments.of("extern func f(x: bigint) -> int\nlet e = f(x: 42)",
                         new IFunctionCallFragment(reference(declaration("f", ImmutableList.of(),
                                 ImmutableList.of(parameter("x", BIGINT)), INT)),
                                 ImmutableList.of(new ILiteralFragment(42L, BIGINT)))),
@@ -167,16 +167,16 @@ class FrlIrExpressionParsingTest {
                                 ImmutableList.of(new ILiteralFragment(42.0, DOUBLE),
                                         new ILiteralFragment(1.5, DOUBLE)))),
                 // T? matches a nullable type, and T is then its non-nullable version
-                Arguments.of("extern func f<T>(x: T?): T\nlet e = f(x: 42)",
+                Arguments.of("extern func f<T>(x: T?) -> T\nlet e = f(x: 42)",
                         new IFunctionCallFragment(reference(fromNullable, ImmutableList.of(INT),
                                 function(ImmutableList.of(INT.withNullability(true)), INT)),
                                 ImmutableList.of(new ILiteralFragment(42, INT.withNullability(true))))),
-                Arguments.of("extern func f<T>(x: T?): T\nlet e: string = f(x: nil)",
+                Arguments.of("extern func f<T>(x: T?) -> T\nlet e: string = f(x: nil)",
                         new IFunctionCallFragment(reference(fromNullable, ImmutableList.of(STRING),
                                 function(ImmutableList.of(STRING.withNullability(true)), STRING)),
                                 ImmutableList.of(new ILiteralFragment(null, STRING.withNullability(true))))),
                 // functions are values: an argument can be a function, generic or not, and a call can return one
-                Arguments.of(APPLY + "extern func g(x: int): bigint\nlet e = apply(g: g, x: 1)",
+                Arguments.of(APPLY + "extern func g(x: int) -> bigint\nlet e = apply(g: g, x: 1)",
                         new IFunctionCallFragment(reference(APPLY_FUNCTION, ImmutableList.of(INT, BIGINT),
                                 function(ImmutableList.of(function(ImmutableList.of(INT), BIGINT), INT), BIGINT)),
                                 ImmutableList.of(reference(declaration("g", ImmutableList.of(),
@@ -188,7 +188,7 @@ class FrlIrExpressionParsingTest {
                                 ImmutableList.of(reference(ID_FUNCTION, ImmutableList.of(INT), intToInt),
                                         new ILiteralFragment(1, INT)))),
                 // the result of a call is a function value, whose call has no labels
-                Arguments.of("extern func f(x: int): (int) -> bigint\nlet e = f(x: 1)(2)",
+                Arguments.of("extern func f(x: int) -> (int) -> bigint\nlet e = f(x: 1)(2)",
                         new IFunctionCallFragment(new IFunctionCallFragment(reference(declaration("f",
                                 ImmutableList.of(), ImmutableList.of(parameter("x", INT)),
                                 function(ImmutableList.of(INT), BIGINT))),
@@ -326,7 +326,7 @@ class FrlIrExpressionParsingTest {
                                 ImmutableList.of(closure(ImmutableList.of(new IClosureFragment.Parameter("x", INT)),
                                         INT, new IVariableReferenceFragment("x", INT)), new ILiteralFragment(1, INT)))),
                 // a closure that is passed for a function returning void states void to discard its value
-                Arguments.of("extern func g(x: int): int\nextern func h(f: (int) -> void)\n"
+                Arguments.of("extern func g(x: int) -> int\nextern func h(f: (int) -> void)\n"
                                 + "h(f: { i -> void in g(x: i) })",
                         new IFunctionCallFragment(reference(hOfIntToVoid),
                                 ImmutableList.of(closure(ImmutableList.of(new IClosureFragment.Parameter("i", INT)),
@@ -335,7 +335,7 @@ class FrlIrExpressionParsingTest {
                                                 ImmutableList.of(new IVariableReferenceFragment("i", INT))))))),
                 // a function nested in a closure can use a variable of the closure once the context has determined its
                 // type
-                Arguments.of("extern func h(f: (int) -> void)\nh(f: { x in\n    func g(): int { x }\n})",
+                Arguments.of("extern func h(f: (int) -> void)\nh(f: { x in\n    func g() -> int { x }\n})",
                         new IFunctionCallFragment(reference(hOfIntToVoid),
                                 ImmutableList.of(new IClosureFragment(
                                         ImmutableList.of(new IClosureFragment.Parameter("x", INT)), VOID,
@@ -392,7 +392,7 @@ class FrlIrExpressionParsingTest {
                 Arguments.of("let e = stream { yield stream { yield 1 } }", stream(new IStreamType(INT),
                         ImmutableList.of(stream(INT, ImmutableList.of(new ILiteralFragment(1, INT)))))),
                 // a stream block is an argument like any other: the parameter is its context
-                Arguments.of("extern func count<T>(s: stream<T>): bigint\nlet e = count(s: stream { yield \"a\" })",
+                Arguments.of("extern func count<T>(s: stream<T>) -> bigint\nlet e = count(s: stream { yield \"a\" })",
                         new IFunctionCallFragment(reference(declaration("count", ImmutableList.of(T),
                                         ImmutableList.of(parameter("s", new IStreamType(T))), BIGINT),
                                 ImmutableList.of(STRING), function(ImmutableList.of(new IStreamType(STRING)), BIGINT)),
@@ -415,7 +415,7 @@ class FrlIrExpressionParsingTest {
 
     @Nonnull
     static Stream<Arguments> dotCallsAndTrailingClosures() {
-        final String inc = "extern func inc(x: int): int\n";
+        final String inc = "extern func inc(x: int) -> int\n";
         final IFunctionDeclarationFragment incFunction =
                 declaration("inc", ImmutableList.of(), ImmutableList.of(parameter("x", INT)), INT);
         final IFunctionCallFragment incOfIncOfOne = new IFunctionCallFragment(reference(incFunction), ImmutableList.of(
@@ -431,7 +431,7 @@ class FrlIrExpressionParsingTest {
                         new IFunctionCallFragment(reference(incFunction),
                                 ImmutableList.of(new ILiteralFragment(1, INT)))),
                 Arguments.of(inc + "let e = 1.inc().inc()", incOfIncOfOne),
-                Arguments.of("extern func f(x: int, y: bigint): string\nlet e = 1.f(y: 2)",
+                Arguments.of("extern func f(x: int, y: bigint) -> string\nlet e = 1.f(y: 2)",
                         new IFunctionCallFragment(reference(declaration("f", ImmutableList.of(),
                                 ImmutableList.of(parameter("x", INT), parameter("y", BIGINT)), STRING)),
                                 ImmutableList.of(new ILiteralFragment(1, INT), new ILiteralFragment(2L, BIGINT)))),
@@ -446,20 +446,20 @@ class FrlIrExpressionParsingTest {
                 Arguments.of(inc + "let e = -1.inc()",
                         new IFunctionCallFragment(reference(incFunction),
                                 ImmutableList.of(new ILiteralFragment(-1, INT)))),
-                Arguments.of("extern func floor(x: double): int\nlet e = 1.5.floor()",
+                Arguments.of("extern func floor(x: double) -> int\nlet e = 1.5.floor()",
                         new IFunctionCallFragment(reference(declaration("floor", ImmutableList.of(),
                                 ImmutableList.of(parameter("x", DOUBLE)), INT)),
                                 ImmutableList.of(new ILiteralFragment(1.5, DOUBLE)))),
                 // a trailing closure is the last argument, without a label, and without other arguments the parentheses
                 // can go
-                Arguments.of("extern func fold(x: int, f: (int) -> int): int\nlet e = fold(x: 1) { y in y }",
+                Arguments.of("extern func fold(x: int, f: (int) -> int) -> int\nlet e = fold(x: 1) { y in y }",
                         new IFunctionCallFragment(reference(fold), ImmutableList.of(new ILiteralFragment(1, INT),
                                 closure(ImmutableList.of(y), INT, new IVariableReferenceFragment("y", INT))))),
-                Arguments.of("extern func run(f: () -> int): int\nlet e = run { 42 }",
+                Arguments.of("extern func run(f: () -> int) -> int\nlet e = run { 42 }",
                         new IFunctionCallFragment(reference(declaration("run", ImmutableList.of(),
                                 ImmutableList.of(parameter("f", function(ImmutableList.of(), INT))), INT)),
                                 ImmutableList.of(closure(ImmutableList.of(), INT, new ILiteralFragment(42, INT))))),
-                Arguments.of("extern func fold(x: int, f: (int) -> int): int\n"
+                Arguments.of("extern func fold(x: int, f: (int) -> int) -> int\n"
                                 + "let e = fold(x: fold(x: 1) { y in y }) { z in z }",
                         new IFunctionCallFragment(reference(fold), ImmutableList.of(
                                 new IFunctionCallFragment(reference(fold), ImmutableList.of(
@@ -468,7 +468,7 @@ class FrlIrExpressionParsingTest {
                                 closure(ImmutableList.of(new IClosureFragment.Parameter("z", INT)), INT,
                                         new IVariableReferenceFragment("z", INT))))),
                 // a dot call can take arguments and a trailing closure
-                Arguments.of("extern func combine(x: int, y: int, f: (int, int) -> int): int\n"
+                Arguments.of("extern func combine(x: int, y: int, f: (int, int) -> int) -> int\n"
                                 + "let e = 1.combine(y: 2) { a, b in a }",
                         new IFunctionCallFragment(reference(declaration("combine", ImmutableList.of(),
                                 ImmutableList.of(parameter("x", INT), parameter("y", INT),
@@ -478,7 +478,7 @@ class FrlIrExpressionParsingTest {
                                                 new IClosureFragment.Parameter("b", INT)), INT,
                                                 new IVariableReferenceFragment("a", INT))))),
                 // the trailing closure of a generic function takes its types from the other arguments
-                Arguments.of("extern func map<T, U>(x: T, f: (T) -> U): U\nlet e = 1.map { x in x }",
+                Arguments.of("extern func map<T, U>(x: T, f: (T) -> U) -> U\nlet e = 1.map { x in x }",
                         new IFunctionCallFragment(reference(declaration("map", ImmutableList.of(T, U),
                                         ImmutableList.of(parameter("x", T),
                                                 parameter("f", function(ImmutableList.of(T), U))), U),
@@ -492,7 +492,7 @@ class FrlIrExpressionParsingTest {
                                 function(ImmutableList.of(), INT)), INT)),
                                 ImmutableList.of(closure(ImmutableList.of(), INT, new ILiteralFragment(1, INT))))),
                 // a dot call looks up functions only, so a variable of the name does not hide the function
-                Arguments.of("extern func next(x: int): int\nlet e = { (next: int) in next.next() }",
+                Arguments.of("extern func next(x: int) -> int\nlet e = { (next: int) in next.next() }",
                         closure(ImmutableList.of(new IClosureFragment.Parameter("next", INT)), INT,
                                 new IFunctionCallFragment(reference(declaration("next", ImmutableList.of(),
                                         ImmutableList.of(parameter("x", INT)), INT)),
@@ -510,11 +510,11 @@ class FrlIrExpressionParsingTest {
     void parseProgramDotCallChainTypesLeftToRight() {
         final String text = """
                 extern type row
-                extern func scan(): stream<row>
-                extern func filter<T>(upstream: stream<T>, predicate: (T) -> boolean): stream<T>
-                extern func map<T, R>(upstream: stream<T>, result: (T) -> R): stream<R>
-                extern func isGood(r: row): boolean
-                extern func score(r: row): int
+                extern func scan() -> stream<row>
+                extern func filter<T>(upstream: stream<T>, predicate: (T) -> boolean) -> stream<T>
+                extern func map<T, R>(upstream: stream<T>, result: (T) -> R) -> stream<R>
+                extern func isGood(r: row) -> boolean
+                extern func score(r: row) -> int
                 let e = scan()
                     .filter { r in r.isGood() }
                     .map { r in r.score() }""";
@@ -550,12 +550,12 @@ class FrlIrExpressionParsingTest {
 
     @Nonnull
     static Stream<Arguments> fieldAccesses() {
-        final String r = "extern func r(): record<id: bigint, name: string?>\n";
+        final String r = "extern func r() -> record<id: bigint, name: string?>\n";
         final IRecordType row = new IRecordType(false, ImmutableList.of(IRecordType.Field.of(BIGINT, "id"),
                 IRecordType.Field.of(STRING.withNullability(true), "name")));
         final IFunctionCallFragment callR = new IFunctionCallFragment(
                 reference(declaration("r", ImmutableList.of(), ImmutableList.of(), row)), ImmutableList.of());
-        final String q = "extern func q(): record<a: int, _0: string>\n";
+        final String q = "extern func q() -> record<a: int, _0: string>\n";
         final IFunctionCallFragment callQ = new IFunctionCallFragment(reference(declaration("q", ImmutableList.of(),
                 ImmutableList.of(), new IRecordType(false, ImmutableList.of(IRecordType.Field.of(INT, "a"),
                         IRecordType.Field.of(STRING, "_0"))))), ImmutableList.of());
@@ -585,24 +585,24 @@ class FrlIrExpressionParsingTest {
                 Arguments.of(q + "let e = q()._0", new IFieldAccessFragment(callQ, 1)),
                 Arguments.of(q + "let e = q().0", new IFieldAccessFragment(callQ, 0)),
                 // fields without names; the lexer reads 1.0 as one literal, which stands for two ordinals
-                Arguments.of("extern func n(): record<int, record<bigint, string>>\nlet e = n().1.0",
+                Arguments.of("extern func n() -> record<int, record<bigint, string>>\nlet e = n().1.0",
                         new IFieldAccessFragment(new IFieldAccessFragment(callN, 1), 0)),
-                Arguments.of("extern func n(): record<int, record<bigint, string>>\nlet e = n().1\n    .1",
+                Arguments.of("extern func n() -> record<int, record<bigint, string>>\nlet e = n().1\n    .1",
                         new IFieldAccessFragment(new IFieldAccessFragment(callN, 1), 1)),
                 // a field access may start a line, and the context of the expression is the context of the access
                 Arguments.of(r + "let e: string? = r()\n    .name", new IFieldAccessFragment(callR, 1)),
                 // the type of a field can still contain variables: the context makes 42 a bigint
-                Arguments.of("extern func box<T>(_ x: T): record<value: T>\nlet e: bigint = box(42).value",
+                Arguments.of("extern func box<T>(_ x: T) -> record<value: T>\nlet e: bigint = box(42).value",
                         new IFieldAccessFragment(new IFunctionCallFragment(reference(boxFunction,
                                 ImmutableList.of(BIGINT), function(ImmutableList.of(BIGINT), boxOfBigint)),
                                 ImmutableList.of(new ILiteralFragment(42L, BIGINT))), 0)),
                 // a closure parameter has its type from the call before the visitor reaches the body of the closure
-                Arguments.of(r + "extern func with<T, U>(_ x: T, f: (T) -> U): U\nlet e = with(r()) { v in v.id }",
+                Arguments.of(r + "extern func with<T, U>(_ x: T, f: (T) -> U) -> U\nlet e = with(r()) { v in v.id }",
                         new IFunctionCallFragment(reference(withFunction, ImmutableList.of(row, BIGINT),
                                 function(ImmutableList.of(row, function(ImmutableList.of(row), BIGINT)), BIGINT)),
                                 ImmutableList.of(callR, idOfV))),
                 // with arguments, a dot is a dot call of a function, also if the record has a field of the name
-                Arguments.of(r + "extern func name(_ x: record<id: bigint, name: string?>): int\nlet e = r().name()",
+                Arguments.of(r + "extern func name(_ x: record<id: bigint, name: string?>) -> int\nlet e = r().name()",
                         new IFunctionCallFragment(reference(nameFunction), ImmutableList.of(callR))));
     }
 
@@ -616,7 +616,7 @@ class FrlIrExpressionParsingTest {
     @Test
     void parseProgramClosureOnNextLineIsStatementOfItsOwn() {
         final List<IStatementFragment> statements =
-                parseProgram("extern func run(f: () -> int): int\nlet e = run\n{ 42 }").statements();
+                parseProgram("extern func run(f: () -> int) -> int\nlet e = run\n{ 42 }").statements();
         // a trailing closure stays on the line of what it calls, so `let e = run` ends with its line
         assertThat(statements).hasSize(3);
         assertThat(statements.get(1)).isEqualTo(new IAssignmentFragment("e", reference(declaration("run",
@@ -667,7 +667,7 @@ class FrlIrExpressionParsingTest {
             // the closure must fit its context: the result type, the number of parameters, and void
             "extern func foo(s: string, f: (int) -> string)\nfoo(s: \"hello\", f: { i in 42 })",
             "extern func h(f: (int) -> int)\nh(f: { x, y in x })",
-            "extern func g(x: int): int\nextern func h(f: (int) -> void)\nh(f: { i in g(x: i) })",
+            "extern func g(x: int) -> int\nextern func h(f: (int) -> void)\nh(f: { i in g(x: i) })",
             // a closure whose result type is not void must have a value of that type
             "let e = { () -> int in }",
             // a stream block yields values of its element type, which must be inferred and cannot be void
@@ -682,7 +682,7 @@ class FrlIrExpressionParsingTest {
             // the type of a parameter cannot contain itself
             "let e = { f in f(f) }",
             // a function nested in a closure cannot use a variable of the closure whose type is not known yet
-            "let e = { x in func g<T>(y: T): T { x } }",
+            "let e = { x in func g<T>(y: T) -> T { x } }",
             // the parameters of a closure have distinct names
             "let e: (int, int) -> void = { x, x in }",
             "let e = { x y in }",
@@ -698,39 +698,39 @@ class FrlIrExpressionParsingTest {
             "let e = 1.",
             "let e = .5",
             // without arguments or a trailing closure, a dot is a field access, not a call, and 1 is not a record
-            "extern func inc(x: int): int\nlet e = 1.inc",
+            "extern func inc(x: int) -> int\nlet e = 1.inc",
             // a dot call calls a function in scope, not a variable of function type
             "let e = 1.inc()",
             "let inc = { (x: int) -> int in x }\nlet e = 1.inc()",
             // a statement cannot start with a dot, and the name stays on the line of the dot
-            "extern func inc(x: int): int\nlet e = 1;.inc()",
-            "extern func inc(x: int): int\nlet e = 1.\ninc()",
+            "extern func inc(x: int) -> int\nlet e = 1;.inc()",
+            "extern func inc(x: int) -> int\nlet e = 1.\ninc()",
             // a dot call needs the arguments of all the other parameters
-            "extern func f(x: int, y: int): int\nlet e = 1.f()",
+            "extern func f(x: int, y: int) -> int\nlet e = 1.f()",
             // a trailing closure is an argument like any other: it must be of the type of the last parameter
-            "extern func inc(x: int): int\nlet e = inc { 1 }",
+            "extern func inc(x: int) -> int\nlet e = inc { 1 }",
             // a call has one trailing closure at most; a second one calls the result of the call
-            "extern func fold(x: int, f: (int) -> int): int\nlet e = fold(x: 1) { y in y } { z in z }",
+            "extern func fold(x: int, f: (int) -> int) -> int\nlet e = fold(x: 1) { y in y } { z in z }",
             // a field access needs a field of its record, by name or by ordinal
-            "extern func r(): record<id: bigint, name: string?>\nlet e = r().nope",
-            "extern func r(): record<id: bigint, name: string?>\nlet e = r().2",
-            "extern func r(): record<id: bigint, name: string?>\nlet e = r().99999999999",
-            "extern func r(): record<id: bigint, name: string?>\nlet e = r().1e0",
+            "extern func r() -> record<id: bigint, name: string?>\nlet e = r().nope",
+            "extern func r() -> record<id: bigint, name: string?>\nlet e = r().2",
+            "extern func r() -> record<id: bigint, name: string?>\nlet e = r().99999999999",
+            "extern func r() -> record<id: bigint, name: string?>\nlet e = r().1e0",
             // a field access needs a record that is not nullable
-            "extern func r(): record<a: int>?\nlet e = r().a",
-            "extern func r(): record<a: int>?\nlet e = r().0",
+            "extern func r() -> record<a: int>?\nlet e = r().a",
+            "extern func r() -> record<a: int>?\nlet e = r().0",
             "let x = 1\nlet e = x.a",
             "let x = 1\nlet e = x.0",
             // the type of nil, and a type T? whose T is still open, are nullable
             "let e = nil.a",
-            "extern func f<T, U>(g: (T?) -> U, x: T): U\nlet e = f(g: { v in v.a }, x: 1)",
+            "extern func f<T, U>(g: (T?) -> U, x: T) -> U\nlet e = f(g: { v in v.a }, x: 1)",
             // the type of the record must be known at the access; in apply, the closure comes before the record
             "let e = { v in v.a }",
-            APPLY + "extern func r(): record<id: bigint>\nlet e = apply(g: { v in v.id }, x: r())",
+            APPLY + "extern func r() -> record<id: bigint>\nlet e = apply(g: { v in v.id }, x: r())",
             // with arguments, a dot is a dot call of a function, also if the record has a field of the name
-            "extern func k(): record<g: () -> int>\nlet e = k().g()",
+            "extern func k() -> record<g: () -> int>\nlet e = k().g()",
             // the type of the field is the type of the access
-            "extern func r(): record<id: bigint, name: string?>\nlet e: int = r().name",
+            "extern func r() -> record<id: bigint, name: string?>\nlet e: int = r().name",
     })
     void parseProgramInvalidExpressionFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);

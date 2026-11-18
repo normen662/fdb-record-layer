@@ -30,10 +30,12 @@ options { tokenVocab=FrlIrLexer; }
 // rules below allow NL* at exactly those places: a statement split across lines stays one statement. Where a statement
 // could end, a line break ends it; rules for statements that can end in more than one place must therefore not allow NL*
 // there. The one place within a construct where a line break is never allowed is before the `?` of a nullable type,
-// which stays on the line of its type, as in Swift. Three places allow a line break although a statement could end
+// which stays on the line of its type, as in Swift. Four places allow a line break although a statement could end
 // before it, because what follows cannot start a statement, so the parser still tells the statements apart:
 // - the parameters of a closure without parentheses, `{ x, y in }`, may break before a `,`, `->`, or `in`;
-// - a dot call may start a line, so that a chain of calls can put one call on each line (see `postfix`);
+// - a dot call or a field access may start a line, so that a chain can put one call or access on each line (see
+//   `postfix`);
+// - the `->` of the result type of a function declaration may start a line, as in Swift (see `functionDeclaration`);
 // - the `else` of an if may stand on the line after the `}` (see `conditional`).
 // The opposite holds for the `(` of a call and for a trailing closure: both stay on the line of what they call, since
 // after `let x = f` a line break ends the statement, and a closure on the next line is a statement of its own.
@@ -155,7 +157,7 @@ unitType
     : LPAREN NL* RPAREN
     ;
 
-// A type that has a name: a type parameter of an enclosing generic function, `T` in `func id<T>(x: T): T`, an extern
+// A type that has a name: a type parameter of an enclosing generic function, `T` in `func id<T>(x: T) -> T`, an extern
 // type, `range` after `extern type range`, or a type alias, `row` after `typealias row = record<id: bigint>`, which
 // stands for its type. FRL-IR declares the alias `stopReason` itself (see `yieldBreak`). What a name stands for is
 // decided after parsing: a name that is none of these in scope is not a type.
@@ -176,29 +178,30 @@ integer
 //
 // Definitions
 //
-// Function definitions and closures are written as in Swift, and both implement their body as a block. Unlike in Swift,
-// a function definition states its result type after a colon, as a parameter states its type. The value of a body is the
-// value of its last statement if that statement is an expression, as in a Kotlin lambda, and a body has no value
+// Function definitions and closures are written as in Swift, and both implement their body as a block. As in Swift, a
+// function definition states its result type after `->`, as a closure and a function type do. The value of a body is
+// the value of its last statement if that statement is an expression, as in a Kotlin lambda, and a body has no value
 // otherwise; a trailing `;` does not change that.
 //
 
-// `func map<T, U>(xs: [T], f: (T) -> U): [U] { }`. Without `: type`, the function returns `void`. A body must end with an
-// expression of the result type, unless that type is `void`, in which case a value of the last expression is discarded.
-// A function definition ends only with its block, so it may be split across lines anywhere before that. The function is
-// in scope from the next statement on: FRL-IR has no recursion, so a body cannot call its own function.
+// `func map<T, U>(xs: [T], f: (T) -> U) -> [U] { }`. Without `-> type`, the function returns `void`. A body must end
+// with an expression of the result type, unless that type is `void`, in which case a value of the last expression is
+// discarded. A function definition ends only with its block, so it may be split across lines anywhere before that. The
+// function is in scope from the next statement on: FRL-IR has no recursion, so a body cannot call its own function.
 functionDefinition
-    : (annotation NL*)* functionSignature (NL* COLON NL* type)? NL* block
+    : (annotation NL*)* functionSignature (NL* ARROW NL* type)? NL* block
     ;
 
-// `extern func lookup(key: bigint): string?` declares a function that the runtime provides, like an external function in
-// MLIR: it has a signature and no body. A declaration can end after its `)`, so the `:` of its result type stays on the
-// line of the `)`.
+// `extern func lookup(key: bigint) -> string?` declares a function that the runtime provides, like an external function
+// in MLIR: it has a signature and no body. A declaration can end after its `)`, but the `->` of its result type may
+// still start the next line, as in Swift, because no statement starts with `->`.
 functionDeclaration
-    : (annotation NL*)* EXTERN NL* functionSignature (COLON NL* type)?
+    : (annotation NL*)* EXTERN NL* functionSignature (NL* ARROW NL* type)?
     ;
 
 // What a function definition and a function declaration have in common: the name, the type parameters, and the
-// parameters. The result type is not part of it, since the two allow a line break before its `:` in different places.
+// parameters. The result type is not part of it, so that the error for a definition such as `func f(): int { 1 }`
+// still lists `->` among the expected tokens.
 functionSignature
     : FUNC NL* identifier NL* (typeParameters NL*)? LPAREN NL* (parameter (NL* COMMA NL* parameter)* NL*)? RPAREN
     ;
@@ -400,7 +403,7 @@ primaryExpression
 
 // `stream { yield 1; yield 2 }` is a stream block, an expression of type `stream<T>` whose elements are the values that
 // its yields add, in order. Its block runs as the stream is consumed, from one yield to the next, while the code around
-// the stream block runs when it is reached: in `func f(): stream<int> { let x = g(); stream { yield x } }`, `g()` is
+// the stream block runs when it is reached: in `func f() -> stream<int> { let x = g(); stream { yield x } }`, `g()` is
 // called when `f` is. The element type `T` is the one that the context requires, such as the result type of `f`, and
 // otherwise the type that the yielded values agree on. The block sees the names of the enclosing scopes, as a closure
 // does, and the value of its last expression is discarded. `stream` cannot stand on its own, so the `{` may follow on

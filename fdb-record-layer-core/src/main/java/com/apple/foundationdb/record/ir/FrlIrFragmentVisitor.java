@@ -454,8 +454,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * arguments, also a trailing closure, has the type of its parameter as its context before the visitor examines
      * its body.
      *
-     * <p>Example: in {@code apply({ x in h(x) }, 42)} with {@code apply<T, U>(f: (T) -> U, x: T): U}, the method makes
-     * {@code vP1}, {@code vP2}, and {@code vR}. It unifies {@code ((vT) -> vU, vT) -> vU} with
+     * <p>Example: in {@code apply({ x in h(x) }, 42)} with {@code apply<T, U>(f: (T) -> U, x: T) -> U}, the method
+     * makes {@code vP1}, {@code vP2}, and {@code vR}. It unifies {@code ((vT) -> vU, vT) -> vU} with
      * {@code (vP1, vP2) -> vR}. So the closure gets the expected type {@code vP1}, which stands for
      * {@code (vT) -> vU}, and {@code 42} gets {@code vP2}, which stands for the same type as {@code vT}.</p>
      *
@@ -488,7 +488,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * before its argument, and no label for a parameter without a label. A trailing closure has no label. A call of a
      * function value has no labels, because a function type has no labels.
      *
-     * <p>Example: after {@code extern func range<K>(closed: K, open: K): range}, the call
+     * <p>Example: after {@code extern func range<K>(closed: K, open: K) -> range}, the call
      * {@code range(closed: a, open: b)} is correct. The calls {@code range(a, b)} and {@code range(open: b, closed: a)}
      * fail.</p>
      *
@@ -951,7 +951,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     private final class StatementInferenceVisitor extends FrlIrParserBaseVisitor<PendingStatement> {
         /**
          * The expected type of the value of the statement, if the statement is the last one of a body whose value has
-         * an expected type. Example: in {@code func f(): bigint { 42 }}, the statement {@code 42} has the expected
+         * an expected type. Example: in {@code func f() -> bigint { 42 }}, the statement {@code 42} has the expected
          * type {@code bigint}.
          */
         @Nullable
@@ -1093,7 +1093,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
          *
          * <p>If the loop has its own inference, the statements of the body get their own inferences too. Then the
          * visitor calls {@code solve()} for the loop before it infers the body, and the variable gets a {@code Known}
-         * term. Example: with {@code numbers<T>(x: T): [T]}, the loop {@code for x in numbers(1) { h(x) }} in a
+         * term. Example: with {@code numbers<T>(x: T) -> [T]}, the loop {@code for x in numbers(1) { h(x) }} in a
          * function body makes {@code x} an int, so {@code h(y: bigint)} fails. In a closure, the body uses the
          * inference of the loop, and {@code h(x)} makes {@code x} a bigint.</p>
          */
@@ -1361,7 +1361,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
          *
          * <p>Example: the closure {@code { x in h(x) }} with the expected type {@code (vT) -> vU} gets the term
          * {@code (vX) -> vC}. The method unifies the two, which gives {@code vX := vT} and {@code vC := vU}. Then the
-         * body {@code h(x)} with {@code h(y: bigint): string} gives {@code vT := bigint} and {@code vU := string}.</p>
+         * body {@code h(x)} with {@code h(y: bigint) -> string} gives {@code vT := bigint} and
+         * {@code vU := string}.</p>
          */
         @Nonnull
         private Inferred inferClosure(@Nonnull final FrlIrParser.ClosureContext closure) {
@@ -1423,7 +1424,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * through {@link FrlIrFragmentVisitor#inferCall}, so each argument has the type of its parameter as its expected
      * type.
      *
-     * <p>Example: in {@code xs.map { x in x }} with {@code map<T, U>(xs: [T], f: (T) -> U): [U]} and
+     * <p>Example: in {@code xs.map { x in x }} with {@code map<T, U>(xs: [T], f: (T) -> U) -> [U]} and
      * {@code xs: [int]}, the dot call unifies the type of {@code xs} with the first parameter, which gives
      * {@code vT := int}. The closure then has an expected type that stands for {@code (int) -> vU}. So its parameter
      * {@code x} is an int, and its body gives {@code vU := int}.</p>

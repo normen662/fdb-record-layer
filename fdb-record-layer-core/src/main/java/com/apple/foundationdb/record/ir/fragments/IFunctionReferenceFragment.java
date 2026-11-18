@@ -35,8 +35,8 @@ import java.util.function.Supplier;
  * {@code f} in {@code let g = f}. The name of a function is resolved once, while parsing, and the reference refers to
  * the {@link IFunctionFragment} that the name stood for there: the definition that lowering compiles, or the
  * declaration that says what to call. A reference to a generic function fixes its type arguments, which are inferred
- * from where the reference is used: in {@code id(42)} for {@code func id<T>(x: T): T}, the reference is to {@code id}
- * with the type argument {@code int}, and its type is {@code (int) -> int}.
+ * from where the reference is used: in {@code id(42)} for {@code func id<T>(x: T) -> T}, the reference is to
+ * {@code id} with the type argument {@code int}, and its type is {@code (int) -> int}.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IFunctionReferenceFragment implements IExpressionFragment {

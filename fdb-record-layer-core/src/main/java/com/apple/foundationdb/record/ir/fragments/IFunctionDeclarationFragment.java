@@ -32,7 +32,7 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
- * A function declaration, {@code extern func lookup(key: bigint): string?}: the signature of a function that the
+ * A function declaration, {@code extern func lookup(key: bigint) -> string?}: the signature of a function that the
  * runtime provides, like an external function in MLIR. Calls and references treat a declared function like a defined
  * one; it just has no body. Its annotations, and those of its {@linkplain #packageStatement() package}, tell a target
  * what to call.

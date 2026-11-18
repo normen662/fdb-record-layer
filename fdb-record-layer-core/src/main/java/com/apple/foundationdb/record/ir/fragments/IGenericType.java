@@ -28,7 +28,7 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
- * A type parameter of a generic function, e.g. {@code T} in {@code func id<T>(x: T): T}. The type it stands for is
+ * A type parameter of a generic function, e.g. {@code T} in {@code func id<T>(x: T) -> T}. The type it stands for is
  * known only where the function is used. Only a scope that declares the type parameter gives the name a meaning.
  * Equality compares the name and the nullability, so the type parameters {@code T} of two different functions are
  * equal.

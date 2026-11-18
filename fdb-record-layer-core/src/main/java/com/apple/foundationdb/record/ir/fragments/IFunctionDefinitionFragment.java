@@ -33,11 +33,11 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
- * A function definition, {@code func map<T, U>(xs: [T], f: (T) -> U, ys: [U]): [U] { ys }}: a signature and the block
- * that implements it. The value of the block is the result of the function, so a block of a function whose result type
- * is not {@code void} ends with an expression of that type. A function definition is also a statement, so functions can
- * be nested, as in Swift; a nested function sees the type parameters of the functions it is nested in. A function is in
- * scope only after its definition, so it cannot call itself: FRL-IR has no recursion.
+ * A function definition, {@code func map<T, U>(xs: [T], f: (T) -> U, ys: [U]) -> [U] { ys }}: a signature and the
+ * block that implements it. The value of the block is the result of the function, so a block of a function whose
+ * result type is not {@code void} ends with an expression of that type. A function definition is also a statement, so
+ * functions can be nested, as in Swift; a nested function sees the type parameters of the functions it is nested in. A
+ * function is in scope only after its definition, so it cannot call itself: FRL-IR has no recursion.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IFunctionDefinitionFragment implements IFunctionFragment {

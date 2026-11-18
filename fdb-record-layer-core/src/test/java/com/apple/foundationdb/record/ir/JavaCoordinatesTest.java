@@ -45,7 +45,7 @@ class JavaCoordinatesTest {
     void coordinatesWithoutAnnotationsFollowFromPackage() {
         final List<IStatementFragment> statements = parseProgram(PACKAGE + """
                 extern type range
-                extern func scan(range: range): bigint""").statements();
+                extern func scan(range: range) -> bigint""").statements();
         assertThat(JavaCoordinates.typeClass(typeDeclaration(statements, "range")))
                 .contains("com.apple.foundationdb.record.ir.range");
         // a function is a static method of the class named after the package
@@ -57,9 +57,9 @@ class JavaCoordinatesTest {
     void coordinatesAnnotationOfDeclarationOverridesPackage() {
         final List<IStatementFragment> statements = parseProgram(PACKAGE + """
                 @java(class: "com.apple.foundationdb.record.TupleRange") extern type range
-                @java(class: "com.apple.foundationdb.record.Scans") extern func scan(range: range): bigint
-                @java(method: "lookUp") extern func lookup(key: bigint): bigint
-                @java(class: "a.Keys", method: "next") extern func successor(key: bigint): bigint
+                @java(class: "com.apple.foundationdb.record.Scans") extern func scan(range: range) -> bigint
+                @java(method: "lookUp") extern func lookup(key: bigint) -> bigint
+                @java(class: "a.Keys", method: "next") extern func successor(key: bigint) -> bigint
                 @swift(module: "RecordLayerIR") extern func other()""").statements();
         assertThat(JavaCoordinates.typeClass(typeDeclaration(statements, "range")))
                 .contains("com.apple.foundationdb.record.TupleRange");
@@ -80,9 +80,9 @@ class JavaCoordinatesTest {
         final List<IStatementFragment> statements = parseProgram("""
                 extern type range
                 @java(class: "a.Range") extern type interval
-                extern func scan(range: range): bigint
+                extern func scan(range: range) -> bigint
                 @java(class: "a.Scans") extern func scanAll()
-                @java(method: "lookUp") extern func lookup(key: bigint): bigint""").statements();
+                @java(method: "lookUp") extern func lookup(key: bigint) -> bigint""").statements();
         assertThat(JavaCoordinates.typeClass(typeDeclaration(statements, "range"))).isEmpty();
         assertThat(JavaCoordinates.typeClass(typeDeclaration(statements, "interval"))).contains("a.Range");
         assertThat(JavaCoordinates.function(functionDeclaration(statements, "scan"))).isEmpty();

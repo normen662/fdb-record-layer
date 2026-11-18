@@ -66,8 +66,8 @@ import java.util.Optional;
  *
  * <p>Example: the third line of this program states no type.</p>
  * <pre>{@code
- * extern func apply<T, U>(f: (T) -> U, x: T): U
- * extern func h(y: bigint): string
+ * extern func apply<T, U>(f: (T) -> U, x: T) -> U
+ * extern func h(y: bigint) -> string
  * let s = apply({ x in h(x) }, 42)
  * }</pre>
  * In the steps below, {@code vT}, {@code vU}, and the other names that start with {@code v} are inference variables.
@@ -228,10 +228,10 @@ final class TypeInference {
      * and it puts this variable in each place of the type parameter. These variables are the type arguments of the
      * reference. Each reference makes new variables, so each call can have different type arguments.
      *
-     * <p>Example: for {@code apply<T, U>(f: (T) -> U, x: T): U}, the method makes {@code vT} and {@code vU}. It returns
-     * the term {@code ((vT) -> vU, vT) -> vU} and the type arguments {@code vT} and {@code vU}. The two places of
-     * {@code T} hold two different {@code VariableTerm} records, but both refer to {@code vT}. So one binding of
-     * {@code vT} changes both places.</p>
+     * <p>Example: for {@code apply<T, U>(f: (T) -> U, x: T) -> U}, the method makes {@code vT} and {@code vU}. It
+     * returns the term {@code ((vT) -> vU, vT) -> vU} and the type arguments {@code vT} and {@code vU}. The two
+     * places of {@code T} hold two different {@code VariableTerm} records, but both refer to {@code vT}. So one
+     * binding of {@code vT} changes both places.</p>
      *
      * @param typeParameters the type parameters of the function
      * @param type the type of the function, in terms of its type parameters
