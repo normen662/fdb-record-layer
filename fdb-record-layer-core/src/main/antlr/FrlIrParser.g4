@@ -38,7 +38,8 @@ options { tokenVocab=FrlIrLexer; }
 // - the `->` of the result type of a function declaration may start a line, as in Swift (see `functionDeclaration`);
 // - the `else` of an if may stand on the line after the `}` (see `conditional`).
 // The opposite holds for the `(` of a call and for a trailing closure: both stay on the line of what they call, since
-// after `let x = f` a line break ends the statement, and a closure on the next line is a statement of its own.
+// after `let x = f` a line break ends the statement. On the next line, a parenthesized expression or a closure is a
+// statement of its own.
 //
 // A line break can follow a binary operator. A binary operator can also start a line, as in Swift: if a space or a tab
 // follows it, the line continues the expression of the line before, as in `x` followed by a line `    - y`. The lexer
@@ -491,11 +492,20 @@ prefixOperator
 // A name is a variable, a parameter, or a function. The name of a generic or an overloaded function can take type
 // arguments, `id<bigint>`. As in C# and Swift, `<` after a name starts type arguments if the text that follows can be
 // type arguments, so `f(a < b, c > (d))` passes one argument, `a<b, c>(d)`, not two comparisons.
+//
+// Parentheses group an expression, `(a + b) * c`, and nothing else: `(e)` has the type of `e`, and the context of
+// `(e)` is the context of `e`. So the postfixes and the operators around it apply to the value of `e`, as in
+// `(x.f)(1)`, which calls a field of a function type. Parentheses are transparent for labels too: `(f)(x: 1)` needs the
+// label of `f`, as in Swift. A line break may follow the `(` and precede the `)`. Within the parentheses, the line
+// breaks follow the rules of other expressions, so `(a` followed by a line `    - b)` is a subtraction, and a
+// condition in parentheses can take a trailing closure, `if (xs.contains { x in x == 1 }) { }`. The parentheses hold
+// one expression: `(a, b)` is not an expression yet, and neither are `()` and `(name: a)`.
 primaryExpression
-    : literal                       # literalExpression
-    | identifier typeArguments?     # nameExpression
-    | closure                       # closureExpression
-    | streamBlock                   # streamExpression
+    : literal                                # literalExpression
+    | identifier typeArguments?              # nameExpression
+    | closure                                # closureExpression
+    | streamBlock                            # streamExpression
+    | LPAREN NL* expression NL* RPAREN       # parenthesizedExpression
     ;
 
 // `stream { yield 1; yield 2 }` is a stream block, an expression of type `stream<T>` whose elements are the values that

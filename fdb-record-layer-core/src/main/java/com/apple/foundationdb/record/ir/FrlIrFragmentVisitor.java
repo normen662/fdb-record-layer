@@ -1771,6 +1771,17 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         }
 
         /**
+         * Infers a parenthesized expression as the expression in the parentheses. The parentheses only group, so the
+         * context of the parentheses is the context of that expression, and a name in them keeps the labels of its
+         * function: {@code (f)(x: 1)} needs the label of {@code f}.
+         */
+        @Nonnull
+        @Override
+        public Inferred visitParenthesizedExpression(@Nonnull final FrlIrParser.ParenthesizedExpressionContext ctx) {
+            return infer(ctx.expression(), expected, mismatch);
+        }
+
+        /**
          * Infers the type of a stream block, {@code stream { … }}, a stream of a new inference variable. The stream
          * type is unified with the expected type before the block is inferred, so that the context determines the
          * element type and every yield has it as the context of its value; without a context, the yielded values

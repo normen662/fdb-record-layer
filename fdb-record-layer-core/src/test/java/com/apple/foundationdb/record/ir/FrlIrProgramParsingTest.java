@@ -1209,13 +1209,12 @@ class FrlIrProgramParsingTest {
             "let x = x",                                   // the variable is not in scope in its own expression
             "let x = 1\nlet x = 2",                        // a scope declares a name only once
             "func f() { }\nlet f = 1",                     // variables and functions share their names
-            "func f() { }\nfunc f() { }",                  // there is no overloading
+            "func f() { }\nfunc f() { }",                  // a function that is not overloaded has its name alone
             "func f(x: int, x: int) { }",                  // the parameters have distinct names
             "let y = f(1)\nfunc f(x: int) -> int { x }",   // a function is in scope from its definition on
             "func f(n: int) -> int { f(n) }",              // so it cannot call itself: FRL-IR has no recursion
             "func f() { func g() { f() } }",               // not even from a nested function
             "func f() { let x = 1 }\nlet y = x",           // a variable is in scope only in its block
-            "func f(x: int) { }\nf\n(1)",                  // a `(` on the next line cannot start a statement
             "func outer<T>() { func inner<T>() { } }",     // a type parameter cannot hide one of an enclosing function
             "extern func g()\nlet x = g()",                // a void call has no value to name
             "extern func g()\nlet x: void = g()",

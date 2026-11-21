@@ -317,7 +317,22 @@ class FrlIrOperatorParsingTest {
                 Arguments.of("a\n\n    // and then\n    + b\n    * c", call(PLUS, ImmutableList.of(VAR_A,
                         call(TIMES, ImmutableList.of(VAR_B, VAR_C))))),
                 Arguments.of("a\n    /* less */ < b", call(LESS, ImmutableList.of(VAR_A, VAR_B))),
-                Arguments.of("a\n\t== b", call(EQUAL, ImmutableList.of(VAR_A, VAR_B))));
+                Arguments.of("a\n\t== b", call(EQUAL, ImmutableList.of(VAR_A, VAR_B))),
+                // parentheses group, so they override the precedence and the order of the operators
+                Arguments.of("(a + b) * c", call(TIMES, ImmutableList.of(call(PLUS, ImmutableList.of(VAR_A, VAR_B)),
+                        VAR_C))),
+                Arguments.of("a - (b - c)", call(MINUS, ImmutableList.of(VAR_A, call(MINUS,
+                        ImmutableList.of(VAR_B, VAR_C))))),
+                Arguments.of("-(a + b)", call(NEGATE, ImmutableList.of(call(PLUS, ImmutableList.of(VAR_A, VAR_B))))),
+                Arguments.of("!(a < b)", call(NOT, ImmutableList.of(call(LESS, ImmutableList.of(VAR_A, VAR_B))))),
+                // a postfix applies to the value in the parentheses
+                Arguments.of("(a + b).inc()", call(INC, ImmutableList.of(call(PLUS, ImmutableList.of(VAR_A, VAR_B))))),
+                // the sign of a literal belongs to the literal only without parentheses
+                Arguments.of("-(1)", call(NEGATE, ImmutableList.of(new ILiteralFragment(1, INT)))),
+                // in the parentheses, the line breaks follow the rules of other expressions
+                Arguments.of("(a\n    - b)", call(MINUS, ImmutableList.of(VAR_A, VAR_B))),
+                Arguments.of("(\n    a + b\n) * c", call(TIMES, ImmutableList.of(call(PLUS,
+                        ImmutableList.of(VAR_A, VAR_B)), VAR_C))));
     }
 
     @ParameterizedTest
@@ -356,13 +371,15 @@ class FrlIrOperatorParsingTest {
 
     @Test
     void parseProgramOperatorInConditionIsCall() {
-        final List<IStatementFragment> statements =
-                parseProgram(OPERATORS + "func f() {\n    if !t { }\n    if a < b { }\n}").statements();
+        final List<IStatementFragment> statements = parseProgram(OPERATORS
+                + "func f() {\n    if !t { }\n    if a < b { }\n    if (!t) { }\n}").statements();
         final List<IStatementFragment> body =
                 ((IFunctionDefinitionFragment)statements.get(statements.size() - 1)).body().statements();
         final IBlockFragment empty = new IBlockFragment(ImmutableList.of());
+        // a condition in parentheses, as in the sketch, is the same condition
         assertThat(body).containsExactly(new IIfFragment(call(NOT, ImmutableList.of(VAR_T)), empty, null),
-                new IIfFragment(call(LESS, ImmutableList.of(VAR_A, VAR_B)), empty, null));
+                new IIfFragment(call(LESS, ImmutableList.of(VAR_A, VAR_B)), empty, null),
+                new IIfFragment(call(NOT, ImmutableList.of(VAR_T)), empty, null));
     }
 
     @Test
@@ -436,6 +453,8 @@ class FrlIrOperatorParsingTest {
             "let e = a\n    +b",
             // a line break before an operator ends the statement unless whitespace follows the operator
             "let e = a\n+b",
+            // in parentheses too, an operator attached to its operand starts no continuation
+            "let e = (a\n-b)",
             // the operand of a prefix operator stays on its line
             "let e = -\na",
             // the operands must have the types of the parameters

@@ -35,6 +35,7 @@ import com.apple.foundationdb.record.ir.fragments.IFunctionDefinitionFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionReferenceFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
+import com.apple.foundationdb.record.ir.fragments.IIfFragment;
 import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
@@ -61,8 +62,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Tests for parsing FRL-IR expressions: literals, references, calls, closures, and stream blocks, and the inference of
- * their types. Each test program ends with an assignment or an expression, whose expression the test checks.
+ * Tests for parsing FRL-IR expressions: literals, references, calls, closures, stream blocks, and parenthesized
+ * expressions, and the inference of their types. Each test program ends with an assignment or an expression, whose
+ * expression the test checks.
  */
 class FrlIrExpressionParsingTest {
     private static final IType INT = new IPrimitiveType(IPrimitiveType.Kind.INT, false);
@@ -624,6 +626,80 @@ class FrlIrExpressionParsingTest {
         assertThat(statements.get(2)).isEqualTo(closure(ImmutableList.of(), INT, new ILiteralFragment(42, INT)));
     }
 
+    @Nonnull
+    static Stream<Arguments> parenthesizedExpressions() {
+        final IFunctionDeclarationFragment f =
+                declaration("f", ImmutableList.of(), ImmutableList.of(parameter("x", INT)), INT);
+        final IFunctionType intToBigint = function(ImmutableList.of(INT), BIGINT);
+        final IFunctionCallFragment callK = new IFunctionCallFragment(reference(declaration("k", ImmutableList.of(),
+                ImmutableList.of(), new IRecordType(false, ImmutableList.of(IRecordType.Field.of(intToBigint, "g"))))),
+                ImmutableList.of());
+        final IFunctionType bigintToBigint = function(ImmutableList.of(BIGINT), BIGINT);
+        return Stream.of(
+                // parentheses only group: the value and the type are those of the expression in them
+                Arguments.of("let e = (42)", new ILiteralFragment(42, INT)),
+                Arguments.of("let e = ((42))", new ILiteralFragment(42, INT)),
+                // the context of the parentheses is the context of the expression in them
+                Arguments.of("let e: bigint = (42)", new ILiteralFragment(42L, BIGINT)),
+                Arguments.of(ID + "let e: bigint = (id)(x: 42)",
+                        new IFunctionCallFragment(reference(ID_FUNCTION, ImmutableList.of(BIGINT), bigintToBigint),
+                                ImmutableList.of(new ILiteralFragment(42L, BIGINT)))),
+                // a line break may follow the ( and precede the )
+                Arguments.of("let e = (\n    42\n)", new ILiteralFragment(42, INT)),
+                // a postfix applies to the value in the parentheses, so a field of a function type can be called
+                Arguments.of("extern func k() -> record<g: (int) -> bigint>\nlet e = (k().g)(1)",
+                        new IFunctionCallFragment(new IFieldAccessFragment(callK, 0),
+                                ImmutableList.of(new ILiteralFragment(1, INT)))),
+                // parentheses are transparent for labels
+                Arguments.of("extern func f(x: int) -> int\nlet e = (f)(x: 1)",
+                        new IFunctionCallFragment(reference(f), ImmutableList.of(new ILiteralFragment(1, INT)))),
+                // a closure in parentheses can be called, as without them
+                Arguments.of("let e = ({ (y: int) -> int in y })(2)",
+                        new IFunctionCallFragment(closure(ImmutableList.of(new IClosureFragment.Parameter("y", INT)),
+                                INT, new IVariableReferenceFragment("y", INT)),
+                                ImmutableList.of(new ILiteralFragment(2, INT)))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("parenthesizedExpressions")
+    void parseProgramParenthesizedExpressionIsExpressionInParentheses(@Nonnull final String text,
+                                                                      @Nonnull final IExpressionFragment expected) {
+        assertThat(lastExpression(text)).isEqualTo(expected);
+    }
+
+    @Test
+    void parseProgramParenthesisOnNextLineStartsStatement() {
+        final List<IStatementFragment> statements =
+                parseProgram("extern func f(x: int) -> int\nlet e = f\n(1)").statements();
+        // the ( of a call stays on the line of what it calls, so `let e = f` ends with its line, and (1) is a
+        // statement of its own, as in Swift
+        assertThat(statements).hasSize(3);
+        assertThat(statements.get(1)).isEqualTo(new IAssignmentFragment("e",
+                reference(declaration("f", ImmutableList.of(), ImmutableList.of(parameter("x", INT)), INT))));
+        assertThat(statements.get(2)).isEqualTo(new ILiteralFragment(1, INT));
+    }
+
+    @Test
+    void parseProgramParenthesizedConditionTakesTrailingClosure() {
+        final List<IStatementFragment> statements = parseProgram("""
+                extern func contains(_ xs: [int], _ p: (int) -> boolean) -> boolean
+                extern func numbers() -> [int]
+                func f() {
+                    if (numbers().contains { x in true }) { }
+                }""").statements();
+        final IFunctionDeclarationFragment contains = declaration("contains", ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter(null, "xs", new IArrayType(false, INT)),
+                        new IFunctionDefinitionFragment.Parameter(null, "p", function(ImmutableList.of(INT), BOOLEAN))),
+                BOOLEAN);
+        final IFunctionCallFragment numbers = new IFunctionCallFragment(reference(declaration("numbers",
+                ImmutableList.of(), ImmutableList.of(), new IArrayType(false, INT))), ImmutableList.of());
+        // in the parentheses, the condition is a full expression, so its call can take a trailing closure
+        assertThat(((IFunctionDefinitionFragment)statements.get(2)).body().statements()).containsExactly(
+                new IIfFragment(new IFunctionCallFragment(reference(contains), ImmutableList.of(numbers,
+                        closure(ImmutableList.of(new IClosureFragment.Parameter("x", INT)), BOOLEAN,
+                                new ILiteralFragment(true, BOOLEAN)))), EMPTY_BLOCK, null));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
             // a name must be in scope
@@ -731,6 +807,15 @@ class FrlIrExpressionParsingTest {
             "extern func k() -> record<g: () -> int>\nlet e = k().g()",
             // the type of the field is the type of the access
             "extern func r() -> record<id: bigint, name: string?>\nlet e: int = r().name",
+            // parentheses hold one expression: a record literal is not an expression yet
+            "let e = (1, 2)",
+            "let e = ()",
+            "let e = (\n)",
+            "let e = (x: 1)",
+            "let e = (1",
+            "let e = 1)",
+            // parentheses are transparent for labels
+            "extern func f(x: int) -> int\nlet e = (f)(1)",
     })
     void parseProgramInvalidExpressionFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
