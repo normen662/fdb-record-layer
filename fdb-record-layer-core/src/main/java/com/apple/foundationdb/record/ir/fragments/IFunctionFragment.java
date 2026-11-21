@@ -25,12 +25,14 @@ import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nonnull;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * A function that a name can stand for: one that FRL-IR defines, an {@link IFunctionDefinitionFragment}, or one that
  * the runtime provides, an {@link IFunctionDeclarationFragment}. A reference to a function, an
  * {@link IFunctionReferenceFragment}, refers back to it, so that lowering finds the definition to compile, or the
- * declaration that says what to call.
+ * declaration that says what to call. Either kind can be a variant of an {@link IOverloadedFunctionFragment}, see
+ * {@link #variant()}.
  */
 @API(API.Status.EXPERIMENTAL)
 public sealed interface IFunctionFragment extends IStatementFragment
@@ -75,6 +77,16 @@ public sealed interface IFunctionFragment extends IStatementFragment
      */
     @Nonnull
     List<IAnnotationFragment> annotations();
+
+    /**
+     * Returns what makes this function a variant of an overloaded function: the overloaded function and the type
+     * arguments that select this variant. A call of the overloaded function that selects these type arguments calls
+     * this function.
+     *
+     * @return the variant part, or empty if this function is not a variant
+     */
+    @Nonnull
+    Optional<IOverloadedFunctionFragment.Variant> variant();
 
     /**
      * Returns the type of the function, in terms of its type parameters.

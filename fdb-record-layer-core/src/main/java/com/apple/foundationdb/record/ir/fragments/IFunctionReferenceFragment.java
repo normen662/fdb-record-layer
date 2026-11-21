@@ -36,7 +36,9 @@ import java.util.function.Supplier;
  * the {@link IFunctionFragment} that the name stood for there: the definition that lowering compiles, or the
  * declaration that says what to call. A reference to a generic function fixes its type arguments, which are inferred
  * from where the reference is used: in {@code id(42)} for {@code func id<T>(x: T) -> T}, the reference is to
- * {@code id} with the type argument {@code int}, and its type is {@code (int) -> int}.
+ * {@code id} with the type argument {@code int}, and its type is {@code (int) -> int}. A reference to an overloaded
+ * function, also as the function of an operator, refers to the variant that the parser selected, which has no type
+ * parameters.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IFunctionReferenceFragment implements IExpressionFragment {

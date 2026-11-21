@@ -56,21 +56,24 @@ FUNCTION : 'function';
 // Definitions and statements. `extern` declares a function or a type that the runtime provides, `typealias` names
 // a type, `package` names the package that a program belongs to, and `yield` adds a value to the stream of a stream
 // block, `stream { … }`, which `yield break` ends or stops. `if`, `for`, and `consume` are the statements of control
-// flow; `consume` pulls the elements of a stream, one `case` for each way a stream can answer.
-FUNC      : 'func';
-EXTERN    : 'extern';
-TYPE      : 'type';
-TYPEALIAS : 'typealias';
-PACKAGE   : 'package';
-IN        : 'in';
-LET       : 'let';
-YIELD     : 'yield';
-BREAK     : 'break';
-IF        : 'if';
-ELSE      : 'else';
-FOR       : 'for';
-CONSUME   : 'consume';
-CASE      : 'case';
+// flow; `consume` pulls the elements of a stream, one `case` for each way a stream can answer. `overloaded` declares an
+// overloaded function, and `variant` defines or declares one of its variants.
+FUNC       : 'func';
+EXTERN     : 'extern';
+TYPE       : 'type';
+TYPEALIAS  : 'typealias';
+PACKAGE    : 'package';
+IN         : 'in';
+LET        : 'let';
+YIELD      : 'yield';
+BREAK      : 'break';
+IF         : 'if';
+ELSE       : 'else';
+FOR        : 'for';
+CONSUME    : 'consume';
+CASE       : 'case';
+OVERLOADED : 'overloaded';
+VARIANT    : 'variant';
 
 // Literals that are keywords. `nil` is the null of every nullable type, as in Swift.
 TRUE  : 'true';
@@ -94,6 +97,44 @@ ARROW    : '->';
 MINUS    : '-';
 AT       : '@';
 DOT      : '.';
+
+// The operators besides `<`, `>`, and `-`. An operator is a call of the function that an `@operator` annotation gives
+// it, see `expression` in FrlIrParser. `>=` is one token, so a generic type right before `=` needs a space:
+// `let a: array<int> = b`.
+PLUS        : '+';
+STAR        : '*';
+SLASH       : '/';
+PERCENT     : '%';
+BANG        : '!';
+LE          : '<=';
+GE          : '>=';
+EQUAL_EQUAL : '==';
+BANG_EQUAL  : '!=';
+
+// A binary operator at the start of a line continues the expression of the line before if a space or a tab follows it,
+// as in Swift. In `x` followed by a line `    - y`, the two lines hold one subtraction, `x - y`. In `x` followed by a
+// line `-y`, the second line is a statement of its own, the negation `-y`. The lexer folds the line breaks before such
+// an operator into the operator, with the blank lines and the comments between them, so that the parser gets no line
+// break there; the token has the type of the operator. The rule is here because only the lexer sees whitespace. A line
+// break after the operator does not count, because it can end a statement, as after the `>` of `record<…>` at the start
+// of a line. An operator with type arguments, `+<int, int>`, is followed by its `<`, so it continues an expression only
+// at the end of a line.
+CONTINUED_PLUS        : LINE_START '+' OPERATOR_END -> type(PLUS);
+CONTINUED_MINUS       : LINE_START '-' OPERATOR_END -> type(MINUS);
+CONTINUED_STAR        : LINE_START '*' OPERATOR_END -> type(STAR);
+CONTINUED_SLASH       : LINE_START '/' OPERATOR_END -> type(SLASH);
+CONTINUED_PERCENT     : LINE_START '%' OPERATOR_END -> type(PERCENT);
+CONTINUED_LT          : LINE_START '<' OPERATOR_END -> type(LT);
+CONTINUED_LE          : LINE_START '<=' OPERATOR_END -> type(LE);
+CONTINUED_GT          : LINE_START '>' OPERATOR_END -> type(GT);
+CONTINUED_GE          : LINE_START '>=' OPERATOR_END -> type(GE);
+CONTINUED_EQUAL_EQUAL : LINE_START '==' OPERATOR_END -> type(EQUAL_EQUAL);
+CONTINUED_BANG_EQUAL  : LINE_START '!=' OPERATOR_END -> type(BANG_EQUAL);
+
+// One or more line breaks, each followed by the whitespace and the comments of its line.
+fragment LINE_START : (LINE_BREAK ([ \t] | LINE_COMMENT_TEXT | BLOCK_COMMENT_TEXT)*)+;
+
+fragment OPERATOR_END : [ \t];
 
 INTEGER_LITERAL : [0-9]+;
 
@@ -124,11 +165,16 @@ ESCAPED_IDENTIFIER : '`' ~[`\r\n]+ '`';
 // Comments as in Swift: a line comment runs to the end of the line, and block comments nest. A comment is whitespace;
 // the line break that ends a line comment is not part of it, so it still separates statements, while a line break
 // inside a block comment does not.
-LINE_COMMENT  : '//' ~[\r\n]* -> skip;
-BLOCK_COMMENT : '/*' (BLOCK_COMMENT | .)*? '*/' -> skip;
+LINE_COMMENT  : LINE_COMMENT_TEXT -> skip;
+BLOCK_COMMENT : BLOCK_COMMENT_TEXT -> skip;
+
+fragment LINE_COMMENT_TEXT  : '//' ~[\r\n]*;
+fragment BLOCK_COMMENT_TEXT : '/*' (BLOCK_COMMENT_TEXT | .)*? '*/';
 
 // A line break is a token rather than whitespace, because between two statements it does what a semicolon does. Within
 // a statement the parser treats it as whitespace (see `statements` in FrlIrParser).
-NL : '\r'? '\n' | '\r';
+NL : LINE_BREAK;
+
+fragment LINE_BREAK : '\r'? '\n' | '\r';
 
 WHITESPACE : [ \t]+ -> skip;

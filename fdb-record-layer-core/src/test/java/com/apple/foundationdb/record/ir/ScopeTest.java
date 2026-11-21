@@ -23,7 +23,9 @@ package com.apple.foundationdb.record.ir;
 import com.apple.foundationdb.record.ir.fragments.IExternType;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDeclarationFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionDefinitionFragment;
+import com.apple.foundationdb.record.ir.fragments.IFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
+import com.apple.foundationdb.record.ir.fragments.IOverloadedFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IType;
@@ -33,6 +35,7 @@ import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Test;
 
 import javax.annotation.Nonnull;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -40,7 +43,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Tests for {@link Scope}: what a scope declares is visible there and in the scopes it encloses, leaving a scope drops
  * what it declared, and a scope carries the inference that types its expressions, the package of the program, and the
- * element type of the stream that a yield adds to.
+ * element type of the stream that a yield adds to. An overloaded function collects the variants that its scope
+ * declares after it, and operators are scoped as names are.
  */
 class ScopeTest {
     private static final IGenericType T = new IGenericType("T", false);
@@ -52,6 +56,9 @@ class ScopeTest {
     private static final IFunctionDeclarationFragment IDENTITY = function("f", T);
     private static final ITypeDeclarationFragment RANGE =
             new ITypeDeclarationFragment("range", ImmutableList.of(), null);
+    private static final IOverloadedFunctionFragment OVERLOADED_ID = new IOverloadedFunctionFragment("id",
+            ImmutableList.of(T), ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", T)),
+            ImmutableList.of());
 
     @Test
     void lookupTypeParameterDeclaredInEnclosingScopeFindsDeclaration() {
@@ -303,6 +310,86 @@ class ScopeTest {
         assertThatThrownBy(() -> Scope.root().exit()).isInstanceOf(IllegalStateException.class);
     }
 
+    @Test
+    void declareVariantAddsVariantToOverloadedFunctionOfScope() {
+        final Scope scope = Scope.root();
+        final Scope.OverloadedFunctionBinding binding = scope.declareOverloadedFunction(OVERLOADED_ID);
+        final IFunctionDeclarationFragment intVariant = variant(INT);
+        final IFunctionDeclarationFragment stringVariant = variant(STRING);
+        scope.declareVariant(intVariant);
+        // a call sees the variants declared before it, so it gets a copy of them
+        final List<IFunctionFragment> beforeStringVariant = binding.variants();
+        scope.declareVariant(stringVariant);
+        assertThat(beforeStringVariant).containsExactly(intVariant);
+        assertThat(binding.variants()).containsExactly(intVariant, stringVariant);
+        assertThat(scope.lookupValue("id")).containsSame(binding);
+        assertThat(scope.enterBlock().lookupFunction("id")).containsSame(binding);
+        // the scope of a statement declares into the scope that encloses it
+        final Scope statement = Scope.root().enterStatement(new TypeInference());
+        final Scope.OverloadedFunctionBinding statementBinding = statement.declareOverloadedFunction(OVERLOADED_ID);
+        statement.declareVariant(intVariant);
+        assertThat(statement.overloadedFunction("id")).containsSame(statementBinding);
+        assertThat(statement.exit().overloadedFunction("id")).containsSame(statementBinding);
+        assertThat(statementBinding.variants()).containsExactly(intVariant);
+    }
+
+    @Test
+    void declareVariantOutsideScopeOfOverloadedFunctionFails() {
+        final Scope outer = Scope.root();
+        outer.declareOverloadedFunction(OVERLOADED_ID);
+        // a variant is declared after its overloaded function, in the same scope, and its key is its own
+        assertThatThrownBy(() -> outer.enterBlock().declareVariant(variant(INT)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Scope.root().declareVariant(variant(INT)))
+                .isInstanceOf(IllegalArgumentException.class);
+        outer.declareVariant(variant(INT));
+        assertThatThrownBy(() -> outer.declareVariant(variant(INT))).isInstanceOf(IllegalArgumentException.class);
+        // a function that is not a variant is no variant
+        assertThatThrownBy(() -> outer.declareVariant(function("id", INT)))
+                .isInstanceOf(IllegalArgumentException.class);
+        // the overloaded function has its name, so no variable or function of the scope can have it
+        assertThatThrownBy(() -> outer.declareVariable("id", INT_TERM)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> outer.declareFunction(function("id", INT)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void lookupOperatorInnerDeclarationHidesOuterOne() {
+        final Scope outer = Scope.root();
+        final Scope.FunctionBinding outerFunction = outer.declareFunction(function("plus", INT));
+        outer.declareOperator(Operator.ADD, outerFunction);
+        final Scope inner = outer.enterBlock();
+        final Scope.OverloadedFunctionBinding innerFunction = inner.declareOverloadedFunction(OVERLOADED_ID);
+        inner.declareOperator(Operator.ADD, innerFunction);
+        assertThat(inner.lookupOperator(Operator.ADD)).containsSame(innerFunction);
+        assertThat(inner.exit().lookupOperator(Operator.ADD)).containsSame(outerFunction);
+        // operators have a namespace of their own, and the two operators with the symbol - are different
+        assertThat(inner.lookupOperator(Operator.SUBTRACT)).isEmpty();
+        outer.declareOperator(Operator.NEGATE, outerFunction);
+        assertThat(inner.lookupOperator(Operator.SUBTRACT)).isEmpty();
+        assertThat(inner.lookupOperator(Operator.NEGATE)).containsSame(outerFunction);
+        // a scope declares an operator once at most
+        assertThatThrownBy(() -> outer.declareOperator(Operator.ADD, outerFunction))
+                .isInstanceOf(IllegalArgumentException.class);
+        // the scope of a statement declares into the scope that encloses it
+        final Scope statement = Scope.root().enterStatement(new TypeInference());
+        statement.declareOperator(Operator.LESS, outerFunction);
+        assertThat(statement.exit().lookupOperator(Operator.LESS)).containsSame(outerFunction);
+    }
+
+    @Test
+    void ofOperatorSymbolAndOperandCountFindsOperator() {
+        assertThat(Operator.of("-", 1)).contains(Operator.NEGATE);
+        assertThat(Operator.of("-", 2)).contains(Operator.SUBTRACT);
+        assertThat(Operator.of("!", 1)).contains(Operator.NOT);
+        assertThat(Operator.of(">=", 2)).contains(Operator.GREATER_OR_EQUAL);
+        // there is no prefix +, no binary !, and no operator && yet
+        assertThat(Operator.of("+", 1)).isEmpty();
+        assertThat(Operator.of("!", 2)).isEmpty();
+        assertThat(Operator.of("&&", 2)).isEmpty();
+        assertThat(Operator.of("-", 3)).isEmpty();
+    }
+
     /**
      * Returns the declaration of a function with one parameter of the given type, which is its result type too, and
      * which is generic in {@code T} if the type is {@code T}.
@@ -311,5 +398,15 @@ class ScopeTest {
     private static IFunctionDeclarationFragment function(@Nonnull final String name, @Nonnull final IType type) {
         return new IFunctionDeclarationFragment(name, type.equals(T) ? ImmutableList.of(T) : ImmutableList.of(),
                 ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", type)), type);
+    }
+
+    /**
+     * Returns the variant of {@code overloaded func id<T>(x: T)} for the given type, which is its result type too.
+     */
+    @Nonnull
+    private static IFunctionDeclarationFragment variant(@Nonnull final IType type) {
+        return new IFunctionDeclarationFragment("id", ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", type)), type, ImmutableList.of(), null,
+                new IOverloadedFunctionFragment.Variant(OVERLOADED_ID, ImmutableList.of(type)));
     }
 }

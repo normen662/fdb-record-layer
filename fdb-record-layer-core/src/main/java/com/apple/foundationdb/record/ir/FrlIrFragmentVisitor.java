@@ -42,6 +42,7 @@ import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.IIfFragment;
 import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
+import com.apple.foundationdb.record.ir.fragments.IOverloadedFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IProgramFragment;
@@ -61,6 +62,7 @@ import com.apple.foundationdb.record.ir.generated.FrlIrParser;
 import com.apple.foundationdb.record.ir.generated.FrlIrParserBaseVisitor;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.tree.ParseTree;
 
 import javax.annotation.Nonnull;
@@ -68,6 +70,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -99,6 +102,10 @@ import java.util.regex.Pattern;
  * fragment. So separate visitors infer them, with one method for each alternative of the grammar:
  * {@code StatementInferenceVisitor}, {@code ExpressionInferenceVisitor}, {@code PostfixInferenceVisitor}, and
  * {@code ClosureParameterInferenceVisitor}.
+ *
+ * <p>An operator is a call of the function that an {@code @operator} annotation in scope gives it, so the visitor
+ * infers it as a call, without labels. A call or a reference of an overloaded function refers to one of its variants,
+ * which the inference chooses from the types of the arguments and the context, see {@code TypeInference.choose}.</p>
  */
 @API(API.Status.EXPERIMENTAL)
 public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
@@ -157,6 +164,41 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     @Nonnull
     private static final String CONSUME_CASES =
             "a consume has one .value(x) case and one .stopped(reason) case, and at most one .end case besides";
+
+    /**
+     * The name of the annotation that makes a function the function of an operator, {@code @operator("+")}.
+     */
+    @Nonnull
+    private static final String OPERATOR_ANNOTATION = "operator";
+
+    /**
+     * The message of the exception if an {@code @operator} annotation names no operator of FRL-IR, or one with another
+     * number of operands than the function has parameters.
+     */
+    @Nonnull
+    private static final String OPERATOR_ANNOTATION_FORM = "an @operator annotation has one argument without a "
+            + "label: an operator whose number of operands is the number of parameters of the function";
+
+    /**
+     * The message of the exception if an {@code @operator} annotation is not on a function that is not a variant.
+     */
+    @Nonnull
+    private static final String OPERATOR_ANNOTATION_PLACE =
+            "an @operator annotation can only be on a function that is not a variant";
+
+    /**
+     * The message of the exception if an operator has no function in scope.
+     */
+    @Nonnull
+    private static final String NO_OPERATOR_FUNCTION =
+            "an operator needs a function in scope that an @operator annotation gives to it";
+
+    /**
+     * The message of the exception if type arguments are given to something that takes none, or in another number.
+     */
+    @Nonnull
+    private static final String TYPE_ARGUMENTS =
+            "only a generic or an overloaded function takes type arguments, one for each of its type parameters";
 
     @Nonnull
     private Scope scope = prelude();
@@ -242,15 +284,9 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     @Nonnull
     private IFunctionDefinitionFragment functionDefinition(@Nonnull final FrlIrParser.FunctionDefinitionContext ctx) {
         final ImmutableList<IAnnotationFragment> annotations = annotations(ctx.annotation());
-        return function(ctx.functionSignature(), ctx.type(), signature -> {
-            signature.parameters()
-                    .forEach(parameter -> scope.declareVariable(parameter.name(), TypeInference.known(parameter.type())));
-            final IType resultType = signature.resultType();
-            final PendingStatements body = inScope(scope.enterBlock(), () -> statements(ctx.block().statements(),
-                    resultType.isVoid() ? null : TypeInference.known(resultType)));
-            return new IFunctionDefinitionFragment(signature.name(), signature.typeParameters(), signature.parameters(),
-                    resultType, new IBlockFragment(body.builder().get()), annotations);
-        });
+        return function(ctx.functionSignature(), ctx.type(), signature ->
+                new IFunctionDefinitionFragment(signature.name(), signature.typeParameters(), signature.parameters(),
+                        signature.resultType(), functionBody(signature, ctx.block()), annotations));
     }
 
     /**
@@ -270,7 +306,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      * Builds a function from its signature, what a definition and a declaration have in common. The type parameters
      * are declared in a scope of the function, in which the signature is read and the function is built. The function
      * is declared in the enclosing scope once it is built, so that a reference to it refers to the definition; a body
-     * therefore cannot call its own function, and FRL-IR has no recursion.
+     * therefore cannot call its own function, and FRL-IR has no recursion. An {@code @operator} annotation of the
+     * function declares its operator there too.
      *
      * @param resultType the result type of the function, or {@code null} if it returns {@code void}
      * @param builder builds the function, in the scope of the function, from the signature
@@ -284,9 +321,138 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         return inScope(scope.enterFunction(typeParameters), () -> {
             final F function = builder.apply(new Signature(name(ctx.identifier()), typeParameters,
                     parameters(ctx.parameter()), resultType == null ? voidType() : type(resultType)));
-            enclosingScope.declareFunction(function);
+            declareOperators(enclosingScope, function.annotations(), enclosingScope.declareFunction(function),
+                    function.parameters().size());
             return function;
         });
+    }
+
+    /**
+     * Infers the body of a function definition, in the scope of the function: the parameters become variables of the
+     * body, and the result type is the context of the value of the body.
+     */
+    @Nonnull
+    private IBlockFragment functionBody(@Nonnull final Signature signature,
+                                        @Nonnull final FrlIrParser.BlockContext block) {
+        signature.parameters()
+                .forEach(parameter -> scope.declareVariable(parameter.name(), TypeInference.known(parameter.type())));
+        final IType resultType = signature.resultType();
+        final PendingStatements body = inScope(scope.enterBlock(), () -> statements(block.statements(),
+                resultType.isVoid() ? null : TypeInference.known(resultType)));
+        return new IBlockFragment(body.builder().get());
+    }
+
+    /**
+     * Builds an overloaded function and declares it in the current scope, which its variants must then be declared in.
+     * Like a function, it reads its parameters in a scope of its type parameters. An {@code @operator} annotation of it
+     * declares its operator, which then calls one of its variants.
+     */
+    @Nonnull
+    private IOverloadedFunctionFragment overloadedFunction(
+            @Nonnull final FrlIrParser.OverloadedFunctionDeclarationContext ctx) {
+        final ImmutableList<IAnnotationFragment> annotations = annotations(ctx.annotation());
+        final FrlIrParser.FunctionSignatureContext signature = ctx.functionSignature();
+        final ImmutableList<IGenericType> typeParameters = typeParameters(signature.typeParameters());
+        final Scope enclosingScope = scope;
+        return inScope(scope.enterFunction(typeParameters), () -> {
+            final IOverloadedFunctionFragment function = new IOverloadedFunctionFragment(name(signature.identifier()),
+                    typeParameters, parameters(signature.parameter()), annotations);
+            declareOperators(enclosingScope, annotations, enclosingScope.declareOverloadedFunction(function),
+                    function.parameters().size());
+            return function;
+        });
+    }
+
+    /**
+     * Builds a variant definition, which implements a variant with a body, as a function definition does.
+     */
+    @Nonnull
+    private IFunctionDefinitionFragment variantDefinition(@Nonnull final FrlIrParser.VariantDefinitionContext ctx) {
+        final ImmutableList<IAnnotationFragment> annotations = annotations(ctx.annotation());
+        return variant(ctx.variantSignature(), ctx.type(), annotations, (signature, variant) ->
+                new IFunctionDefinitionFragment(signature.name(), signature.typeParameters(), signature.parameters(),
+                        signature.resultType(), functionBody(signature, ctx.block()), annotations, variant));
+    }
+
+    /**
+     * Builds a variant declaration, a variant that the runtime provides. Like a function declaration, it records the
+     * package of the program.
+     */
+    @Nonnull
+    private IFunctionDeclarationFragment variantDeclaration(@Nonnull final FrlIrParser.VariantDeclarationContext ctx) {
+        final ImmutableList<IAnnotationFragment> annotations = annotations(ctx.annotation());
+        return variant(ctx.variantSignature(), ctx.type(), annotations, (signature, variant) ->
+                new IFunctionDeclarationFragment(signature.name(), signature.typeParameters(), signature.parameters(),
+                        signature.resultType(), annotations, scope.packageStatement(), variant));
+    }
+
+    /**
+     * Builds a variant of an overloaded function. The overloaded function must be declared in the current scope, before
+     * the variant. The variant has no type parameters of its own, so its scope declares none, and the fragment checks
+     * that its signature is that of the overloaded function for its type arguments. The variant is added to the
+     * overloaded function once it is built, so that its body cannot call it.
+     *
+     * @param resultType the result type of the variant, or {@code null} if it returns {@code void}
+     * @param annotations the annotations of the variant, which cannot make it the function of an operator: the
+     *        operator of the overloaded function calls its variants
+     * @param builder builds the variant, in the scope of the variant, from the signature and the variant part
+     */
+    @Nonnull
+    private <F extends IFunctionFragment> F variant(
+            @Nonnull final FrlIrParser.VariantSignatureContext ctx, @Nullable final FrlIrParser.TypeContext resultType,
+            @Nonnull final List<IAnnotationFragment> annotations,
+            @Nonnull final BiFunction<Signature, IOverloadedFunctionFragment.Variant, F> builder) {
+        checkNoOperator(annotations);
+        final String name = name(ctx.identifier());
+        final Scope.OverloadedFunctionBinding overloadedFunction = scope.overloadedFunction(name)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "a variant must be declared after its overloaded function, in the same scope"));
+        final IOverloadedFunctionFragment.Variant variant = new IOverloadedFunctionFragment.Variant(
+                overloadedFunction.function(), typeArguments(ctx.typeArguments()));
+        final Scope enclosingScope = scope;
+        return inScope(scope.enterFunction(ImmutableList.of()), () -> {
+            final F function = builder.apply(new Signature(name, ImmutableList.of(), parameters(ctx.parameter()),
+                    resultType == null ? voidType() : type(resultType)), variant);
+            enclosingScope.declareVariant(function);
+            return function;
+        });
+    }
+
+    /**
+     * Declares the operators that the {@code @operator} annotations of a function name. Each operator then calls the
+     * function. The number of parameters of the function decides between the two operators with the symbol {@code -}:
+     * a function with one parameter is the prefix minus, and a function with two is the binary minus.
+     *
+     * <p>Example: {@code @operator("+") overloaded func add<A, B>(a: A, b: B)} makes {@code x + y} a call
+     * {@code add(x, y)}, without labels.</p>
+     *
+     * @param declaringScope the scope that declares the function
+     * @param annotations the annotations of the function
+     * @param function the function as the scope declares it
+     * @param parameterCount the number of parameters of the function
+     */
+    private static void declareOperators(@Nonnull final Scope declaringScope,
+                                         @Nonnull final List<IAnnotationFragment> annotations,
+                                         @Nonnull final Scope.CalleeBinding function, final int parameterCount) {
+        for (final IAnnotationFragment annotation : annotations) {
+            if (OPERATOR_ANNOTATION.equals(annotation.name())) {
+                final List<IAnnotationFragment.Argument> arguments = annotation.arguments();
+                Preconditions.checkArgument(arguments.size() == 1 && arguments.get(0).label() == null,
+                        OPERATOR_ANNOTATION_FORM);
+                final Operator operator = Operator.of(arguments.get(0).value(), parameterCount)
+                        .orElseThrow(() -> new IllegalArgumentException(OPERATOR_ANNOTATION_FORM));
+                declaringScope.declareOperator(operator, function);
+            }
+        }
+    }
+
+    /**
+     * Checks that annotations of something other than a function that is not a variant have no {@code @operator}
+     * annotation.
+     */
+    private static void checkNoOperator(@Nonnull final List<IAnnotationFragment> annotations) {
+        Preconditions.checkArgument(annotations.stream()
+                .noneMatch(annotation -> OPERATOR_ANNOTATION.equals(annotation.name())), OPERATOR_ANNOTATION_PLACE);
     }
 
     /**
@@ -295,8 +461,10 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      */
     @Nonnull
     private ITypeDeclarationFragment typeDeclaration(@Nonnull final FrlIrParser.TypeDeclarationContext ctx) {
-        final ITypeDeclarationFragment declaration = new ITypeDeclarationFragment(name(ctx.identifier()),
-                annotations(ctx.annotation()), scope.packageStatement());
+        final ImmutableList<IAnnotationFragment> annotations = annotations(ctx.annotation());
+        checkNoOperator(annotations);
+        final ITypeDeclarationFragment declaration =
+                new ITypeDeclarationFragment(name(ctx.identifier()), annotations, scope.packageStatement());
         scope.declareExternType(declaration);
         return declaration;
     }
@@ -324,8 +492,10 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                         && statements.statement(0).equals(ctx),
                 "a package statement can only be the first statement of a program");
         final FrlIrParser.PackageDeclarationContext declaration = ctx.packageDeclaration();
+        final ImmutableList<IAnnotationFragment> annotations = annotations(declaration.annotation());
+        checkNoOperator(annotations);
         final IPackageStatementFragment packageStatement =
-                new IPackageStatementFragment(name(declaration.identifier()), annotations(declaration.annotation()));
+                new IPackageStatementFragment(name(declaration.identifier()), annotations);
         scope.declarePackage(packageStatement);
         return packageStatement;
     }
@@ -398,27 +568,209 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         return ctx.stream().map(this::visitParameter).collect(ImmutableList.toImmutableList());
     }
 
+    /**
+     * Returns the types of type arguments, read in the current scope.
+     */
+    @Nonnull
+    private ImmutableList<IType> typeArguments(@Nonnull final FrlIrParser.TypeArgumentsContext ctx) {
+        return ctx.type().stream().map(this::type).collect(ImmutableList.toImmutableList());
+    }
+
+    /**
+     * Returns the types of type arguments that may be absent.
+     *
+     * @return the types, or {@code null} if there are no type arguments
+     */
+    @Nullable
+    private ImmutableList<IType> optionalTypeArguments(@Nullable final FrlIrParser.TypeArgumentsContext ctx) {
+        return ctx == null ? null : typeArguments(ctx);
+    }
+
     //
     // Expressions
     //
 
     /**
-     * Infers the type of an expression, as the overload for a primary expression and its postfixes does.
+     * Infers the type of an expression: at most one comparison of operands that hold the other operators, see
+     * {@link #binary}.
      */
     @Nonnull
     private Inferred infer(@Nonnull final FrlIrParser.ExpressionContext ctx,
                            @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
-        return infer(ctx.primaryExpression(), ctx.postfix(), expected, mismatch);
+        final List<FrlIrParser.AdditiveExpressionContext> operands = ctx.additiveExpression();
+        return binary(operands, comparisonOperators(ctx.comparisonOperator()), this::inferAdditive, operands.size() - 1,
+                expected, mismatch);
+    }
+
+    @Nonnull
+    private Inferred inferAdditive(@Nonnull final FrlIrParser.AdditiveExpressionContext ctx,
+                                   @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
+        final List<FrlIrParser.MultiplicativeExpressionContext> operands = ctx.multiplicativeExpression();
+        return binary(operands, additiveOperators(ctx.additiveOperator()), this::inferMultiplicative,
+                operands.size() - 1, expected, mismatch);
+    }
+
+    @Nonnull
+    private Inferred inferMultiplicative(@Nonnull final FrlIrParser.MultiplicativeExpressionContext ctx,
+                                         @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
+        final List<FrlIrParser.PrefixExpressionContext> operands = ctx.prefixExpression();
+        return binary(operands, multiplicativeOperators(ctx.multiplicativeOperator()), this::inferPrefix,
+                operands.size() - 1, expected, mismatch);
+    }
+
+    /**
+     * Infers a prefix operation, {@code -x} or {@code !b}, or a primary expression with its postfixes.
+     */
+    @Nonnull
+    private Inferred inferPrefix(@Nonnull final FrlIrParser.PrefixExpressionContext ctx,
+                                 @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
+        final FrlIrParser.PrefixOperatorContext operator = ctx.prefixOperator();
+        if (operator == null) {
+            return infer(ctx.primaryExpression(), ctx.postfix(), expected, mismatch);
+        }
+        return operation(prefixOperator(operator), ImmutableList.of(parameterType ->
+                inferPrefix(ctx.prefixExpression(), parameterType, ARGUMENT_MISMATCH)), expected, mismatch);
     }
 
     /**
      * Infers the type of the expression in front of the block of an if, a for, or a consume, whose calls take no
-     * trailing closure, as the overload for a primary expression and its postfixes does.
+     * trailing closure. Its operators are those of an expression, see {@link #binary}.
      */
     @Nonnull
     private Inferred infer(@Nonnull final FrlIrParser.ConditionExpressionContext ctx,
                            @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
-        return infer(ctx.primaryExpression(), ctx.conditionPostfix(), expected, mismatch);
+        final List<FrlIrParser.ConditionAdditiveExpressionContext> operands = ctx.conditionAdditiveExpression();
+        return binary(operands, comparisonOperators(ctx.comparisonOperator()), this::inferConditionAdditive,
+                operands.size() - 1, expected, mismatch);
+    }
+
+    @Nonnull
+    private Inferred inferConditionAdditive(@Nonnull final FrlIrParser.ConditionAdditiveExpressionContext ctx,
+                                            @Nullable final TypeInference.Term expected,
+                                            @Nonnull final String mismatch) {
+        final List<FrlIrParser.ConditionMultiplicativeExpressionContext> operands =
+                ctx.conditionMultiplicativeExpression();
+        return binary(operands, additiveOperators(ctx.additiveOperator()), this::inferConditionMultiplicative,
+                operands.size() - 1, expected, mismatch);
+    }
+
+    @Nonnull
+    private Inferred inferConditionMultiplicative(
+            @Nonnull final FrlIrParser.ConditionMultiplicativeExpressionContext ctx,
+            @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
+        final List<FrlIrParser.ConditionPrefixExpressionContext> operands = ctx.conditionPrefixExpression();
+        return binary(operands, multiplicativeOperators(ctx.multiplicativeOperator()), this::inferConditionPrefix,
+                operands.size() - 1, expected, mismatch);
+    }
+
+    @Nonnull
+    private Inferred inferConditionPrefix(@Nonnull final FrlIrParser.ConditionPrefixExpressionContext ctx,
+                                          @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
+        final FrlIrParser.PrefixOperatorContext operator = ctx.prefixOperator();
+        if (operator == null) {
+            return infer(ctx.primaryExpression(), ctx.conditionPostfix(), expected, mismatch);
+        }
+        return operation(prefixOperator(operator), ImmutableList.of(parameterType ->
+                inferConditionPrefix(ctx.conditionPrefixExpression(), parameterType, ARGUMENT_MISMATCH)), expected,
+                mismatch);
+    }
+
+    /**
+     * Infers operands with binary operators of one level between them. The operators apply from left to right, so
+     * {@code a - b - c} is {@code (a - b) - c}: the method infers the last operation as a call whose first argument is
+     * the operation before it. Each operand is inferred with the type of its parameter as its context, as an argument
+     * of a call is. The expected type is the context of the last operation, or of the only operand if there is no
+     * operator.
+     *
+     * @param operands the operands, in order
+     * @param operators the operators between the operands, in order, one fewer than the operands
+     * @param operand infers an operand, which can hold the operators of a stronger level
+     * @param last the index of the last operand that the operation includes
+     * @param expected the type that the context of the operation requires, or {@code null} if it requires none
+     * @param mismatch the message of the exception if the operation cannot have the expected type
+     */
+    @Nonnull
+    private <C> Inferred binary(@Nonnull final List<C> operands, @Nonnull final List<OperatorUse> operators,
+                                @Nonnull final OperandInference<C> operand, final int last,
+                                @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
+        if (last == 0) {
+            return operand.infer(operands.get(0), expected, mismatch);
+        }
+        return operation(operators.get(last - 1), ImmutableList.of(
+                parameterType -> binary(operands, operators, operand, last - 1, parameterType, ARGUMENT_MISMATCH),
+                parameterType -> operand.infer(operands.get(last), parameterType, ARGUMENT_MISMATCH)),
+                expected, mismatch);
+    }
+
+    /**
+     * Infers an operation, a call of the function that the operator has in scope, with the operands as the arguments
+     * in order and without labels. Type arguments at the operator go to that function, as at a reference to it.
+     *
+     * @param operator the operator and its type arguments
+     * @param operands infer the operands, each given the type of its parameter
+     * @param expected the type that the context of the operation requires, or {@code null} if it requires none
+     * @param mismatch the message of the exception if the operation cannot have the expected type
+     */
+    @Nonnull
+    private Inferred operation(@Nonnull final OperatorUse operator,
+                               @Nonnull final List<Function<TypeInference.Term, Inferred>> operands,
+                               @Nullable final TypeInference.Term expected, @Nonnull final String mismatch) {
+        final Scope.CalleeBinding function = scope.lookupOperator(operator.operator())
+                .orElseThrow(() -> new IllegalArgumentException(NO_OPERATOR_FUNCTION));
+        return inferCall(reference(function, optionalTypeArguments(operator.typeArguments())), operands.stream()
+                .map(operand -> new CallArgument(null, false, operand))
+                .collect(ImmutableList.toImmutableList()), expected, mismatch);
+    }
+
+    @Nonnull
+    private static ImmutableList<OperatorUse> comparisonOperators(
+            @Nullable final FrlIrParser.ComparisonOperatorContext ctx) {
+        return ctx == null ? ImmutableList.of() : ImmutableList.of(new OperatorUse(binaryOperator(ctx.symbol),
+                ctx.typeArguments()));
+    }
+
+    @Nonnull
+    private static ImmutableList<OperatorUse> additiveOperators(
+            @Nonnull final List<FrlIrParser.AdditiveOperatorContext> ctx) {
+        return ctx.stream()
+                .map(operator -> new OperatorUse(binaryOperator(operator.symbol), operator.typeArguments()))
+                .collect(ImmutableList.toImmutableList());
+    }
+
+    @Nonnull
+    private static ImmutableList<OperatorUse> multiplicativeOperators(
+            @Nonnull final List<FrlIrParser.MultiplicativeOperatorContext> ctx) {
+        return ctx.stream()
+                .map(operator -> new OperatorUse(binaryOperator(operator.symbol), operator.typeArguments()))
+                .collect(ImmutableList.toImmutableList());
+    }
+
+    @Nonnull
+    private static OperatorUse prefixOperator(@Nonnull final FrlIrParser.PrefixOperatorContext ctx) {
+        final Operator operator = ctx.symbol.getType() == FrlIrParser.MINUS ? Operator.NEGATE : Operator.NOT;
+        return new OperatorUse(operator, ctx.typeArguments());
+    }
+
+    /**
+     * Returns the binary operator of a token. The token type tells the operator, since a token that the lexer folds a
+     * line break into has the line break in its text.
+     */
+    @Nonnull
+    private static Operator binaryOperator(@Nonnull final Token symbol) {
+        return switch (symbol.getType()) {
+            case FrlIrParser.STAR -> Operator.MULTIPLY;
+            case FrlIrParser.SLASH -> Operator.DIVIDE;
+            case FrlIrParser.PERCENT -> Operator.REMAINDER;
+            case FrlIrParser.PLUS -> Operator.ADD;
+            case FrlIrParser.MINUS -> Operator.SUBTRACT;
+            case FrlIrParser.LT -> Operator.LESS;
+            case FrlIrParser.LE -> Operator.LESS_OR_EQUAL;
+            case FrlIrParser.GT -> Operator.GREATER;
+            case FrlIrParser.GE -> Operator.GREATER_OR_EQUAL;
+            case FrlIrParser.EQUAL_EQUAL -> Operator.EQUAL;
+            case FrlIrParser.BANG_EQUAL -> Operator.NOT_EQUAL;
+            default -> throw new IllegalStateException("the grammar allows only these binary operators");
+        };
     }
 
     /**
@@ -477,6 +829,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         for (int i = 0; i < parameterTypes.size(); i++) {
             inferredArguments.add(arguments.get(i).inference().apply(parameterTypes.get(i)));
         }
+        // the arguments can decide the variant of an overloaded function, which the code after the call can need
+        inference.propagate();
         final ImmutableList<Inferred> builtArguments = inferredArguments.build();
         return new Inferred(resultType, () -> new IFunctionCallFragment(callee.builder().get(), builtArguments.stream()
                 .map(argument -> argument.builder().get())
@@ -552,21 +906,87 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Returns the type of a reference to a function, in which new inference variables stand for the type parameters of
-     * the function; what they are solved as becomes the type arguments of the reference. The reference refers to the
-     * function that the name stands for where the reference is.
+     * Returns the type of a reference to a function or an overloaded function, see {@link #functionReference} and
+     * {@link #overloadedReference}.
+     *
+     * @param typeArguments the type arguments that the reference gives, or {@code null} if it gives none
      */
     @Nonnull
-    private Inferred functionReference(@Nonnull final Scope.FunctionBinding function) {
+    private Inferred reference(@Nonnull final Scope.CalleeBinding function,
+                               @Nullable final List<IType> typeArguments) {
+        if (function instanceof Scope.OverloadedFunctionBinding overloadedFunction) {
+            return overloadedReference(overloadedFunction, typeArguments);
+        }
+        return functionReference((Scope.FunctionBinding)function, typeArguments);
+    }
+
+    /**
+     * Returns the type of a reference to a function, in which new inference variables stand for the type parameters of
+     * the function; what they are solved as becomes the type arguments of the reference. The reference refers to the
+     * function that the name stands for where the reference is. Type arguments that the reference gives, as in
+     * {@code id<bigint>}, fix these variables.
+     *
+     * @param typeArguments the type arguments that the reference gives, or {@code null} if it gives none
+     */
+    @Nonnull
+    private Inferred functionReference(@Nonnull final Scope.FunctionBinding function,
+                                       @Nullable final List<IType> typeArguments) {
         final TypeInference.Instantiation instantiation =
                 inference().instantiate(function.typeParameters(), function.type());
+        fixTypeArguments(instantiation, typeArguments);
         // an instantiated function type resolves to a function type
         return new Inferred(instantiation.type(), () -> new IFunctionReferenceFragment(function.function(),
                 instantiation.typeArguments()
                         .stream()
                         .map(TypeInference::resolve)
                         .collect(ImmutableList.toImmutableList()),
-                (IFunctionType)TypeInference.resolve(instantiation.type())), function.function());
+                (IFunctionType)TypeInference.resolve(instantiation.type())), function.function().parameters());
+    }
+
+    /**
+     * Returns the type of a reference to an overloaded function. Its type has new inference variables for the type
+     * parameters, as for a generic function, and a new variable for the result type. The inference then chooses the
+     * variant whose key and result type fit these variables, see {@code TypeInference.choose}, from the variants
+     * declared before the reference. The reference refers to that variant. Type arguments that the reference gives, as
+     * in {@code add<int, int>}, fix the variables before the choice.
+     *
+     * @param typeArguments the type arguments that the reference gives, or {@code null} if it gives none
+     */
+    @Nonnull
+    private Inferred overloadedReference(@Nonnull final Scope.OverloadedFunctionBinding binding,
+                                         @Nullable final List<IType> typeArguments) {
+        final TypeInference inference = inference();
+        final IOverloadedFunctionFragment function = binding.function();
+        final TypeInference.Term resultType = inference.unknown();
+        final TypeInference.Instantiation instantiation = inference.instantiate(function.typeParameters(),
+                function.parameters()
+                        .stream()
+                        .map(IFunctionDefinitionFragment.Parameter::type)
+                        .collect(ImmutableList.toImmutableList()), resultType);
+        fixTypeArguments(instantiation, typeArguments);
+        final TypeInference.Choice choice =
+                inference.choose(instantiation.typeArguments(), resultType, binding.variants());
+        return new Inferred(instantiation.type(), () -> {
+            final IFunctionFragment variant = choice.chosen();
+            return new IFunctionReferenceFragment(variant, ImmutableList.of(), variant.type());
+        }, function.parameters());
+    }
+
+    /**
+     * Fixes the type arguments of a reference to the types that the reference gives, if it gives any. It must give one
+     * for each type parameter of the function.
+     */
+    private void fixTypeArguments(@Nonnull final TypeInference.Instantiation instantiation,
+                                  @Nullable final List<IType> typeArguments) {
+        if (typeArguments == null) {
+            return;
+        }
+        final List<TypeInference.Term> variables = instantiation.typeArguments();
+        Preconditions.checkArgument(typeArguments.size() == variables.size(), TYPE_ARGUMENTS);
+        for (int i = 0; i < variables.size(); i++) {
+            // a variable of a type parameter has no constraint yet
+            inference().unify(variables.get(i), TypeInference.known(typeArguments.get(i)), TYPE_ARGUMENTS);
+        }
     }
 
     /**
@@ -985,6 +1405,27 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
         @Nonnull
         @Override
+        public PendingStatement visitOverloadedFunctionStatement(
+                @Nonnull final FrlIrParser.OverloadedFunctionStatementContext ctx) {
+            return PendingStatement.built(overloadedFunction(ctx.overloadedFunctionDeclaration()));
+        }
+
+        @Nonnull
+        @Override
+        public PendingStatement visitVariantDefinitionStatement(
+                @Nonnull final FrlIrParser.VariantDefinitionStatementContext ctx) {
+            return PendingStatement.built(variantDefinition(ctx.variantDefinition()));
+        }
+
+        @Nonnull
+        @Override
+        public PendingStatement visitVariantDeclarationStatement(
+                @Nonnull final FrlIrParser.VariantDeclarationStatementContext ctx) {
+            return PendingStatement.built(variantDeclaration(ctx.variantDeclaration()));
+        }
+
+        @Nonnull
+        @Override
         public PendingStatement visitTypeDeclarationStatement(
                 @Nonnull final FrlIrParser.TypeDeclarationStatementContext ctx) {
             return PendingStatement.built(typeDeclaration(ctx.typeDeclaration()));
@@ -1287,8 +1728,9 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
         /**
          * Infers the type of a name. For a function, the method makes a reference with a new variable for each type
-         * parameter, see {@code TypeInference.instantiate}. For a variable, the method uses the term of the binding of
-         * the variable in the scope. The owner of the binding decides how:
+         * parameter, see {@code TypeInference.instantiate}; type arguments after the name fix these variables. For an
+         * overloaded function, the reference refers to the variant that the inference chooses. For a variable, the
+         * method uses the term of the binding of the variable in the scope. The owner of the binding decides how:
          * <ul>
          *     <li>If the binding has no owner, or if the owner is the current inference, the reference uses the term
          *     itself. Later equations of the statement can then still bind the variables in the term.</li>
@@ -1307,6 +1749,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             final Scope.Binding binding = scope.lookupValue(name)
                     .orElseThrow(() -> new IllegalArgumentException("unknown name"));
             if (binding instanceof Scope.VariableBinding variable) {
+                Preconditions.checkArgument(ctx.typeArguments() == null, TYPE_ARGUMENTS);
                 final TypeInference.Term type;
                 if (variable.owner() == null || variable.owner() == inference) {
                     type = variable.type();
@@ -1318,7 +1761,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                 }
                 return fit(new Inferred(type, () -> new IVariableReferenceFragment(name, TypeInference.resolve(type))));
             }
-            return fit(functionReference((Scope.FunctionBinding)binding));
+            return fit(reference((Scope.CalleeBinding)binding, optionalTypeArguments(ctx.typeArguments())));
         }
 
         @Nonnull
@@ -1462,7 +1905,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         @Nonnull
         @Override
         public Inferred visitDotCallPostfix(@Nonnull final FrlIrParser.DotCallPostfixContext ctx) {
-            return dotCall(ctx.identifier(), callArguments(ctx.callArguments()));
+            return dotCall(ctx.identifier(), ctx.typeArguments(), callArguments(ctx.callArguments()));
         }
 
         @Nonnull
@@ -1492,7 +1935,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         @Nonnull
         @Override
         public Inferred visitConditionDotCallPostfix(@Nonnull final FrlIrParser.ConditionDotCallPostfixContext ctx) {
-            return dotCall(ctx.identifier(), callArguments(ctx.arguments()));
+            return dotCall(ctx.identifier(), ctx.typeArguments(), callArguments(ctx.arguments()));
         }
 
         @Nonnull
@@ -1556,14 +1999,13 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         }
 
         /**
-         * Infers a call of the expression before the postfix. If that expression names a declared function, the
-         * arguments have the labels of its parameters. Otherwise, the callee is a function value, and the arguments
-         * have no labels.
+         * Infers a call of the expression before the postfix. If that expression names a declared function, also an
+         * overloaded one, the arguments have the labels of its parameters. Otherwise, the callee is a function value,
+         * and the arguments have no labels.
          */
         @Nonnull
         private Inferred call(@Nonnull final List<CallArgument> arguments) {
-            final IFunctionFragment function = before.function();
-            checkLabels(function == null ? null : function.parameters(), arguments);
+            checkLabels(before.parameters(), arguments);
             return inferCall(before, arguments, expected, mismatch);
         }
 
@@ -1574,20 +2016,24 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
          * parameter until it is unified with that parameter. The first argument has no label, also if the first
          * parameter has a label. The other arguments have the labels of the other parameters.
          *
+         * @param typeArguments the type arguments after the name of the function, or {@code null} if there are none
          * @param arguments the arguments after the first one, in order
          */
         @Nonnull
         private Inferred dotCall(@Nonnull final FrlIrParser.IdentifierContext function,
+                                 @Nullable final FrlIrParser.TypeArgumentsContext typeArguments,
                                  @Nonnull final List<CallArgument> arguments) {
-            final Scope.FunctionBinding binding = scope.lookupFunction(name(function))
+            final Scope.CalleeBinding binding = scope.lookupFunction(name(function))
                     .orElseThrow(() -> new IllegalArgumentException("unknown function"));
-            final List<IFunctionDefinitionFragment.Parameter> parameters = binding.function().parameters();
+            final Inferred callee = reference(binding, optionalTypeArguments(typeArguments));
+            // a reference to a declared function has the parameters of the function
+            final List<IFunctionDefinitionFragment.Parameter> parameters = Objects.requireNonNull(callee.parameters());
             checkLabels(parameters.isEmpty() ? parameters : parameters.subList(1, parameters.size()), arguments);
             final CallArgument receiver = new CallArgument(null, false, parameterType -> {
                 inference().unify(before.type(), parameterType, ARGUMENT_MISMATCH);
                 return before;
             });
-            return inferCall(functionReference(binding), ImmutableList.<CallArgument>builder()
+            return inferCall(callee, ImmutableList.<CallArgument>builder()
                     .add(receiver)
                     .addAll(arguments)
                     .build(), expected, mismatch);
@@ -1635,11 +2081,12 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      *
      * @param type the term of the type of the expression
      * @param builder builds the expression; call it only after the inference is solved
-     * @param function the declared function that the expression names, or {@code null} if the expression does not name
-     *        one. A call of the expression checks its arguments against the labels of the parameters of this function.
+     * @param parameters the parameters of the declared function that the expression names, also of an overloaded
+     *        one, or {@code null} if the expression does not name one. A call of the expression checks its arguments
+     *        against the labels of these parameters.
      */
     private record Inferred(@Nonnull TypeInference.Term type, @Nonnull Supplier<IExpressionFragment> builder,
-                            @Nullable IFunctionFragment function) {
+                            @Nullable List<IFunctionDefinitionFragment.Parameter> parameters) {
         /**
          * Creates an expression that does not name a declared function.
          *
@@ -1649,6 +2096,35 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         private Inferred(@Nonnull final TypeInference.Term type, @Nonnull final Supplier<IExpressionFragment> builder) {
             this(type, builder, null);
         }
+    }
+
+    /**
+     * An operator in an expression, with the type arguments that it gives to its function.
+     *
+     * @param operator the operator
+     * @param typeArguments the type arguments after the operator, as in {@code a +<int, int> b}, or {@code null} if
+     *        it has none
+     */
+    private record OperatorUse(@Nonnull Operator operator, @Nullable FrlIrParser.TypeArgumentsContext typeArguments) {
+    }
+
+    /**
+     * Infers an operand of an operator, with the type of its parameter as its context.
+     *
+     * @param <C> the kind of operand in the grammar
+     */
+    @FunctionalInterface
+    private interface OperandInference<C> {
+        /**
+         * Infers an operand.
+         *
+         * @param operand the operand
+         * @param expected the type that the context of the operand requires, or {@code null} if it requires none
+         * @param mismatch the message of the exception if the operand cannot have the expected type
+         * @return the inferred operand
+         */
+        @Nonnull
+        Inferred infer(@Nonnull C operand, @Nullable TypeInference.Term expected, @Nonnull String mismatch);
     }
 
     /**

@@ -68,15 +68,21 @@ class IFragmentTest {
                 pinned(() -> new IFunctionDefinitionFragment.Parameter("x", typeParameter("T")), -1553751008),
                 pinned(() -> new IFunctionDefinitionFragment.Parameter(null, "x", intType()), -494753699),
                 pinned(IFragmentTest::emptyBlock, -1386164011),
-                pinned(IFragmentTest::identityFunction, -372574462),
-                pinned(() -> new IProgramFragment(ImmutableList.of(identityFunction())), -1373655842),
+                pinned(IFragmentTest::identityFunction, 1335093566),
+                pinned(() -> new IProgramFragment(ImmutableList.of(identityFunction())), 334012186),
                 pinned(() -> new IFunctionDeclarationFragment("lookup", ImmutableList.of(),
                         ImmutableList.of(new IFunctionDefinitionFragment.Parameter("key", bigintType())),
-                        stringType().withNullability(true)), -1659939661),
+                        stringType().withNullability(true)), 81478061),
                 pinned(() -> new IFunctionDeclarationFragment("scan", ImmutableList.of(),
                         ImmutableList.of(new IFunctionDefinitionFragment.Parameter("range",
                                 new IExternType(rangeDeclaration(), false))),
-                        intType(), ImmutableList.of(), abcPackage()), 1420675645),
+                        intType(), ImmutableList.of(), abcPackage()), 1091272035),
+                pinned(IFragmentTest::overloadedIdentity, -265424345),
+                pinned(IFragmentTest::intVariant, -2068075596),
+                pinned(() -> new IFunctionDeclarationFragment("id", ImmutableList.of(),
+                        ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", intType())), intType(),
+                        ImmutableList.of(), null, intVariant()), 32529210),
+                pinned(IFragmentTest::intVariantDefinition, -1146862136),
                 pinned(() -> new IAnnotationFragment.Argument(null, "com.apple.foundationdb.record.ir"), 1230968439),
                 pinned(() -> new IAnnotationFragment.Argument("class", "com.apple.foundationdb.record.TupleRange"),
                         1319917643),
@@ -95,9 +101,9 @@ class IFragmentTest {
                         new IPrimitiveType(IPrimitiveType.Kind.HALF, false)), 1294493890),
                 pinned(() -> new ILiteralFragment(null, stringType().withNullability(true)), -686800226),
                 pinned(() -> new IVariableReferenceFragment("x", intType()), -73490170),
-                pinned(IFragmentTest::identityReference, 1952841662),
+                pinned(IFragmentTest::identityReference, -1950657798),
                 pinned(() -> new IFunctionCallFragment(identityReference(), ImmutableList.of(literal42())),
-                        -1090698174),
+                        -1840097146),
                 pinned(() -> new IAssignmentFragment("x", literal42()), -405760496),
                 pinned(() -> new IFieldAccessFragment(new IVariableReferenceFragment("r", recordOfIdAndString()), 1),
                         -2146132560),
@@ -170,6 +176,9 @@ class IFragmentTest {
         final IConsumeFragment.Case stoppedCase = stoppedCase();
         final IConsumeFragment aConsume = new IConsumeFragment(s, valueCase, null, stoppedCase);
         final IVariableReferenceFragment r = new IVariableReferenceFragment("r", recordOfIdAndString());
+        final IOverloadedFunctionFragment overloaded = overloadedIdentity();
+        final IOverloadedFunctionFragment.Variant variant = intVariant();
+        final IFunctionDefinitionFragment variantDefinition = intVariantDefinition();
         return Stream.of(
                 // primitive types: the kind, the nullability
                 Arguments.of(intType, bigintType),
@@ -247,6 +256,27 @@ class IFragmentTest {
                         declaration.parameters(), declaration.resultType(), ImmutableList.of(annotation), null)),
                 Arguments.of(declaration, new IFunctionDeclarationFragment("lookup", declaration.typeParameters(),
                         declaration.parameters(), declaration.resultType(), ImmutableList.of(), abc)),
+                // overloaded functions: the name, the type parameters, the parameters, the annotations
+                Arguments.of(overloaded, new IOverloadedFunctionFragment("f", overloaded.typeParameters(),
+                        overloaded.parameters(), overloaded.annotations())),
+                Arguments.of(overloaded, new IOverloadedFunctionFragment("id", ImmutableList.of(t, typeParameter("U")),
+                        overloaded.parameters(), overloaded.annotations())),
+                Arguments.of(overloaded, new IOverloadedFunctionFragment("id", overloaded.typeParameters(),
+                        ImmutableList.of(), overloaded.annotations())),
+                Arguments.of(overloaded, new IOverloadedFunctionFragment("id", overloaded.typeParameters(),
+                        overloaded.parameters(), ImmutableList.of(annotation))),
+                // variant parts: the overloaded function, the type arguments
+                Arguments.of(variant, new IOverloadedFunctionFragment.Variant(new IOverloadedFunctionFragment("id",
+                        overloaded.typeParameters(), overloaded.parameters(), ImmutableList.of(annotation)),
+                        variant.typeArguments())),
+                Arguments.of(variant,
+                        new IOverloadedFunctionFragment.Variant(overloaded, ImmutableList.of(bigintType))),
+                // a function and the same function as a variant: the variant part
+                Arguments.of(variantDefinition, new IFunctionDefinitionFragment("id", ImmutableList.of(),
+                        variantDefinition.parameters(), intType, variantDefinition.body())),
+                Arguments.of(new IFunctionDeclarationFragment("id", ImmutableList.of(), variantDefinition.parameters(),
+                        intType), new IFunctionDeclarationFragment("id", ImmutableList.of(),
+                        variantDefinition.parameters(), intType, ImmutableList.of(), null, variant)),
                 // annotations: the name, the arguments; arguments: the label, the value
                 Arguments.of(annotation, new IAnnotationFragment("swift", annotation.arguments())),
                 Arguments.of(annotation, new IAnnotationFragment("java", ImmutableList.of())),
@@ -553,6 +583,76 @@ class IFragmentTest {
     }
 
     @Test
+    void constructorIllFormedOverloadedFunctionOrVariantFails() {
+        final IOverloadedFunctionFragment overloaded = overloadedIdentity();
+        final IFunctionDefinitionFragment.Parameter xOfInt = new IFunctionDefinitionFragment.Parameter("x", intType());
+        // an overloaded function has type parameters, which are the keys of its variants, and distinct parameters
+        assertThatThrownBy(() -> new IOverloadedFunctionFragment("f", ImmutableList.of(), ImmutableList.of(),
+                ImmutableList.of())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IOverloadedFunctionFragment("f", ImmutableList.of(typeParameter("T")),
+                ImmutableList.of(xOfInt, xOfInt), ImmutableList.of())).isInstanceOf(IllegalArgumentException.class);
+        // a variant has one concrete type argument for each type parameter, which is not void
+        assertThatThrownBy(() -> new IOverloadedFunctionFragment.Variant(overloaded, ImmutableList.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IOverloadedFunctionFragment.Variant(overloaded,
+                ImmutableList.of(intType(), intType()))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IOverloadedFunctionFragment.Variant(overloaded,
+                ImmutableList.of(new IArrayType(false, typeParameter("U")))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IOverloadedFunctionFragment.Variant(overloaded, ImmutableList.of(voidType())))
+                .isInstanceOf(IllegalArgumentException.class);
+        // a variant has the name of its overloaded function, no type parameters, and the parameters for its key
+        final IBlockFragment xOfIntIsValue =
+                new IBlockFragment(ImmutableList.of(new IVariableReferenceFragment("x", intType())));
+        assertThatThrownBy(() -> new IFunctionDefinitionFragment("other", ImmutableList.of(), ImmutableList.of(xOfInt),
+                intType(), xOfIntIsValue, ImmutableList.of(), intVariant()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IFunctionDeclarationFragment("id", ImmutableList.of(typeParameter("U")),
+                ImmutableList.of(xOfInt), intType(), ImmutableList.of(), null, intVariant()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IFunctionDeclarationFragment("id", ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", bigintType())), intType(),
+                ImmutableList.of(), null, intVariant())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IFunctionDeclarationFragment("id", ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter(null, "x", intType())), intType(),
+                ImmutableList.of(), null, intVariant())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IFunctionDeclarationFragment("id", ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", "y", intType())), intType(),
+                ImmutableList.of(), null, intVariant())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IFunctionDeclarationFragment("id", ImmutableList.of(), ImmutableList.of(),
+                intType(), ImmutableList.of(), null, intVariant())).isInstanceOf(IllegalArgumentException.class);
+        // the result type is the variant's own
+        assertThat(new IFunctionDeclarationFragment("id", ImmutableList.of(), ImmutableList.of(xOfInt), stringType(),
+                ImmutableList.of(), null, intVariant()).variant()).contains(intVariant());
+    }
+
+    @Test
+    void parametersOfVariantReplaceTypeParametersWithTypeArguments() {
+        final IGenericType a = typeParameter("A");
+        final IGenericType b = typeParameter("B");
+        final IOverloadedFunctionFragment overloaded = new IOverloadedFunctionFragment("f", ImmutableList.of(a, b),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter(null, "x", a.withNullability(true)),
+                        new IFunctionDefinitionFragment.Parameter("with", "g",
+                                new IFunctionType(false, ImmutableList.of(new IArrayType(false, b)), a)),
+                        new IFunctionDefinitionFragment.Parameter("digits", intType())), ImmutableList.of());
+        // a type parameter that occurs as A? becomes its type argument made nullable, also if that is nullable already;
+        // a parameter without type parameters stays as it is
+        assertThat(overloaded.parametersOfVariant(ImmutableList.of(bigintType(), stringType().withNullability(true))))
+                .containsExactly(
+                        new IFunctionDefinitionFragment.Parameter(null, "x", bigintType().withNullability(true)),
+                        new IFunctionDefinitionFragment.Parameter("with", "g", new IFunctionType(false,
+                                ImmutableList.of(new IArrayType(false, stringType().withNullability(true))),
+                                bigintType())),
+                        new IFunctionDefinitionFragment.Parameter("digits", intType()));
+        assertThat(overloaded.parametersOfVariant(ImmutableList.of(intType().withNullability(true), intType())).get(0))
+                .isEqualTo(new IFunctionDefinitionFragment.Parameter(null, "x", intType().withNullability(true)));
+        // a stream type cannot be made nullable
+        assertThatThrownBy(() ->
+                overloaded.parametersOfVariant(ImmutableList.of(new IStreamType(intType()), intType())))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void packageStatementOfProgramIsItsFirstStatement() {
         assertThat(new IProgramFragment(ImmutableList.of(abcPackage(), rangeDeclaration())).packageStatement())
                 .contains(abcPackage());
@@ -790,6 +890,35 @@ class IFragmentTest {
     private static IFunctionReferenceFragment identityReference() {
         return new IFunctionReferenceFragment(identityFunction(), ImmutableList.of(intType()),
                 new IFunctionType(false, ImmutableList.of(intType()), intType()));
+    }
+
+    /**
+     * Returns {@code overloaded func id<T>(x: T)}.
+     */
+    @Nonnull
+    private static IOverloadedFunctionFragment overloadedIdentity() {
+        return new IOverloadedFunctionFragment("id", ImmutableList.of(typeParameter("T")),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", typeParameter("T"))),
+                ImmutableList.of());
+    }
+
+    /**
+     * Returns the variant part of the variant {@code id<int>} of {@link #overloadedIdentity()}.
+     */
+    @Nonnull
+    private static IOverloadedFunctionFragment.Variant intVariant() {
+        return new IOverloadedFunctionFragment.Variant(overloadedIdentity(), ImmutableList.of(intType()));
+    }
+
+    /**
+     * Returns {@code variant func id<int>(x: int) -> int { x }}.
+     */
+    @Nonnull
+    private static IFunctionDefinitionFragment intVariantDefinition() {
+        return new IFunctionDefinitionFragment("id", ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", intType())), intType(),
+                new IBlockFragment(ImmutableList.of(new IVariableReferenceFragment("x", intType()))),
+                ImmutableList.of(), intVariant());
     }
 
     /**

@@ -34,8 +34,9 @@ import java.util.function.Supplier;
 /**
  * An annotation, {@code @java(class: "com.apple.foundationdb.record.TupleRange")}: a name and string arguments, each of
  * which may be labeled. Annotations say how a package, a function, or an extern type lives outside FRL-IR. FRL-IR keeps
- * them as written and gives them no meaning of its own: what an annotation means is up to the target that binds the
- * annotated declaration, such as the Java runtime for {@code @java}.
+ * them as written, and what an annotation means is up to the target that binds the annotated declaration, such as the
+ * Java runtime for {@code @java}. The one exception is {@code @operator("+")}, which the parser reads: it makes the
+ * annotated function the function that the operator calls. It stays among the annotations of the function.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IAnnotationFragment implements IFragment {

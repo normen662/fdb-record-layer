@@ -21,6 +21,7 @@
 package com.apple.foundationdb.record.ir;
 
 import com.apple.foundationdb.record.ir.fragments.IArrayType;
+import com.apple.foundationdb.record.ir.fragments.IFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
@@ -47,7 +48,8 @@ import java.util.Optional;
  * <ul>
  *     <li>the type of each literal;</li>
  *     <li>the type arguments of each reference to a generic function;</li>
- *     <li>the parameter types and the result type of each closure that does not state them.</li>
+ *     <li>the parameter types and the result type of each closure that does not state them;</li>
+ *     <li>the variant of each call or reference of an overloaded function, also of each operator.</li>
  * </ul>
  *
  * <p>A type that the visitor does not know yet is an inference variable, a {@link Variable}. A {@link Term} is a type
@@ -59,8 +61,8 @@ import java.util.Optional;
  * <p>An inference has three phases:</p>
  * <ol>
  *     <li>The visitor makes terms, and it states equations between them with {@link #unify}.</li>
- *     <li>The visitor calls {@link #solve()}, which gives a default type to each open variable with a literal
- *     constraint.</li>
+ *     <li>The visitor calls {@link #solve()}, which chooses the open variants of overloaded functions, and which gives
+ *     a default type to each open variable with a literal constraint.</li>
  *     <li>The builders of the fragments call {@link #resolve}, which converts each term to an {@link IType}.</li>
  * </ol>
  *
@@ -98,6 +100,20 @@ import java.util.Optional;
  * <p>Nullability is a property of a type, not a wrapper around a type. So a type parameter {@code T} that occurs as
  * {@code T?} stands for its type, made nullable. The equation {@code T? = int?} makes {@code T} an {@code int}, unless
  * {@code T} must be nullable itself.</p>
+ *
+ * <p>A call or a reference of an overloaded function needs one more step: the choice of its variant, see
+ * {@link #choose}. The reference gets the types of the overloaded function, with a new variable for each type
+ * parameter, as for a generic function, and a new variable for the result type, which each variant states. The
+ * choice waits until exactly one variant fits these variables, that is, until the key of the variant and its result
+ * type can be the types of the variables. A trial unification that is undone afterwards tests each variant. The choice
+ * then binds the variables to the types of the variant. There is no ranking, and the default type of a literal does
+ * not count, so {@link #solve()} fails if a choice is still open.</p>
+ *
+ * <p>Example: after {@code overloaded func add<A, B>(a: A, b: B)} with the variants {@code add<int, int> -> int} and
+ * {@code add<bigint, bigint> -> bigint}, the call {@code x + 1} with {@code x: int} gives the term
+ * {@code (vA, vB) -> vR}. The argument {@code x} gives {@code vA := int}, so only the first variant fits, and the
+ * choice gives {@code vB := int} and {@code vR := int}. In {@code 1 + 2}, both variants fit, and the inference
+ * fails.</p>
  */
 final class TypeInference {
 
@@ -117,11 +133,39 @@ final class TypeInference {
     static final String NO_SUCH_FIELD = "a field access needs the name or the ordinal of a field of its record";
 
     /**
+     * The message of the exception if no variant of an overloaded function fits a call or a reference of it.
+     */
+    @Nonnull
+    private static final String NO_FITTING_VARIANT =
+            "no variant of the overloaded function fits the types of the call or the reference";
+
+    /**
+     * The message of the exception if more than one variant of an overloaded function fits a call or a reference of it.
+     */
+    @Nonnull
+    private static final String AMBIGUOUS_VARIANT = "more than one variant of the overloaded function fits the types "
+            + "of the call or the reference; type arguments select one";
+
+    /**
      * The inference variables that this inference made, in the order of their creation. {@link #solve()} examines
      * them.
      */
     @Nonnull
     private final List<Variable> variables = new ArrayList<>();
+
+    /**
+     * The choices of variants of overloaded functions that this inference makes, in the order of their creation, see
+     * {@link #choose}.
+     */
+    @Nonnull
+    private final List<Choice> choices = new ArrayList<>();
+
+    /**
+     * The earlier states of the variables that the current trial unification changed, the latest last, or
+     * {@code null} if no trial unification is running, see {@link #wouldUnify}.
+     */
+    @Nullable
+    private List<VariableState> trail;
 
     /**
      * Returns a term for a known type. Such a term contains no variables, so each inference can use it, and no
@@ -239,14 +283,154 @@ final class TypeInference {
      */
     @Nonnull
     Instantiation instantiate(@Nonnull final List<IGenericType> typeParameters, @Nonnull final IFunctionType type) {
+        final Map<String, Variable> substitution = substitution(typeParameters);
+        return new Instantiation(toTerm(type, substitution), typeArguments(typeParameters, substitution));
+    }
+
+    /**
+     * Returns the type of a reference to an overloaded function, whose variant is not chosen yet. The method makes a
+     * new variable for each type parameter, as for a generic function. These variables are the type arguments of the
+     * reference, which {@link #choose} relates to the keys of the variants. The result type is the given term, since
+     * each variant states its own result type.
+     *
+     * <p>Example: for {@code overloaded func add<A, B>(a: A, b: B)} and the result type {@code vR}, the method makes
+     * {@code vA} and {@code vB}, and it returns the term {@code (vA, vB) -> vR}.</p>
+     *
+     * @param typeParameters the type parameters of the overloaded function
+     * @param parameterTypes the types of the parameters, in terms of the type parameters
+     * @param resultType the term of the result type of the reference
+     * @return the type of the reference and the type arguments
+     */
+    @Nonnull
+    Instantiation instantiate(@Nonnull final List<IGenericType> typeParameters,
+                              @Nonnull final List<IType> parameterTypes, @Nonnull final Term resultType) {
+        final Map<String, Variable> substitution = substitution(typeParameters);
+        return new Instantiation(new FunctionTerm(false, parameterTypes.stream()
+                .map(parameterType -> toTerm(parameterType, substitution))
+                .collect(ImmutableList.toImmutableList()), resultType), typeArguments(typeParameters, substitution));
+    }
+
+    /**
+     * Returns a new variable for each type parameter, by the name of the type parameter.
+     */
+    @Nonnull
+    private Map<String, Variable> substitution(@Nonnull final List<IGenericType> typeParameters) {
         final ImmutableMap.Builder<String, Variable> substitution = ImmutableMap.builder();
-        final ImmutableList.Builder<Term> typeArguments = ImmutableList.builder();
         for (final IGenericType typeParameter : typeParameters) {
-            final Variable variable = newVariable(Constraint.ANY);
-            substitution.put(typeParameter.name(), variable);
-            typeArguments.add(new VariableTerm(variable, false));
+            substitution.put(typeParameter.name(), newVariable(Constraint.ANY));
         }
-        return new Instantiation(toTerm(type, substitution.build()), typeArguments.build());
+        return substitution.build();
+    }
+
+    /**
+     * Returns the terms of the variables of the type parameters, in the order of the type parameters.
+     */
+    @Nonnull
+    private static ImmutableList<Term> typeArguments(@Nonnull final List<IGenericType> typeParameters,
+                                                     @Nonnull final Map<String, Variable> substitution) {
+        return typeParameters.stream()
+                .<Term>map(typeParameter -> new VariableTerm(substitution.get(typeParameter.name()), false))
+                .collect(ImmutableList.toImmutableList());
+    }
+
+    /**
+     * Starts the choice of the variant of an overloaded function for a call or a reference of it. The choice is made
+     * as soon as exactly one variant fits, see {@link #propagate()}, and at the latest in {@link #solve()}, which fails
+     * if none or more than one variant fits. A variant fits if its key can be the type arguments of the reference and
+     * its result type can be the result type of the reference.
+     *
+     * <p>Example: in {@code x + 1} with {@code x: int} and the variants {@code add<int, int> -> int} and
+     * {@code add<bigint, bigint> -> bigint}, only the first variant fits once the argument {@code x} gives
+     * {@code vA := int}. Explicit type arguments, as in {@code x +<int, int> 1}, bind the variables before the choice,
+     * so at most one variant fits, because no two variants have the same key.</p>
+     *
+     * @param typeArguments the terms of the type arguments of the reference, see {@link #instantiate}
+     * @param resultType the term of the result type of the reference
+     * @param variants the variants that the reference can call: those declared before the reference
+     * @return the choice, whose variant is known after {@link #solve()}
+     */
+    @Nonnull
+    Choice choose(@Nonnull final List<Term> typeArguments, @Nonnull final Term resultType,
+                  @Nonnull final List<IFunctionFragment> variants) {
+        final Choice choice =
+                new Choice(ImmutableList.copyOf(typeArguments), resultType, ImmutableList.copyOf(variants));
+        choices.add(choice);
+        return choice;
+    }
+
+    /**
+     * Makes each open choice of a variant that exactly one variant fits, see {@link #choose}. A choice binds variables,
+     * so it can decide other choices; the method repeats until no choice changes. The visitor calls it after each call,
+     * so that the type of a call of an overloaded function is known as early as possible, for example for a field
+     * access on its result.
+     *
+     * <p>More equations can only remove variants from those that fit, so a choice that one variant fits now stays with
+     * that variant, and a choice that no variant fits fails at once.</p>
+     *
+     * @throws IllegalArgumentException if no variant fits an open choice
+     */
+    void propagate() {
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (final Choice choice : choices) {
+                if (choice.chosen == null) {
+                    final List<IFunctionFragment> fitting = choice.variants.stream()
+                            .filter(variant -> wouldUnify(choice.terms(), variantTerms(variant)))
+                            .collect(ImmutableList.toImmutableList());
+                    if (fitting.isEmpty()) {
+                        throw new IllegalArgumentException(NO_FITTING_VARIANT);
+                    }
+                    if (fitting.size() == 1) {
+                        final IFunctionFragment variant = fitting.get(0);
+                        final List<Term> terms = choice.terms();
+                        final List<Term> types = variantTerms(variant);
+                        for (int i = 0; i < terms.size(); i++) {
+                            // the trial unification of the same terms succeeded
+                            unify(terms.get(i), types.get(i), NO_FITTING_VARIANT);
+                        }
+                        choice.chosen = variant;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Returns the terms of the key and of the result type of a variant, in the order of {@link Choice#terms()}.
+     */
+    @Nonnull
+    private static List<Term> variantTerms(@Nonnull final IFunctionFragment variant) {
+        // only variants are candidates of a choice
+        final ImmutableList.Builder<Term> terms = ImmutableList.builder();
+        variant.variant().orElseThrow().typeArguments().forEach(typeArgument -> terms.add(new Known(typeArgument)));
+        return terms.add(new Known(variant.resultType())).build();
+    }
+
+    /**
+     * Returns whether each pair of terms can stand for the same type, all pairs at once. The method unifies the pairs
+     * on trial, and it then undoes every change, so it binds no variable, also if the unification fails.
+     */
+    private boolean wouldUnify(@Nonnull final List<Term> firsts, @Nonnull final List<Term> seconds) {
+        Preconditions.checkState(trail == null, "a trial unification cannot start within another one");
+        final List<VariableState> changes = new ArrayList<>();
+        trail = changes;
+        try {
+            for (int i = 0; i < firsts.size(); i++) {
+                if (!tryUnify(firsts.get(i), seconds.get(i))) {
+                    return false;
+                }
+            }
+            return true;
+        } finally {
+            trail = null;
+            for (int i = changes.size() - 1; i >= 0; i--) {
+                final VariableState state = changes.get(i);
+                state.variable().binding = state.binding();
+                state.variable().constraint = state.constraint();
+            }
+        }
     }
 
     /**
@@ -273,17 +457,26 @@ final class TypeInference {
     }
 
     /**
-     * Gives a default type to each open variable whose constraint has a default type, see {@link #DEFAULT_KINDS}. Only
-     * the constraints of number, string, and boolean literals have one. The visitor calls this method after the
-     * statement stated all of its equations, and before the builders resolve the terms. The method can run more than
-     * one time, and each call changes only the variables that are open at that time. A for loop with its own inference
-     * uses this, because it must know the type of its variable before it infers its body.
+     * Makes the open choices of variants, and then gives a default type to each open variable whose constraint has a
+     * default type, see {@link #DEFAULT_KINDS}. Only the constraints of number, string, and boolean literals have one.
+     * The visitor calls this method after the statement stated all of its equations, and before the builders resolve
+     * the terms. The method can run more than one time, and each call changes only the variables that are open at that
+     * time. A for loop with its own inference uses this, because it must know the type of its variable before it
+     * infers its body.
+     *
+     * <p>The choices come first, and each must have exactly one variant that fits, see {@link #propagate()}. So the
+     * default type of a literal never selects a variant: in {@code 1 + 2}, the literals can have the types of more than
+     * one variant, and the method fails.</p>
      *
      * <p>Example: in {@code let x = 42}, no equation fixes the variable of {@code 42}, so this method binds it to
      * {@code int}. In {@code let x = nil}, the variable of {@code nil} has no default type. It stays open, and
      * {@link #resolve} fails.</p>
+     *
+     * @throws IllegalArgumentException if no variant or more than one variant fits a choice
      */
     void solve() {
+        propagate();
+        Preconditions.checkArgument(choices.stream().allMatch(choice -> choice.chosen != null), AMBIGUOUS_VARIANT);
         for (final Variable variable : variables) {
             final Optional<IType> defaultType = variable.constraint.defaultType();
             if (variable.binding == null && defaultType.isPresent()) {
@@ -486,7 +679,7 @@ final class TypeInference {
         if (!allows(variable.constraint, value)) {
             return false;
         }
-        variable.binding = value;
+        setBinding(variable, value);
         return true;
     }
 
@@ -511,25 +704,43 @@ final class TypeInference {
      * Binds a variable to a term over another variable. The constraint of the variable moves to the other variable,
      * without the requirement to be nullable if the term is the nullable version of the other variable, which meets it.
      */
-    private static boolean bindToVariable(@Nonnull final Variable variable, @Nonnull final VariableTerm target) {
+    private boolean bindToVariable(@Nonnull final Variable variable, @Nonnull final VariableTerm target) {
         final Constraint moved = target.isNullable() ? variable.constraint.withoutNullability() : variable.constraint;
         if (!constrain(target.variable(), moved)) {
             return false;
         }
-        variable.binding = target;
+        setBinding(variable, target);
         return true;
     }
 
     /**
      * Adds a constraint to a variable, if a type can meet both the new and the existing one.
      */
-    private static boolean constrain(@Nonnull final Variable variable, @Nonnull final Constraint constraint) {
+    private boolean constrain(@Nonnull final Variable variable, @Nonnull final Constraint constraint) {
         final Optional<Constraint> combined = variable.constraint.and(constraint);
         if (combined.isEmpty()) {
             return false;
         }
+        remember(variable);
         variable.constraint = combined.get();
         return true;
+    }
+
+    /**
+     * Binds a variable, which a running trial unification undoes later.
+     */
+    private void setBinding(@Nonnull final Variable variable, @Nonnull final Term binding) {
+        remember(variable);
+        variable.binding = binding;
+    }
+
+    /**
+     * Records the state of a variable before a change, if a trial unification is running, see {@link #wouldUnify}.
+     */
+    private void remember(@Nonnull final Variable variable) {
+        if (trail != null) {
+            trail.add(new VariableState(variable, variable.binding, variable.constraint));
+        }
     }
 
     /**
@@ -756,6 +967,62 @@ final class TypeInference {
      * @param typeArguments the variables for the type parameters of the function, in order
      */
     record Instantiation(@Nonnull Term type, @Nonnull ImmutableList<Term> typeArguments) {
+    }
+
+    /**
+     * The choice of the variant of an overloaded function for one call or reference, see {@link TypeInference#choose}.
+     * The inference makes the choice, and the builder of the reference reads it once the inference is solved.
+     */
+    static final class Choice {
+        @Nonnull
+        private final ImmutableList<Term> typeArguments;
+        @Nonnull
+        private final Term resultType;
+        @Nonnull
+        private final ImmutableList<IFunctionFragment> variants;
+        @Nullable
+        private IFunctionFragment chosen;
+
+        private Choice(@Nonnull final ImmutableList<Term> typeArguments, @Nonnull final Term resultType,
+                       @Nonnull final ImmutableList<IFunctionFragment> variants) {
+            this.typeArguments = typeArguments;
+            this.resultType = resultType;
+            this.variants = variants;
+        }
+
+        /**
+         * Returns the chosen variant.
+         *
+         * @return the variant that the call or the reference calls
+         * @throws IllegalStateException if the variant is not chosen yet, which is the case before
+         *         {@link TypeInference#solve()}
+         */
+        @Nonnull
+        IFunctionFragment chosen() {
+            if (chosen == null) {
+                throw new IllegalStateException("the variant of an overloaded function is chosen when its inference "
+                        + "is solved");
+            }
+            return chosen;
+        }
+
+        /**
+         * Returns the terms that a variant must fit: the type arguments of the reference, followed by its result type.
+         */
+        @Nonnull
+        private List<Term> terms() {
+            return ImmutableList.<Term>builder().addAll(typeArguments).add(resultType).build();
+        }
+    }
+
+    /**
+     * The state of a variable before a trial unification changed it, see {@link TypeInference#wouldUnify}.
+     *
+     * @param variable the variable
+     * @param binding the binding of the variable before the change
+     * @param constraint the constraint of the variable before the change
+     */
+    private record VariableState(@Nonnull Variable variable, @Nullable Term binding, @Nonnull Constraint constraint) {
     }
 
     /**

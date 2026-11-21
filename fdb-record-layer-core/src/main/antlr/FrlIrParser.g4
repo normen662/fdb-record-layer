@@ -40,6 +40,11 @@ options { tokenVocab=FrlIrLexer; }
 // The opposite holds for the `(` of a call and for a trailing closure: both stay on the line of what they call, since
 // after `let x = f` a line break ends the statement, and a closure on the next line is a statement of its own.
 //
+// A line break can follow a binary operator. A binary operator can also start a line, as in Swift: if a space or a tab
+// follows it, the line continues the expression of the line before, as in `x` followed by a line `    - y`. The lexer
+// folds the line break into such an operator, see `CONTINUED_PLUS` in FrlIrLexer. An operator that is attached to what
+// follows it starts a statement of its own, as the negation `-y` does.
+//
 
 //
 // Programs
@@ -206,6 +211,42 @@ functionSignature
     : FUNC NL* identifier NL* (typeParameters NL*)? LPAREN NL* (parameter (NL* COMMA NL* parameter)* NL*)? RPAREN
     ;
 
+// `overloaded func add<A, B>(a: A, b: B)` declares an overloaded function: a name with variants, each of which is a
+// function of its own for concrete type arguments, see `variantDefinition`. The declaration states the type parameters
+// and the parameters of all variants, with their labels. It has no body and no result type, because each variant has
+// its own. It must come before its variants, which must be in the same scope.
+//
+// A call of the function, `add(a: x, b: y)`, calls the variant whose type arguments fit the types of the arguments and
+// the type that the context requires. The variants that the call sees are those declared before it. Exactly one of them
+// must fit: there is no ranking, and the default type of a literal does not count. A literal fits every variant whose
+// parameter type it can have, so `1 + 2` fails as soon as two variants can take two literals. Type arguments select a
+// variant explicitly: `add<int, bigint>(a: x, b: y)`. A reference to the function without a call, as in
+// `fold(xs, add)`, selects a variant in the same way, from the type that its context requires.
+overloadedFunctionDeclaration
+    : (annotation NL*)* OVERLOADED NL* functionSignature
+    ;
+
+// `variant func add<bigint, bigint>(a: bigint, b: bigint) -> bigint { … }` defines a variant of the overloaded function
+// `add`, and `extern variant func add<int, int>(a: int, b: int) -> int` declares a variant that the runtime provides.
+// The type arguments are the key of the variant: one concrete type for each type parameter of the overloaded function,
+// without type parameters, and no two variants of a function have the same key. The variant repeats the parameters of
+// the overloaded function with its type arguments in place of the type parameters, with the same names and labels, so
+// a parameter that has no type parameter in its type is the same in every variant. A variant adds its result type and
+// its implementation. Because the key identifies a variant, a type parameter that no parameter uses lets the result
+// type tell variants apart: after `overloaded func convert<A, R>(x: A)`, the variants `convert<int, double>` and
+// `convert<int, float>` take the same argument, and the context selects one of them.
+variantDefinition
+    : (annotation NL*)* VARIANT NL* variantSignature (NL* ARROW NL* type)? NL* block
+    ;
+
+variantDeclaration
+    : (annotation NL*)* EXTERN NL* VARIANT NL* variantSignature (NL* ARROW NL* type)?
+    ;
+
+variantSignature
+    : FUNC NL* identifier NL* typeArguments NL* LPAREN NL* (parameter (NL* COMMA NL* parameter)* NL*)? RPAREN
+    ;
+
 // `extern type range` declares a type that the runtime provides, for the values that extern functions take and return.
 // An extern type is a plain name without type parameters, and it can be used wherever a type can, also as `range?`.
 typeDeclaration
@@ -232,7 +273,10 @@ packageDeclaration
 
 // `@java(class: "com.apple.foundationdb.record.TupleRange")` says how a declaration lives outside FRL-IR. FRL-IR keeps
 // an annotation as written, a name and string arguments that may be labeled: what an annotation means is up to the
-// target that binds the declaration, so a new target needs no new syntax. An annotation can stand on a line of its own
+// target that binds the declaration, so a new target needs no new syntax. The one annotation that FRL-IR reads itself
+// is `@operator("+")`, which makes a function the function of an operator, see `expression`. It can be on a function
+// that is not a variant, also on an overloaded or a generic one, and the function must have the parameters of the
+// operator: two for a binary operator, and one for a prefix operator. An annotation can stand on a line of its own
 // before what it annotates, and the `(` stays on the line of the name, as for a call.
 annotation
     : AT identifier (LPAREN NL* (annotationArgument (NL* COMMA NL* annotationArgument)* NL*)? RPAREN)?
@@ -246,6 +290,12 @@ annotationArgument
 // type parameter is a type: `T`, `[T]`, `T?`.
 typeParameters
     : LT NL* identifier (NL* COMMA NL* identifier)* NL* GT
+    ;
+
+// The type arguments of a generic or an overloaded function, one type for each type parameter: in a variant,
+// `variant func add<int, int>(…)`, at a reference or a call, `id<bigint>(42)`, and at an operator, `a +<int, int> b`.
+typeArguments
+    : LT NL* type (NL* COMMA NL* type)* NL* GT
     ;
 
 // A parameter of a function definition or a function declaration. As in Swift, a parameter has an argument label and a
@@ -301,18 +351,21 @@ separators
 // An expression is a statement too: `f(1)` on its own calls `f`, and as the last statement of a body it is the value of
 // the body.
 statement
-    : functionDefinition     # functionDefinitionStatement
-    | functionDeclaration    # functionDeclarationStatement
-    | typeDeclaration        # typeDeclarationStatement
-    | typeAlias              # typeAliasStatement
-    | packageDeclaration     # packageStatement
-    | assignment             # assignmentStatement
-    | yieldValue             # yieldStatement
-    | yieldBreak             # yieldBreakStatement
-    | conditional            # ifStatement
-    | forLoop                # forStatement
-    | consumeLoop            # consumeStatement
-    | expression             # expressionStatement
+    : functionDefinition               # functionDefinitionStatement
+    | functionDeclaration              # functionDeclarationStatement
+    | overloadedFunctionDeclaration    # overloadedFunctionStatement
+    | variantDefinition                # variantDefinitionStatement
+    | variantDeclaration               # variantDeclarationStatement
+    | typeDeclaration                  # typeDeclarationStatement
+    | typeAlias                        # typeAliasStatement
+    | packageDeclaration               # packageStatement
+    | assignment                       # assignmentStatement
+    | yieldValue                       # yieldStatement
+    | yieldBreak                       # yieldBreakStatement
+    | conditional                      # ifStatement
+    | forLoop                          # forStatement
+    | consumeLoop                      # consumeStatement
+    | expression                       # expressionStatement
     ;
 
 // `let x = f(1)` names the value of an expression; the type of the variable is the type of the expression. A type after
@@ -388,17 +441,61 @@ consumeCase
 // in the same way. There is no promotion: the type of an argument is the type of its parameter, and a value of type int
 // is not one of type int?.
 //
+// An operator is a shorter way to write a call: `a + b` calls the function that an `@operator("+")` annotation in
+// scope gives to `+`, with the arguments `a` and `b` in this order and without labels. The operators bind as in Swift,
+// from the strongest to the weakest:
+// 1. the prefix operators `-` and `!`;
+// 2. `*`, `/`, and `%`;
+// 3. `+` and `-`;
+// 4. the comparisons `<`, `<=`, `>`, `>=`, `==`, and `!=`.
+// The operators of a level apply from left to right, so `a - b - c` is `(a - b) - c`. The comparisons do not chain:
+// `a < b < c` is an error. A postfix binds more strongly than an operator, so `-x.f()` is `-(x.f())`. An operator can
+// take type arguments, `a +<int, bigint> b`, which select a variant if its function is overloaded, see
+// `overloadedFunctionDeclaration`.
+//
 
 expression
-    : primaryExpression postfix*
+    : additiveExpression (comparisonOperator NL* additiveExpression)?
     ;
 
-// A name is a variable, a parameter, or a function.
+additiveExpression
+    : multiplicativeExpression (additiveOperator NL* multiplicativeExpression)*
+    ;
+
+multiplicativeExpression
+    : prefixExpression (multiplicativeOperator NL* prefixExpression)*
+    ;
+
+// The sign of a literal belongs to the literal, so `-1` is the literal, not the prefix operator applied to `1`.
+prefixExpression
+    : primaryExpression postfix*
+    | prefixOperator prefixExpression
+    ;
+
+comparisonOperator
+    : symbol=(LT | LE | GT | GE | EQUAL_EQUAL | BANG_EQUAL) typeArguments?
+    ;
+
+additiveOperator
+    : symbol=(PLUS | MINUS) typeArguments?
+    ;
+
+multiplicativeOperator
+    : symbol=(STAR | SLASH | PERCENT) typeArguments?
+    ;
+
+prefixOperator
+    : symbol=(MINUS | BANG) typeArguments?
+    ;
+
+// A name is a variable, a parameter, or a function. The name of a generic or an overloaded function can take type
+// arguments, `id<bigint>`. As in C# and Swift, `<` after a name starts type arguments if the text that follows can be
+// type arguments, so `f(a < b, c > (d))` passes one argument, `a<b, c>(d)`, not two comparisons.
 primaryExpression
-    : literal        # literalExpression
-    | identifier     # nameExpression
-    | closure        # closureExpression
-    | streamBlock    # streamExpression
+    : literal                       # literalExpression
+    | identifier typeArguments?     # nameExpression
+    | closure                       # closureExpression
+    | streamBlock                   # streamExpression
     ;
 
 // `stream { yield 1; yield 2 }` is a stream block, an expression of type `stream<T>` whose elements are the values that
@@ -424,13 +521,13 @@ streamBlock
 //   position 1 of the field at position 0.
 // A dot call and a field access may start a line, which continues the expression of the line before. The `(` of a
 // call and a trailing closure stay on the line of what they call. The sign of a literal belongs to the literal, so
-// `-1.f()` is `f(-1)`, unlike in Swift.
+// `-1.f()` is `f(-1)`, unlike in Swift. A dot call can take type arguments, `x.f<int>(1)`.
 postfix
-    : callArguments                         # callPostfix
-    | NL* DOT identifier callArguments      # dotCallPostfix
-    | NL* DOT identifier                    # fieldPostfix
-    | NL* DOT INTEGER_LITERAL               # ordinalPostfix
-    | NL* DOT FLOATING_LITERAL              # ordinalPairPostfix
+    : callArguments                                         # callPostfix
+    | NL* DOT identifier typeArguments? callArguments       # dotCallPostfix
+    | NL* DOT identifier                                    # fieldPostfix
+    | NL* DOT INTEGER_LITERAL                               # ordinalPostfix
+    | NL* DOT FLOATING_LITERAL                              # ordinalPairPostfix
     ;
 
 // The arguments of a call. As in Swift, a closure after the parentheses is a trailing closure, the last argument. A
@@ -457,17 +554,31 @@ argument
 
 // The expression in front of the block of an if, a for, or a consume: an expression whose calls take no trailing
 // closure, as in Swift, because a `{` after it starts the block. A closure argument goes into the parentheses there,
-// `if xs.contains({ x in x == 1 }) { }`. Field accesses are the same as in other expressions, `for t in r.reviews { }`.
+// `if xs.contains({ x in x == 1 }) { }`. Field accesses and operators are the same as in other expressions,
+// `for t in r.reviews { }` and `if !t.isEmpty() { }`, so the rules below repeat those of `expression`.
 conditionExpression
+    : conditionAdditiveExpression (comparisonOperator NL* conditionAdditiveExpression)?
+    ;
+
+conditionAdditiveExpression
+    : conditionMultiplicativeExpression (additiveOperator NL* conditionMultiplicativeExpression)*
+    ;
+
+conditionMultiplicativeExpression
+    : conditionPrefixExpression (multiplicativeOperator NL* conditionPrefixExpression)*
+    ;
+
+conditionPrefixExpression
     : primaryExpression conditionPostfix*
+    | prefixOperator conditionPrefixExpression
     ;
 
 conditionPostfix
-    : arguments                         # conditionCallPostfix
-    | NL* DOT identifier arguments      # conditionDotCallPostfix
-    | NL* DOT identifier                # conditionFieldPostfix
-    | NL* DOT INTEGER_LITERAL           # conditionOrdinalPostfix
-    | NL* DOT FLOATING_LITERAL          # conditionOrdinalPairPostfix
+    : arguments                                         # conditionCallPostfix
+    | NL* DOT identifier typeArguments? arguments       # conditionDotCallPostfix
+    | NL* DOT identifier                                # conditionFieldPostfix
+    | NL* DOT INTEGER_LITERAL                           # conditionOrdinalPostfix
+    | NL* DOT FLOATING_LITERAL                          # conditionOrdinalPairPostfix
     ;
 
 // An integer literal can be of any numeric type, a floating-point literal of any floating-point type, and `nil` of any

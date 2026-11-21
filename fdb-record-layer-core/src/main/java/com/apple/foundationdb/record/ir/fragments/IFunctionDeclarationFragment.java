@@ -29,13 +29,15 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
  * A function declaration, {@code extern func lookup(key: bigint) -> string?}: the signature of a function that the
  * runtime provides, like an external function in MLIR. Calls and references treat a declared function like a defined
  * one; it just has no body. Its annotations, and those of its {@linkplain #packageStatement() package}, tell a target
- * what to call.
+ * what to call. A declaration can be a variant of an overloaded function, as
+ * {@code extern variant func add<int, int>(a: int, b: int) -> int} is, see {@link #variant()}.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IFunctionDeclarationFragment implements IFunctionFragment {
@@ -51,6 +53,8 @@ public final class IFunctionDeclarationFragment implements IFunctionFragment {
     private final ImmutableList<IAnnotationFragment> annotations;
     @Nullable
     private final IPackageStatementFragment packageStatement;
+    @Nullable
+    private final IOverloadedFunctionFragment.Variant variant;
     @Nonnull
     private final Supplier<Integer> hashCodeSupplier = Suppliers.memoize(this::computeHashCode);
 
@@ -69,7 +73,7 @@ public final class IFunctionDeclarationFragment implements IFunctionFragment {
     }
 
     /**
-     * Creates a function declaration.
+     * Creates a function declaration that is not a variant.
      *
      * @param name the name of the function
      * @param typeParameters the type parameters of a generic function, in order, and empty otherwise
@@ -84,17 +88,44 @@ public final class IFunctionDeclarationFragment implements IFunctionFragment {
                                         @Nonnull final IType resultType,
                                         @Nonnull final List<IAnnotationFragment> annotations,
                                         @Nullable final IPackageStatementFragment packageStatement) {
+        this(name, typeParameters, parameters, resultType, annotations, packageStatement, null);
+    }
+
+    /**
+     * Creates a function declaration.
+     *
+     * @param name the name of the function
+     * @param typeParameters the type parameters of a generic function, in order, and empty otherwise
+     * @param parameters the parameters in order, with distinct names
+     * @param resultType the result type, which is {@code void} if the declaration does not state one
+     * @param annotations the annotations of the declaration, in order
+     * @param packageStatement the package of the program that declares the function, or {@code null} if the program
+     *        has none
+     * @param variant the overloaded function that the function is a variant of, with its key, or {@code null} if the
+     *        function is not a variant; the signature must be that of the variant, see
+     *        {@link IOverloadedFunctionFragment.Variant}
+     */
+    public IFunctionDeclarationFragment(@Nonnull final String name, @Nonnull final List<IGenericType> typeParameters,
+                                        @Nonnull final List<IFunctionDefinitionFragment.Parameter> parameters,
+                                        @Nonnull final IType resultType,
+                                        @Nonnull final List<IAnnotationFragment> annotations,
+                                        @Nullable final IPackageStatementFragment packageStatement,
+                                        @Nullable final IOverloadedFunctionFragment.Variant variant) {
         this.name = Objects.requireNonNull(name);
         this.typeParameters = ImmutableList.copyOf(typeParameters);
         this.parameters = ImmutableList.copyOf(parameters);
         this.resultType = Objects.requireNonNull(resultType);
         this.annotations = ImmutableList.copyOf(annotations);
         this.packageStatement = packageStatement;
+        this.variant = variant;
         Preconditions.checkArgument(this.parameters.stream()
                         .map(IFunctionDefinitionFragment.Parameter::name)
                         .distinct()
                         .count() == this.parameters.size(),
                 "the parameters of a function must have distinct names");
+        if (variant != null) {
+            variant.checkSignature(name, this.typeParameters, this.parameters);
+        }
     }
 
     /**
@@ -150,6 +181,15 @@ public final class IFunctionDeclarationFragment implements IFunctionFragment {
         return packageStatement;
     }
 
+    /**
+     * {@return the overloaded function that the function is a variant of, with its key, or empty if it is none}
+     */
+    @Nonnull
+    @Override
+    public Optional<IOverloadedFunctionFragment.Variant> variant() {
+        return Optional.ofNullable(variant);
+    }
+
     @Override
     public boolean equals(final Object other) {
         if (this == other) {
@@ -158,7 +198,7 @@ public final class IFunctionDeclarationFragment implements IFunctionFragment {
         return other instanceof IFunctionDeclarationFragment that && name.equals(that.name)
                 && typeParameters.equals(that.typeParameters) && parameters.equals(that.parameters)
                 && resultType.equals(that.resultType) && annotations.equals(that.annotations)
-                && Objects.equals(packageStatement, that.packageStatement);
+                && Objects.equals(packageStatement, that.packageStatement) && Objects.equals(variant, that.variant);
     }
 
     @Override
@@ -168,7 +208,7 @@ public final class IFunctionDeclarationFragment implements IFunctionFragment {
 
     private int computeHashCode() {
         return Objects.hash("function declaration", name, typeParameters, parameters, resultType, annotations,
-                packageStatement);
+                packageStatement, variant);
     }
 
     @Nonnull
@@ -176,6 +216,6 @@ public final class IFunctionDeclarationFragment implements IFunctionFragment {
     public String toString() {
         return "IFunctionDeclarationFragment[name=" + name + ", typeParameters=" + typeParameters + ", parameters="
                 + parameters + ", resultType=" + resultType + ", annotations=" + annotations + ", packageStatement="
-                + packageStatement + "]";
+                + packageStatement + ", variant=" + variant + "]";
     }
 }

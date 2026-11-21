@@ -24,17 +24,21 @@ import com.apple.foundationdb.record.ir.fragments.IExternType;
 import com.apple.foundationdb.record.ir.fragments.IFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
+import com.apple.foundationdb.record.ir.fragments.IOverloadedFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IType;
 import com.apple.foundationdb.record.ir.fragments.ITypeAliasFragment;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,10 +54,15 @@ import java.util.Optional;
  * what the construct declared.
  *
  * <p>Type parameters, extern types, and type aliases are types and the others are values, and the two have separate
- * namespaces. Within each namespace, a scope declares a name only once, so there is no overloading. A type parameter
- * must not hide a type parameter of an enclosing function: type parameters compare by name, so the two would be the
- * same type. An extern type refers to its declaration, and a type alias stands for its type, so either can hide another
- * type without that ambiguity.</p>
+ * namespaces. Within each namespace, a scope declares a name only once. The one exception is an overloaded function:
+ * its variants have its name, and they are declared after it in the same scope, see
+ * {@link OverloadedFunctionBinding}. A type parameter must not hide a type parameter of an enclosing function: type
+ * parameters compare by name, so the two would be the same type. An extern type refers to its declaration, and a type
+ * alias stands for its type, so either can hide another type without that ambiguity.</p>
+ *
+ * <p>Operators have a namespace of their own. An {@code @operator} annotation declares its operator in the scope of
+ * the annotated function, a scope declares an operator once at most, and an inner declaration of an operator hides an
+ * outer one, as for names.</p>
  *
  * <p>The inference of a scope types the expressions in it, see {@code TypeInference}. A statement outside closures and
  * stream blocks has a scope of its own with a new inference. The scopes of the closures and stream blocks in the
@@ -117,6 +126,13 @@ final class Scope {
      */
     @Nonnull
     private final Map<String, Binding> values = new LinkedHashMap<>();
+
+    /**
+     * The operators declared in this scope, each with the function that it calls. Like {@link #values}, they are
+     * declared while the statements of the scope are inferred.
+     */
+    @Nonnull
+    private final Map<Operator, CalleeBinding> operators = new EnumMap<>(Operator.class);
 
     /**
      * The package that the program belongs to, held by the outermost scope, or {@code null} if the program has not
@@ -300,9 +316,96 @@ final class Scope {
      * can refer to the definition; its body therefore cannot call it.
      *
      * @param function the definition or declaration of the function, whose name this scope must not declare yet
+     * @return the binding of the function
      */
-    void declareFunction(@Nonnull final IFunctionFragment function) {
-        declare(function.name(), new FunctionBinding(function));
+    @Nonnull
+    FunctionBinding declareFunction(@Nonnull final IFunctionFragment function) {
+        final FunctionBinding binding = new FunctionBinding(function);
+        declare(function.name(), binding);
+        return binding;
+    }
+
+    /**
+     * Declares an overloaded function in this scope. Its variants are declared after it, in this scope, see
+     * {@link #declareVariant}.
+     *
+     * @param function the overloaded function, whose name this scope must not declare yet
+     * @return the binding of the function, which collects its variants
+     */
+    @Nonnull
+    OverloadedFunctionBinding declareOverloadedFunction(@Nonnull final IOverloadedFunctionFragment function) {
+        final OverloadedFunctionBinding binding = new OverloadedFunctionBinding(function);
+        declare(function.name(), binding);
+        return binding;
+    }
+
+    /**
+     * Returns the overloaded function of the given name that this scope declares. Only in that scope can a variant of
+     * the function be declared. The scope of a statement looks in the scope that encloses it, which its declarations
+     * go to.
+     *
+     * @param name the name of the overloaded function
+     * @return the overloaded function, or empty if this scope declares no overloaded function of this name
+     */
+    @Nonnull
+    Optional<OverloadedFunctionBinding> overloadedFunction(@Nonnull final String name) {
+        if (isStatement) {
+            // the scope of a statement always has an enclosing scope
+            return Objects.requireNonNull(enclosing).overloadedFunction(name);
+        }
+        return values.get(name) instanceof OverloadedFunctionBinding function
+                ? Optional.of(function)
+                : Optional.empty();
+    }
+
+    /**
+     * Declares a variant of an overloaded function that this scope declares. A call that follows the variant can then
+     * select it.
+     *
+     * @param variant the variant, which must be a variant of an overloaded function of this scope, with a key that no
+     *        other variant of that function has
+     */
+    void declareVariant(@Nonnull final IFunctionFragment variant) {
+        final IOverloadedFunctionFragment overloadedFunction = variant.variant()
+                .orElseThrow(() -> new IllegalArgumentException("only a variant can be declared as a variant"))
+                .overloadedFunction();
+        overloadedFunction(variant.name())
+                .filter(function -> function.function().equals(overloadedFunction))
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "a variant must be declared after its overloaded function, in the same scope"))
+                .addVariant(variant);
+    }
+
+    /**
+     * Declares an operator in this scope, the operator of an {@code @operator} annotation of a function.
+     *
+     * @param operator the operator, which this scope must not declare yet
+     * @param function the function that the operator calls
+     */
+    void declareOperator(@Nonnull final Operator operator, @Nonnull final CalleeBinding function) {
+        if (isStatement) {
+            // the scope of a statement always has an enclosing scope
+            Objects.requireNonNull(enclosing).declareOperator(operator, function);
+            return;
+        }
+        Preconditions.checkArgument(operators.putIfAbsent(operator, function) == null,
+                "an operator can be declared only once in a scope");
+    }
+
+    /**
+     * Returns the function that an operator calls: the function of the operator that this scope declares or, if there
+     * is none, the nearest enclosing scope that declares one.
+     *
+     * @param operator the operator
+     * @return the function that the operator calls, or empty if no function of this operator is in scope
+     */
+    @Nonnull
+    Optional<CalleeBinding> lookupOperator(@Nonnull final Operator operator) {
+        final CalleeBinding function = operators.get(operator);
+        if (function != null) {
+            return Optional.of(function);
+        }
+        return enclosing == null ? Optional.empty() : enclosing.lookupOperator(operator);
     }
 
     private void declare(@Nonnull final String name, @Nonnull final Binding binding) {
@@ -402,20 +505,26 @@ final class Scope {
      * {@code x.f(1)}, calls a function, so a variable {@code f} must not hide the function there.
      *
      * @param name the name of the function
-     * @return the function, or empty if no function of this name is in scope
+     * @return the function, which can be overloaded, or empty if no function of this name is in scope
      */
     @Nonnull
-    Optional<FunctionBinding> lookupFunction(@Nonnull final String name) {
-        if (values.get(name) instanceof FunctionBinding function) {
+    Optional<CalleeBinding> lookupFunction(@Nonnull final String name) {
+        if (values.get(name) instanceof CalleeBinding function) {
             return Optional.of(function);
         }
         return enclosing == null ? Optional.empty() : enclosing.lookupFunction(name);
     }
 
     /**
-     * What the name of a value stands for: a variable or a function.
+     * What the name of a value stands for: a variable or a function, which can be overloaded.
      */
-    sealed interface Binding permits VariableBinding, FunctionBinding {
+    sealed interface Binding permits VariableBinding, CalleeBinding {
+    }
+
+    /**
+     * What a call can name: a function, or an overloaded function, whose call calls one of its variants.
+     */
+    sealed interface CalleeBinding extends Binding permits FunctionBinding, OverloadedFunctionBinding {
     }
 
     /**
@@ -433,7 +542,7 @@ final class Scope {
      *
      * @param function the definition or declaration of the function
      */
-    record FunctionBinding(@Nonnull IFunctionFragment function) implements Binding {
+    record FunctionBinding(@Nonnull IFunctionFragment function) implements CalleeBinding {
         /**
          * Returns the type parameters of the function, which a reference to it instantiates.
          *
@@ -452,6 +561,59 @@ final class Scope {
         @Nonnull
         IFunctionType type() {
             return function.type();
+        }
+    }
+
+    /**
+     * An overloaded function, with the variants that its scope declares after it. The variants are added as the
+     * statements of the scope are inferred, so a binding is a mutable part of a scope, as the names are. A call sees
+     * only the variants declared before it, so it takes a copy of them, see {@link #variants()}.
+     */
+    static final class OverloadedFunctionBinding implements CalleeBinding {
+        @Nonnull
+        private final IOverloadedFunctionFragment function;
+        @Nonnull
+        private final List<IFunctionFragment> variants = new ArrayList<>();
+
+        OverloadedFunctionBinding(@Nonnull final IOverloadedFunctionFragment function) {
+            this.function = function;
+        }
+
+        /**
+         * Returns the overloaded function.
+         *
+         * @return the declaration of the overloaded function
+         */
+        @Nonnull
+        IOverloadedFunctionFragment function() {
+            return function;
+        }
+
+        /**
+         * Returns the variants declared so far.
+         *
+         * @return the variants in the order of their declaration
+         */
+        @Nonnull
+        ImmutableList<IFunctionFragment> variants() {
+            return ImmutableList.copyOf(variants);
+        }
+
+        /**
+         * Adds a variant. No two variants of a function have the same key, so a call with type arguments selects one
+         * variant at most.
+         */
+        private void addVariant(@Nonnull final IFunctionFragment variant) {
+            final List<IType> key = typeArguments(variant);
+            Preconditions.checkArgument(variants.stream().noneMatch(other -> typeArguments(other).equals(key)),
+                    "two variants of an overloaded function cannot have the same type arguments");
+            variants.add(variant);
+        }
+
+        @Nonnull
+        private static List<IType> typeArguments(@Nonnull final IFunctionFragment variant) {
+            // only variants are added
+            return variant.variant().orElseThrow().typeArguments();
         }
     }
 }
