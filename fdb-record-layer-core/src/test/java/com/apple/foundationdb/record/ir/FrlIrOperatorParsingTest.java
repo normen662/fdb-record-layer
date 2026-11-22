@@ -38,6 +38,7 @@ import com.apple.foundationdb.record.ir.fragments.IIfFragment;
 import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
 import com.apple.foundationdb.record.ir.fragments.IOverloadedFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
+import com.apple.foundationdb.record.ir.fragments.IReturnFragment;
 import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IType;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
@@ -435,12 +436,12 @@ class FrlIrOperatorParsingTest {
                 @operator("+") extern func plus(_ x: int, _ y: int) -> int
                 func f(a: int) -> bigint {
                     @operator("+") extern func join(_ x: int, _ y: int) -> bigint
-                    a + a
+                    return a + a
                 }""").statements();
         final List<IStatementFragment> body = ((IFunctionDefinitionFragment)statements.get(1)).body().statements();
         final IFunctionDeclarationFragment join = (IFunctionDeclarationFragment)body.get(0);
         final IVariableReferenceFragment a = new IVariableReferenceFragment("a", INT);
-        assertThat(body.get(1)).isEqualTo(call(join, ImmutableList.of(a, a)));
+        assertThat(body.get(1)).isEqualTo(new IReturnFragment(call(join, ImmutableList.of(a, a))));
     }
 
     @ParameterizedTest
@@ -545,15 +546,15 @@ class FrlIrOperatorParsingTest {
         assertThat(lastExpression(withNullableVariant + "let one: int = 1\nlet e = x < one"))
                 .isEqualTo(call(lessOfInts, ImmutableList.of(x, new IVariableReferenceFragment("one", INT))));
         // a statement of a function body has its own inference too
-        final List<IStatementFragment> statements =
-                parseProgram(OVERLOADED_LESS + "func f() -> boolean {\n    let x = 5\n    x < 1\n}").statements();
+        final List<IStatementFragment> statements = parseProgram(OVERLOADED_LESS
+                + "func f() -> boolean {\n    let x = 5\n    return x < 1\n}").statements();
         assertThat(((IFunctionDefinitionFragment)statements.get(statements.size() - 1)).body().statements().get(1))
-                .isEqualTo(xLessThanOne);
+                .isEqualTo(new IReturnFragment(xLessThanOne));
         // in a closure, the statements share one inference, so the type of x must be stated
-        final IExpressionFragment closure =
-                lastExpression(OVERLOADED_LESS + "let e = { () -> boolean in\n    let x: int = 5\n    x < 1\n}");
-        assertThat(((IClosureFragment)closure).body().statements())
-                .containsExactly(new IAssignmentFragment("x", new ILiteralFragment(5, INT)), xLessThanOne);
+        final IExpressionFragment closure = lastExpression(OVERLOADED_LESS
+                + "let e = { () -> boolean in\n    let x: int = 5\n    return x < 1\n}");
+        assertThat(((IClosureFragment)closure).body().statements()).containsExactly(
+                new IAssignmentFragment("x", new ILiteralFragment(5, INT)), new IReturnFragment(xLessThanOne));
     }
 
     @ParameterizedTest

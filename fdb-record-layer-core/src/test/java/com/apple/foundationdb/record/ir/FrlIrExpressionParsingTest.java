@@ -40,6 +40,7 @@ import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IRecordConstructorFragment;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
+import com.apple.foundationdb.record.ir.fragments.IReturnFragment;
 import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
@@ -235,6 +236,12 @@ class FrlIrExpressionParsingTest {
     static Stream<Arguments> closures() {
         final IClosureFragment.Parameter x = new IClosureFragment.Parameter("x", INT);
         final IClosureFragment.Parameter i = new IClosureFragment.Parameter("i", INT);
+        final IClosureFragment.Parameter c = new IClosureFragment.Parameter("c", BOOLEAN);
+        final IVariableReferenceFragment cReference = new IVariableReferenceFragment("c", BOOLEAN);
+        final IClosureFragment returnsOneOrTwo = new IClosureFragment(ImmutableList.of(c), INT,
+                new IBlockFragment(ImmutableList.of(new IIfFragment(cReference, new IBlockFragment(ImmutableList.of(
+                        new IReturnFragment(new ILiteralFragment(1, INT)))), null),
+                        new IReturnFragment(new ILiteralFragment(2, INT)))));
         return Stream.of(
                 // a closure without a signature has no parameters, and a result type of the value of its body
                 Arguments.of("let e = { }", new IClosureFragment(ImmutableList.of(), VOID, EMPTY_BLOCK)),
@@ -287,7 +294,25 @@ class FrlIrExpressionParsingTest {
                                 new IAssignmentFragment("a", new ILiteralFragment(42L, BIGINT)),
                                 new IFunctionCallFragment(reference(declaration("f", ImmutableList.of(),
                                                 ImmutableList.of(parameter("x", BIGINT)), VOID)),
-                                        ImmutableList.of(new IVariableReferenceFragment("a", BIGINT))))))));
+                                        ImmutableList.of(new IVariableReferenceFragment("a", BIGINT))))))),
+                // a return leaves the closure; without a stated result type, the values of the returns give it
+                Arguments.of("let e = { (c: boolean) -> int in\n    if c { return 1 }\n    return 2\n}",
+                        returnsOneOrTwo),
+                Arguments.of("let e = { (c: boolean) in\n    if c { return 1 }\n    return 2\n}", returnsOneOrTwo),
+                // as in Swift, a body of more than one statement without a return of a value returns void
+                Arguments.of("let e = { (i: int) in\n    let j = i\n    j\n}",
+                        new IClosureFragment(ImmutableList.of(i), VOID, new IBlockFragment(ImmutableList.of(
+                                new IAssignmentFragment("j", new IVariableReferenceFragment("i", INT)),
+                                new IVariableReferenceFragment("j", INT))))),
+                Arguments.of("let e = { (c: boolean) in\n    if c { return }\n    return\n}",
+                        new IClosureFragment(ImmutableList.of(c), VOID, new IBlockFragment(ImmutableList.of(
+                                new IIfFragment(cReference, new IBlockFragment(ImmutableList.of(
+                                        new IReturnFragment(null))), null), new IReturnFragment(null))))),
+                // the context gives the result type, and so the type of the value of a return
+                Arguments.of("let e: (int) -> bigint = { x in\n    let y = x\n    return 42\n}",
+                        new IClosureFragment(ImmutableList.of(x), BIGINT, new IBlockFragment(ImmutableList.of(
+                                new IAssignmentFragment("y", new IVariableReferenceFragment("x", INT)),
+                                new IReturnFragment(new ILiteralFragment(42L, BIGINT)))))));
     }
 
     @ParameterizedTest
@@ -1028,6 +1053,15 @@ class FrlIrExpressionParsingTest {
             // a field access needs a record that is not nullable, so the record cannot also be where nil is
             PAIR + "let e = { () -> int in\n    let r = (x: 1)\n    pair(a: r, b: nil)\n    r.x\n}",
             PAIR + "let e = { () -> int in\n    let r = (x: 1)\n    let y = r.x\n    pair(a: r, b: nil)\n    y\n}",
+            // a closure whose returns have values returns a value on every path, and its returns all have one
+            "let e = { (c: boolean) in\n    if c { return 1 }\n    return\n}",
+            "let e = { (c: boolean) in if c { return 1 } }",
+            "let e = { () -> void in return 1 }",
+            // as in Swift, a body of more than one statement gives its value with a return
+            "let e = { () -> int in\n    let a = 1\n    a\n}",
+            "extern func h(f: (int) -> int)\nh(f: { x in\n    let y = x\n    y\n})",
+            // no statement can follow a return
+            "let e = { (x: int) in\n    return x\n    x\n}",
             // the type of a record cannot contain itself
             PAIR + "let e = { x in pair(a: x, b: (a: x)) }",
             PAIR + "let e = { x in pair(a: (a: x), b: x) }",

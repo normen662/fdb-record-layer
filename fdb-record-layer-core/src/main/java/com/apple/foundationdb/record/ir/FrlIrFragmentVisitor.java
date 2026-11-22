@@ -48,6 +48,7 @@ import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IProgramFragment;
 import com.apple.foundationdb.record.ir.fragments.IRecordConstructorFragment;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
+import com.apple.foundationdb.record.ir.fragments.IReturnFragment;
 import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
@@ -151,6 +152,13 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     @Nonnull
     private static final String YIELD_OUTSIDE_STREAM =
             "a yield must be in a stream block, and not in a function or a closure within one";
+
+    /**
+     * The message of the exception if a return is not in the body of a function or a closure.
+     */
+    @Nonnull
+    private static final String RETURN_OUTSIDE_BODY =
+            "a return must be in a function or a closure, and not in a stream block, which a yield break ends";
 
     /**
      * The message of the exception if a consume is not a statement of a stream block.
@@ -258,29 +266,26 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Infers the statements of a program, a block, a closure, or a stream block. If the last statement is an
-     * expression, the expected type of the value of the statements is its context, and its type is the type of the
-     * value.
+     * Infers the statements of a program, a block, a closure, or a stream block. As in Swift, a single expression is
+     * the value of its statements: if there is exactly one statement and it is an expression, the expected type of the
+     * value of the statements is its context, and its type is the type of the value. Other statements have no value.
      */
     @Nonnull
     private PendingStatements statements(@Nonnull final FrlIrParser.StatementsContext ctx,
                                          @Nullable final TypeInference.Term expectedValue) {
         final List<FrlIrParser.StatementContext> statementContexts = ctx.statement();
+        if (statementContexts.size() == 1) {
+            final PendingStatement only = statement(statementContexts.get(0), expectedValue);
+            return new PendingStatements(() -> ImmutableList.of(only.builder().get()), only.valueType());
+        }
         final ImmutableList.Builder<Supplier<IStatementFragment>> builders = ImmutableList.builder();
-        TypeInference.Term valueType = null;
-        if (!statementContexts.isEmpty()) {
-            final int last = statementContexts.size() - 1;
-            for (final FrlIrParser.StatementContext statementContext : statementContexts.subList(0, last)) {
-                builders.add(statement(statementContext, null).builder());
-            }
-            final PendingStatement lastStatement = statement(statementContexts.get(last), expectedValue);
-            builders.add(lastStatement.builder());
-            valueType = lastStatement.valueType();
+        for (final FrlIrParser.StatementContext statementContext : statementContexts) {
+            builders.add(statement(statementContext, null).builder());
         }
         final ImmutableList<Supplier<IStatementFragment>> pending = builders.build();
         return new PendingStatements(() -> pending.stream()
                 .map(Supplier::get)
-                .collect(ImmutableList.toImmutableList()), valueType);
+                .collect(ImmutableList.toImmutableList()), null);
     }
 
     /**
@@ -361,7 +366,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
     /**
      * Infers the body of a function definition, in the scope of the function: the parameters become variables of the
-     * body, and the result type is the context of the value of the body.
+     * body, and the result type is the context of a single expression of the body and of the values of its returns.
      */
     @Nonnull
     private IBlockFragment functionBody(@Nonnull final Signature signature,
@@ -369,7 +374,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         signature.parameters()
                 .forEach(parameter -> scope.declareVariable(parameter.name(), TypeInference.known(parameter.type())));
         final IType resultType = signature.resultType();
-        final PendingStatements body = inScope(scope.enterBlock(), () -> statements(block.statements(),
+        final Scope.ReturnTarget target = new Scope.ReturnTarget(TypeInference.known(resultType));
+        final PendingStatements body = inScope(scope.enterBody(target), () -> statements(block.statements(),
                 resultType.isVoid() ? null : TypeInference.known(resultType)));
         return new IBlockFragment(body.builder().get());
     }
@@ -1550,6 +1556,34 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             return new PendingStatement(() -> new IYieldBreakFragment(inferredReason.builder().get()), null);
         }
 
+        /**
+         * Infers a return, which leaves the function or the closure whose body it is in, see
+         * {@code Scope.returnTarget()}. The result type of that function or closure is the context of the value. A
+         * return without a value requires the result type to be {@code void}. In a closure whose result type is not
+         * known yet, this makes it {@code void}, and a return with a value makes it the type of the value.
+         */
+        @Nonnull
+        @Override
+        public PendingStatement visitReturnStatement(@Nonnull final FrlIrParser.ReturnStatementContext ctx) {
+            final Scope.ReturnTarget target = scope.returnTarget();
+            if (target == null) {
+                throw new IllegalArgumentException(RETURN_OUTSIDE_BODY);
+            }
+            final FrlIrParser.ExpressionContext value = ctx.returnValue().expression();
+            if (value == null) {
+                inference().unify(target.resultType(), TypeInference.known(voidType()),
+                        "a return needs a value unless the result type of its function or closure is void");
+                return PendingStatement.built(new IReturnFragment(null));
+            }
+            Preconditions.checkArgument(!TypeInference.isResolved(target.resultType())
+                            || !TypeInference.resolve(target.resultType()).isVoid(),
+                    "a return has no value if the result type of its function or closure is void");
+            target.addValueReturn();
+            final Inferred inferredValue = infer(value, target.resultType(),
+                    "the value of a return must be of the result type of its function or closure");
+            return new PendingStatement(() -> new IReturnFragment(inferredValue.builder().get()), null);
+        }
+
         @Nonnull
         @Override
         public PendingStatement visitIfStatement(@Nonnull final FrlIrParser.IfStatementContext ctx) {
@@ -1936,8 +1970,8 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
          * type is unified with the expected type before the block is inferred, so that the context determines the
          * element type and every yield has it as the context of its value; without a context, the yielded values
          * determine it. The scope of the block inherits the inference of the statement that the stream block is in, so
-         * the statements of the block join it, as those of a closure do. The value of the block is discarded, so its
-         * last expression has no context.
+         * the statements of the block join it, as those of a closure do. The block has no value, so a single expression
+         * in it has no context, and its scope has no target of returns, since a yield break ends a stream block.
          */
         @Nonnull
         @Override
@@ -1960,8 +1994,9 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
          * infers the body. So the context fixes the types that the closure leaves out, and the body sees them. The
          * closure then needs no {@link #fit}. The scope of the closure uses the inference of the statement that the
          * closure is in, so the statements of the body use it too. The scope has no element type of yields, because a
-         * closure cannot yield. If neither the closure nor the context states the result type, the result type is the
-         * type of the value of the body, or {@code void} if the body has no value.
+         * closure cannot yield, and a return in the body leaves the closure. If neither the closure nor the context
+         * states the result type, the result type is the type of the single expression of the body, or the type of the
+         * values of its returns, or {@code void} if the body has neither.
          *
          * <p>Example: the closure {@code { x in h(x) }} with the expected type {@code (vT) -> vU} gets the term
          * {@code (vX) -> vC}. The method unifies the two, which gives {@code vX := vT} and {@code vC := vU}. Then the
@@ -1990,11 +2025,13 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                 }
                 parameters.forEach(parameter -> scope.declareVariable(parameter.name(), parameter.type()));
                 final boolean discardsValue = statedResultType != null && statedResultType.isVoid();
-                final PendingStatements body = inScope(scope.enterBlock(),
+                final Scope.ReturnTarget target = new Scope.ReturnTarget(resultType);
+                final PendingStatements body = inScope(scope.enterBody(target),
                         () -> statements(closure.statements(), discardsValue ? null : resultType));
-                if (statedResultType == null && body.valueType() == null) {
+                if (statedResultType == null && body.valueType() == null && !target.returnsValue()) {
+                    // a body that is not a single expression and returns no value returns void, as in Swift
                     inference.unify(resultType, TypeInference.known(voidType()),
-                            "the body of a closure must end with an expression of its result type unless that is void");
+                            "a body of a closure that is not a single expression gives its value with a return");
                 }
                 return new Inferred(type, () -> new IClosureFragment(parameters.stream()
                         .map(parameter -> new IClosureFragment.Parameter(parameter.name(),
@@ -2302,7 +2339,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
 
     /**
      * A statement during inference: a builder for its fragment, and the term of its value. Only an expression
-     * statement has a value. If the statement is the last one of a body, its value is the value of the body.
+     * statement has a value. If the statement is the only one of a body, its value is the value of the body.
      *
      * @param builder builds the statement; call it only after the inference is solved
      * @param valueType the term of the value of the statement if the statement is an expression, and {@code null}
@@ -2312,7 +2349,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                                     @Nullable TypeInference.Term valueType) {
         /**
          * Returns a statement that is built already. Such a statement has no terms and no value: a definition, a
-         * declaration, a type alias, or a yield break without a reason.
+         * declaration, a type alias, a yield break without a reason, or a return without a value.
          */
         @Nonnull
         static PendingStatement built(@Nonnull final IStatementFragment statement) {
@@ -2321,12 +2358,12 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Statements during inference: one builder for all of them, and the term of their value. The value is the value of
-     * the last statement if that statement is an expression. Example: the body of {@code { x in h(x) }} has the value
-     * term of {@code h(x)}, the result type of the call.
+     * Statements during inference: one builder for all of them, and the term of their value. As in Swift, the value is
+     * the value of the only statement if there is exactly one and it is an expression. Example: the body of
+     * {@code { x in h(x) }} has the value term of {@code h(x)}, the result type of the call.
      *
      * @param builder builds the statements; call it only after the inference is solved
-     * @param valueType the term of the value of the statements, the value of the last one if it is an expression, and
+     * @param valueType the term of the value of the statements, the value of the only one if it is an expression, and
      *        {@code null} if they have no value
      */
     private record PendingStatements(@Nonnull Supplier<ImmutableList<IStatementFragment>> builder,

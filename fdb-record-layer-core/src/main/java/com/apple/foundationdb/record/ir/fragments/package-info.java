@@ -21,11 +21,11 @@
 /**
  * The fragments of FRL-IR, the objects that a program consists of: the program and its statements, which are function
  * definitions and declarations, overloaded functions, type declarations, type aliases, the package statement,
- * assignments, yields and yield breaks, the statements of control flow (if, for, and consume), and expressions; the
- * expressions, which are literals, references, calls, field accesses, record constructors, closures, and stream blocks;
- * the blocks that implement functions, closures, and stream blocks, and the blocks of the statements of control flow,
- * whose value is the value of their last expression; the types; and the annotations that say how a package, a
- * function, or an extern type lives outside FRL-IR. Every fragment implements
+ * assignments, yields and yield breaks, returns, the statements of control flow (if, for, and consume), and
+ * expressions; the expressions, which are literals, references, calls, field accesses, record constructors, closures,
+ * and stream blocks; the blocks that implement functions, closures, and stream blocks, and the blocks of the statements
+ * of control flow, whose value is their only statement if that is an expression; the types; and the annotations that
+ * say how a package, a function, or an extern type lives outside FRL-IR. Every fragment implements
  * {@link com.apple.foundationdb.record.ir.fragments.IFragment}, and every expression is typed. A reference to a
  * function, and an extern type, refer back to the fragment that defines or declares them, while a type alias stands for
  * its type, so no type refers to it. A variant of an overloaded function refers to the overloaded function, and a

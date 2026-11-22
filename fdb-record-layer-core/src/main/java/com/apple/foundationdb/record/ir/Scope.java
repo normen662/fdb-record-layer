@@ -113,6 +113,13 @@ final class Scope {
     private final TypeInference.Term yieldElementType;
 
     /**
+     * The function or the closure that a return in this scope leaves, or {@code null} if no return can be here: at the
+     * top level of a program, and in a stream block, which a yield break ends.
+     */
+    @Nullable
+    private final ReturnTarget returnTarget;
+
+    /**
      * The extern types and the type aliases declared in this scope, by name: an extern type as the type of its
      * declaration, and an alias as the type it stands for. Like {@link #values}, they are declared while the statements
      * of the scope are inferred.
@@ -143,12 +150,13 @@ final class Scope {
 
     private Scope(@Nullable final Scope enclosing, @Nonnull final ImmutableMap<String, IGenericType> typeParameters,
                   @Nullable final TypeInference inference, final boolean isStatement,
-                  @Nullable final TypeInference.Term yieldElementType) {
+                  @Nullable final TypeInference.Term yieldElementType, @Nullable final ReturnTarget returnTarget) {
         this.enclosing = enclosing;
         this.typeParameters = typeParameters;
         this.inference = inference;
         this.isStatement = isStatement;
         this.yieldElementType = yieldElementType;
+        this.returnTarget = returnTarget;
     }
 
     /**
@@ -158,7 +166,7 @@ final class Scope {
      */
     @Nonnull
     static Scope root() {
-        return new Scope(null, ImmutableMap.of(), null, false, null);
+        return new Scope(null, ImmutableMap.of(), null, false, null, null);
     }
 
     /**
@@ -177,56 +185,69 @@ final class Scope {
         Preconditions.checkArgument(
                 newTypeParameters.stream().noneMatch(typeParameter -> lookupTypeParameter(typeParameter.name()).isPresent()),
                 "a type parameter must not have the name of a type parameter of an enclosing function");
-        return new Scope(this, Maps.uniqueIndex(newTypeParameters, IGenericType::name), null, false, null);
+        return new Scope(this, Maps.uniqueIndex(newTypeParameters, IGenericType::name), null, false, null, null);
     }
 
     /**
-     * Returns the scope of a block nested in this one, which has the inference of this scope and its element type of
-     * yields: the body of a function or a closure, or a block of a statement of control flow that joins the inference
-     * of this scope, such as an if in a closure.
+     * Returns the scope of the body of a function or a closure nested in this one, which a return in it leaves. It has
+     * the inference and the element type of yields of this scope, the scope of the function or the closure.
+     *
+     * @param target the function or the closure that the body implements
+     * @return a new scope enclosed by this one
+     */
+    @Nonnull
+    Scope enterBody(@Nonnull final ReturnTarget target) {
+        return new Scope(this, ImmutableMap.of(), inference, false, yieldElementType, target);
+    }
+
+    /**
+     * Returns the scope of a block nested in this one, which has the inference of this scope, its element type of
+     * yields, and its target of returns: a block of a statement of control flow that joins the inference of this
+     * scope, such as an if in a closure.
      *
      * @return a new scope enclosed by this one
      */
     @Nonnull
     Scope enterBlock() {
-        return new Scope(this, ImmutableMap.of(), inference, false, yieldElementType);
+        return new Scope(this, ImmutableMap.of(), inference, false, yieldElementType, returnTarget);
     }
 
     /**
      * Returns the scope of a block of an if or a for whose statement is typed with an inference of its own, as a
      * statement of a program or of a function body is. The scope has no inference, so that the statements of the block
-     * are typed one by one, as the statements around the if or the for are. It has the element type of yields of this
-     * scope, since the block runs as part of the block that the if or the for is in.
+     * are typed one by one, as the statements around the if or the for are. It has the element type of yields and the
+     * target of returns of this scope, since the block runs as part of the block that the if or the for is in.
      *
      * @return a new scope enclosed by this one
      */
     @Nonnull
     Scope enterBlockWithoutInference() {
-        return new Scope(this, ImmutableMap.of(), null, false, yieldElementType);
+        return new Scope(this, ImmutableMap.of(), null, false, yieldElementType, returnTarget);
     }
 
     /**
      * Returns the scope of a closure nested in this one, which has the inference of this scope. The scope has no
      * element type of yields: the closure can be called when no stream block is running, so it cannot yield, even
-     * within a stream block.
+     * within a stream block. Its body gets the target of its returns, see {@link #enterBody}.
      *
      * @return a new scope enclosed by this one
      */
     @Nonnull
     Scope enterClosure() {
-        return new Scope(this, ImmutableMap.of(), inference, false, null);
+        return new Scope(this, ImmutableMap.of(), inference, false, null, null);
     }
 
     /**
      * Returns the scope of the block of a stream block nested in this one, which has the inference of this scope, so
-     * that the statements of the block join it, as those of a closure do.
+     * that the statements of the block join it, as those of a closure do. The scope has no target of returns: a yield
+     * break ends a stream block.
      *
      * @param elementType the element type of the stream, which every value that a yield in the block adds must have
      * @return a new scope enclosed by this one
      */
     @Nonnull
     Scope enterStream(@Nonnull final TypeInference.Term elementType) {
-        return new Scope(this, ImmutableMap.of(), inference, false, elementType);
+        return new Scope(this, ImmutableMap.of(), inference, false, elementType, null);
     }
 
     /**
@@ -239,7 +260,7 @@ final class Scope {
     @Nonnull
     Scope enterStatement(@Nonnull final TypeInference statementInference) {
         Preconditions.checkState(inference == null, "a statement of a closure joins the inference of its closure");
-        return new Scope(this, ImmutableMap.of(), statementInference, true, yieldElementType);
+        return new Scope(this, ImmutableMap.of(), statementInference, true, yieldElementType, returnTarget);
     }
 
     /**
@@ -274,6 +295,17 @@ final class Scope {
     @Nullable
     TypeInference.Term yieldElementType() {
         return yieldElementType;
+    }
+
+    /**
+     * Returns the function or the closure that a return in this scope leaves.
+     *
+     * @return the target of a return here, or {@code null} if no return can be here: at the top level of a program,
+     *         and in a stream block
+     */
+    @Nullable
+    ReturnTarget returnTarget() {
+        return returnTarget;
     }
 
     /**
@@ -614,6 +646,48 @@ final class Scope {
         private static List<IType> typeArguments(@Nonnull final IFunctionFragment variant) {
             // only variants are added
             return variant.variant().orElseThrow().typeArguments();
+        }
+    }
+
+    /**
+     * The function or the closure that a return leaves: the term of its result type, which is the context of the value
+     * of a return, and whether a return with a value was inferred. The latter decides the result type of a closure
+     * that does not state it: a body that is not a single expression returns {@code void} unless a return has a value.
+     */
+    static final class ReturnTarget {
+        @Nonnull
+        private final TypeInference.Term resultType;
+        private boolean returnsValue;
+
+        /**
+         * Creates the target of the returns of a body.
+         *
+         * @param resultType the term of the result type of the function or the closure
+         */
+        ReturnTarget(@Nonnull final TypeInference.Term resultType) {
+            this.resultType = resultType;
+        }
+
+        /**
+         * {@return the term of the result type of the function or the closure}
+         */
+        @Nonnull
+        TypeInference.Term resultType() {
+            return resultType;
+        }
+
+        /**
+         * {@return whether a return with a value was inferred}
+         */
+        boolean returnsValue() {
+            return returnsValue;
+        }
+
+        /**
+         * Records that a return with a value was inferred.
+         */
+        void addValueReturn() {
+            returnsValue = true;
         }
     }
 }

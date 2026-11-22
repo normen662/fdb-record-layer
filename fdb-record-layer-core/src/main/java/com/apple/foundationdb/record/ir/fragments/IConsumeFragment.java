@@ -106,31 +106,10 @@ public final class IConsumeFragment implements IControlFlowFragment {
                         && (endCase == null || endCase.binding().isEmpty())
                         && stoppedCase.binding().isPresent(),
                 "the value case and the stopped case of a consume bind a name, and the end case binds none");
-        Preconditions.checkArgument(endsWithYieldBreak(stoppedCase.body()),
+        // a stream block cannot return, so a stopped case that cannot complete normally ends with a yield break on
+        // every path
+        Preconditions.checkArgument(!stoppedCase.body().completesNormally(),
                 "the stopped case of a consume must end with a yield break on every path");
-    }
-
-    /**
-     * Returns whether every path through a block ends with a yield break, so that the block cannot complete normally:
-     * its last statement is a yield break, an if with an else whose blocks both end that way, or a consume whose end
-     * case does, as its stopped case always does and its value case returns to its loop. A for loop does not count,
-     * since it completes normally after its last element, and neither does a stream block, whose yield breaks end or
-     * stop its own stream.
-     */
-    private static boolean endsWithYieldBreak(@Nonnull final IBlockFragment block) {
-        final List<IStatementFragment> statements = block.statements();
-        if (statements.isEmpty()) {
-            return false;
-        }
-        final IStatementFragment last = statements.get(statements.size() - 1);
-        if (last instanceof IIfFragment conditional) {
-            return conditional.elseBlock().isPresent() && endsWithYieldBreak(conditional.thenBlock())
-                    && endsWithYieldBreak(conditional.elseBlock().get());
-        }
-        if (last instanceof IConsumeFragment consume) {
-            return consume.endCase().isPresent() && endsWithYieldBreak(consume.endCase().get().body());
-        }
-        return last instanceof IYieldBreakFragment;
     }
 
     /**

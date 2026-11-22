@@ -32,10 +32,11 @@ import java.util.function.Supplier;
 
 /**
  * A closure, {@code { (x: int, y: int) -> bigint in x }}: an expression whose value is a function, and whose type is the
- * function type of its parameter types and its result type, {@code (int, int) -> bigint}. The value of its body is its
- * result, as for a function definition. The text of a closure can leave out its types, {@code { x, y in x }}; the
- * fragment holds the types that were inferred for them. Unlike a function definition, a closure has no name and no type
- * parameters of its own.
+ * function type of its parameter types and its result type, {@code (int, int) -> bigint}. A body of a single expression
+ * gives the result, and any other body gives it with returns, as for a function definition; a return in the closure
+ * leaves the closure. The text of a closure can leave out its types, {@code { x, y in x }}; the fragment holds the
+ * types that were inferred for them. Unlike a function definition, a closure has no name and no type parameters of its
+ * own.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IClosureFragment implements IExpressionFragment {
@@ -64,8 +65,8 @@ public final class IClosureFragment implements IExpressionFragment {
         this.body = Objects.requireNonNull(body);
         this.type = new IFunctionType(false,
                 this.parameters.stream().map(Parameter::type).collect(ImmutableList.toImmutableList()), resultType);
-        Preconditions.checkArgument(body.isBodyOf(resultType), "the body of a closure must end with an expression of "
-                + "its result type unless that is void, and it must not yield or consume");
+        Preconditions.checkArgument(body.isBodyOf(resultType), "the body of a closure must give a value of its result "
+                + "type on every path unless that is void, and it must not yield or consume");
     }
 
     /**

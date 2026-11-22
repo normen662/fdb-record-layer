@@ -34,8 +34,8 @@ import java.util.function.Supplier;
  * its block add, in order. The block runs as the stream is consumed, from one yield to the next, so every yield is a
  * point at which the block stops until the next element is asked for; the code around the stream block runs when the
  * stream block is reached. A stream block is how FRL-IR constructs a stream, so the resumable part of a computation is
- * always the block of a stream block. The value of the last expression of the block is discarded, as in a function
- * that returns {@code void}.
+ * always the block of a stream block. The block has no value: a single expression in it is a statement. It cannot
+ * return either, since a yield break ends it, as in C#.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class IStreamBlockFragment implements IExpressionFragment {
@@ -53,7 +53,7 @@ public final class IStreamBlockFragment implements IExpressionFragment {
      *
      * @param elementType the element type of the stream, which cannot be {@code void}
      * @param body the block that produces the elements, see {@link IBlockFragment#yields()}; every value it yields
-     *        must be of the element type
+     *        must be of the element type, and it cannot return
      */
     public IStreamBlockFragment(@Nonnull final IType elementType, @Nonnull final IBlockFragment body) {
         this.elementType = Objects.requireNonNull(elementType);
@@ -63,6 +63,7 @@ public final class IStreamBlockFragment implements IExpressionFragment {
                         .stream()
                         .allMatch(yielded -> yielded.value().type().equals(elementType)),
                 "a stream block must yield values of its element type");
+        Preconditions.checkArgument(body.returns().isEmpty(), "a stream block cannot return; a yield break ends it");
     }
 
     /**

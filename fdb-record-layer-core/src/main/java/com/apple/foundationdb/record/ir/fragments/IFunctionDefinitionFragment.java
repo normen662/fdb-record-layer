@@ -34,11 +34,12 @@ import java.util.function.Supplier;
 
 /**
  * A function definition, {@code func map<T, U>(xs: [T], f: (T) -> U, ys: [U]) -> [U] { ys }}: a signature and the
- * block that implements it. The value of the block is the result of the function, so a block of a function whose
- * result type is not {@code void} ends with an expression of that type. A function definition is also a statement, so
- * functions can be nested, as in Swift; a nested function sees the type parameters of the functions it is nested in. A
- * function is in scope only after its definition, so it cannot call itself: FRL-IR has no recursion. A definition can
- * be a variant of an overloaded function, as {@code variant func add<int, int>(a: int, b: int) -> int { … }} is, see
+ * block that implements it. A block of a single expression gives the result of the function, and any other block gives
+ * it with returns. So a block of a function whose result type is not {@code void} is a single expression of that type,
+ * or it returns a value of that type on every path. A function definition is also a statement, so functions can be
+ * nested, as in Swift; a nested function sees the type parameters of the functions it is nested in. A function is in
+ * scope only after its definition, so it cannot call itself: FRL-IR has no recursion. A definition can be a variant of
+ * an overloaded function, as {@code variant func add<int, int>(a: int, b: int) -> int { … }} is, see
  * {@link #variant()}.
  */
 @API(API.Status.EXPERIMENTAL)
@@ -120,8 +121,8 @@ public final class IFunctionDefinitionFragment implements IFunctionFragment {
         this.body = Objects.requireNonNull(body);
         this.annotations = ImmutableList.copyOf(annotations);
         this.variant = variant;
-        Preconditions.checkArgument(body.isBodyOf(resultType), "the body of a function must end with an expression of "
-                + "its result type unless that is void, and it must not yield or consume");
+        Preconditions.checkArgument(body.isBodyOf(resultType), "the body of a function must give a value of its result "
+                + "type on every path unless that is void, and it must not yield or consume");
         if (variant != null) {
             variant.checkSignature(name, this.typeParameters, this.parameters);
         }

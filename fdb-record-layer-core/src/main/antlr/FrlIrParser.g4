@@ -191,15 +191,16 @@ integer
 // Definitions
 //
 // Function definitions and closures are written as in Swift, and both implement their body as a block. As in Swift, a
-// function definition states its result type after `->`, as a closure and a function type do. The value of a body is
-// the value of its last statement if that statement is an expression, as in a Kotlin lambda, and a body has no value
-// otherwise; a trailing `;` does not change that.
+// function definition states its result type after `->`, as a closure and a function type do. Also as in Swift, a body
+// that is a single expression returns the value of that expression, and a trailing `;` does not change that. Any other
+// body returns its values with `return` (see `returnValue`).
 //
 
-// `func map<T, U>(xs: [T], f: (T) -> U) -> [U] { }`. Without `-> type`, the function returns `void`. A body must end
-// with an expression of the result type, unless that type is `void`, in which case a value of the last expression is
-// discarded. A function definition ends only with its block, so it may be split across lines anywhere before that. The
-// function is in scope from the next statement on: FRL-IR has no recursion, so a body cannot call its own function.
+// `func map<T, U>(xs: [T], f: (T) -> U) -> [U] { }`. Without `-> type`, the function returns `void`. Unless the result
+// type is `void`, the body is a single expression of the result type, or it returns a value of that type on every
+// path. A body of a `void` function discards the value of a single expression. A function definition ends only with
+// its block, so it may be split across lines anywhere before that. The function is in scope from the next statement
+// on: FRL-IR has no recursion, so a body cannot call its own function.
 functionDefinition
     : (annotation NL*)* functionSignature (NL* ARROW NL* type)? NL* block
     ;
@@ -318,8 +319,8 @@ parameter
 // for this one. As in Swift, a closure may leave out the types of its parameters and its result type, `{ x, y in x }`,
 // and without parameters its signature and `in` altogether, `{ 42 }`; the types it leaves out are inferred from where
 // the closure is used, as in `apply({ x in x }, 1)`. A result type that neither the closure nor its context states is
-// the type of the value of the body, and `void` if the body has no value. A closure has no type parameters of its own.
-// The name `_` is an ordinary name.
+// the type of the single expression of the body, or the type that the values of its returns agree on, and `void` if
+// the body returns no value. A closure has no type parameters of its own. The name `_` is an ordinary name.
 closure
     : LBRACE (NL* closureSignature NL* IN)? statements RBRACE
     ;
@@ -355,8 +356,10 @@ separators
     : (SEMI | NL)+
     ;
 
-// An expression is a statement too: `f(1)` on its own calls `f`, and as the last statement of a body it is the value of
-// the body.
+// An expression is a statement too: `f(1)` on its own calls `f`, and as the only statement of a body it is the value of
+// the body. No statement can follow a statement that does not complete normally: a return, a yield break, an if with
+// an else whose blocks both do not complete normally, or a consume whose end case does not. Such a statement would
+// never run.
 statement
     : functionDefinition               # functionDefinitionStatement
     | functionDeclaration              # functionDeclarationStatement
@@ -369,6 +372,7 @@ statement
     | assignment                       # assignmentStatement
     | yieldValue                       # yieldStatement
     | yieldBreak                       # yieldBreakStatement
+    | returnValue                      # returnStatement
     | conditional                      # ifStatement
     | forLoop                          # forStatement
     | consumeLoop                      # consumeStatement
@@ -401,6 +405,15 @@ yieldValue
 // break can be where a yield can be. It can end its statement, so the reason stays on its line.
 yieldBreak
     : YIELD NL* BREAK expression?
+    ;
+
+// `return x` leaves the function or the closure that it is in, with the value `x`, and `return` leaves one whose result
+// type is `void`. The value has the result type, which is its context, as for the single expression of a body. A
+// return in a closure leaves the closure, not the function around it, as in Swift. A return is in a function or a
+// closure: not at the top level of a program, and not in a stream block, which `yield break` ends, as in C#. A
+// function or a closure in a stream block can return. A return can end its statement, so its value stays on its line.
+returnValue
+    : RETURN expression?
     ;
 
 // `if c { } else { }` runs its first block if the boolean `c` is true, and the block after `else`, if there is one,
@@ -518,11 +531,11 @@ primaryExpression
 
 // `stream { yield 1; yield 2 }` is a stream block, an expression of type `stream<T>` whose elements are the values that
 // its yields add, in order. Its block runs as the stream is consumed, from one yield to the next, while the code around
-// the stream block runs when it is reached: in `func f() -> stream<int> { let x = g(); stream { yield x } }`, `g()` is
-// called when `f` is. The element type `T` is the one that the context requires, such as the result type of `f`, and
-// otherwise the type that the yielded values agree on. The block sees the names of the enclosing scopes, as a closure
-// does, and the value of its last expression is discarded. `stream` cannot stand on its own, so the `{` may follow on
-// the next line.
+// the stream block runs when it is reached: in `func f() -> stream<int> { let x = g(); return stream { yield x } }`,
+// `g()` is called when `f` is. The element type `T` is the one that the context requires, such as the result type of
+// `f`, and otherwise the type that the yielded values agree on. The block sees the names of the enclosing scopes, as a
+// closure does, and it has no value: a single expression in it is a statement. `stream` cannot stand on its own, so
+// the `{` may follow on the next line.
 streamBlock
     : STREAM NL* block
     ;

@@ -40,7 +40,9 @@ import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
 import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IProgramFragment;
+import com.apple.foundationdb.record.ir.fragments.IRecordConstructorFragment;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
+import com.apple.foundationdb.record.ir.fragments.IReturnFragment;
 import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
@@ -426,16 +428,19 @@ class FrlIrProgramParsingTest {
                                 new IBlockFragment(ImmutableList.of(
                                         new IYieldFragment(new ILiteralFragment(1L, BIGINT)),
                                         new IYieldFragment(new ILiteralFragment(2L, BIGINT)))))))),
-                // the code before the stream block runs when the function is called, and the block sees its variables
+                // the code before the stream block runs when the function is called, and the block sees its variables;
+                // a body of more than one statement returns the stream with a return
                 Arguments.of("func twice<T>(x: T) -> stream<T> {\n    let y = x\n"
-                                + "    stream {\n        yield x\n        yield y\n    }\n}",
+                                + "    return stream {\n        yield x\n        yield y\n    }\n}",
                         new IFunctionDefinitionFragment("twice", ImmutableList.of(T),
                                 ImmutableList.of(new IFunctionDefinitionFragment.Parameter("x", T)), new IStreamType(T),
                                 new IBlockFragment(ImmutableList.of(
                                         new IAssignmentFragment("y", new IVariableReferenceFragment("x", T)),
-                                        new IStreamBlockFragment(T, new IBlockFragment(ImmutableList.of(
-                                                new IYieldFragment(new IVariableReferenceFragment("x", T)),
-                                                new IYieldFragment(new IVariableReferenceFragment("y", T))))))))),
+                                        new IReturnFragment(new IStreamBlockFragment(T, new IBlockFragment(
+                                                ImmutableList.of(
+                                                        new IYieldFragment(new IVariableReferenceFragment("x", T)),
+                                                        new IYieldFragment(new IVariableReferenceFragment("y",
+                                                                T)))))))))),
                 // a yield can be split across lines after its keyword
                 Arguments.of("func numbers() -> stream<int> {\n    stream {\n        yield\n            1\n    }\n}",
                         function("numbers", streamOfInt, ImmutableList.of(new IStreamBlockFragment(INT,
@@ -489,6 +494,106 @@ class FrlIrProgramParsingTest {
             "func f() -> stream<int> {\n    stream {\n        yield \"a\"\n    }\n}",
     })
     void parseProgramInvalidYieldFails(@Nonnull final String text) {
+        assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Nonnull
+    static Stream<Arguments> validReturns() {
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", BOOLEAN);
+        final IVariableReferenceFragment x = new IVariableReferenceFragment("x", INT);
+        final IReturnFragment returnZero = new IReturnFragment(new ILiteralFragment(0, INT));
+        final IReturnFragment returnNothing = new IReturnFragment(null);
+        final IFunctionDeclarationFragment g =
+                new IFunctionDeclarationFragment("g", ImmutableList.of(), ImmutableList.of(), VOID);
+        final IFunctionDefinitionFragment one = function("one", INT,
+                ImmutableList.of(new IReturnFragment(new ILiteralFragment(1, INT))));
+        return Stream.of(
+                // a return leaves the function early, and the last return gives the value on the other paths
+                Arguments.of("func f(c: boolean, x: int) -> int {\n    if c { return 0 }\n    return x\n}",
+                        ImmutableList.of(new IIfFragment(c, block(ImmutableList.of(returnZero)), null),
+                                new IReturnFragment(x))),
+                // an if with an else whose blocks both return gives a value on every path
+                Arguments.of("func f(c: boolean, x: int) -> int { if c { return 0 } else { return x } }",
+                        ImmutableList.of(new IIfFragment(c, block(ImmutableList.of(returnZero)),
+                                block(ImmutableList.of(new IReturnFragment(x)))))),
+                // a return in a for loop leaves the function, and the return after the loop covers an empty array
+                Arguments.of("func f(xs: [int]) -> int {\n    for x in xs { return x }\n    return 0\n}",
+                        ImmutableList.of(new IForFragment("x",
+                                new IVariableReferenceFragment("xs", new IArrayType(false, INT)),
+                                block(ImmutableList.of(new IReturnFragment(x)))), returnZero)),
+                // the result type is the context of the value, as it is of a single expression
+                Arguments.of("func f() -> bigint {\n    let a = 1\n    return 42\n}",
+                        ImmutableList.of(new IAssignmentFragment("a", new ILiteralFragment(1, INT)),
+                                new IReturnFragment(new ILiteralFragment(42L, BIGINT)))),
+                Arguments.of("func f() -> int? { return nil }",
+                        ImmutableList.of(new IReturnFragment(new ILiteralFragment(null, INT.withNullability(true))))),
+                Arguments.of("func f() -> record<int, string?> { return (1, nil) }",
+                        ImmutableList.of(new IReturnFragment(new IRecordConstructorFragment(false, ImmutableList.of(
+                                IRecordConstructorFragment.Field.unnamedOf(new ILiteralFragment(1, INT)),
+                                IRecordConstructorFragment.Field.unnamedOf(new ILiteralFragment(null,
+                                        STRING.withNullability(true)))))))),
+                // a function whose result type is void returns without a value, also early
+                Arguments.of("func f() { return }", ImmutableList.of(returnNothing)),
+                Arguments.of("extern func g()\nfunc f(c: boolean) {\n    if c { return }\n    g()\n}",
+                        ImmutableList.of(new IIfFragment(c, block(ImmutableList.of(returnNothing)), null),
+                                new IFunctionCallFragment(new IFunctionReferenceFragment(g, ImmutableList.of(),
+                                        g.type()), ImmutableList.of()))),
+                // a return in a closure leaves the closure, so its value has the result type of the closure
+                Arguments.of("func f() -> string {\n    let g = { (x: int) -> int in return x }\n    return \"a\"\n}",
+                        ImmutableList.of(new IAssignmentFragment("g", new IClosureFragment(
+                                        ImmutableList.of(new IClosureFragment.Parameter("x", INT)), INT,
+                                        block(ImmutableList.of(new IReturnFragment(x))))),
+                                new IReturnFragment(new ILiteralFragment("a", STRING)))),
+                // a function in a stream block can return
+                Arguments.of("func f() -> stream<int> {\n    stream {\n        func one() -> int { return 1 }\n"
+                                + "        yield one()\n    }\n}",
+                        ImmutableList.of(new IStreamBlockFragment(INT, block(ImmutableList.of(one,
+                                new IYieldFragment(new IFunctionCallFragment(new IFunctionReferenceFragment(one,
+                                        ImmutableList.of(), one.type()), ImmutableList.of()))))))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("validReturns")
+    void parseProgramReturnLeavesItsFunction(@Nonnull final String text,
+                                             @Nonnull final List<IStatementFragment> expectedBody) {
+        final List<IStatementFragment> statements = parseProgram(text).statements();
+        assertThat(((IFunctionDefinitionFragment)statements.get(statements.size() - 1)).body().statements())
+                .containsExactlyElementsOf(expectedBody);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            // a return is in a function or a closure: not at the top level of a program, and not in a stream block,
+            // which a yield break ends
+            "return",
+            "return 1",
+            "if true { return }",
+            "func f() -> stream<int> { stream { return } }",
+            "func f() -> stream<int> { return stream { return 1 } }",
+            "let e = stream { yield 1; return }",
+            // a return in a function whose result type is void has no value, and any other return has one
+            "func f() { return 1 }",
+            "func f() -> int { return }",
+            "extern func g()\nfunc f() { return g() }",
+            // the value is of the result type, and there is no promotion
+            "func f() -> int { return \"a\" }",
+            "func f() -> int { return nil }",
+            "func f(x: int) -> int? { return x }",
+            // as in Swift, a body that is not a single expression gives its value with a return on every path
+            "func f() -> int {\n    let a = 1\n    a\n}",
+            "func f(c: boolean) -> int { if c { return 1 } }",
+            "func f(c: boolean) -> int { if c { return 1 } else { } }",
+            "func f(xs: [int]) -> int { for x in xs { return x } }",
+            // no statement can follow a return, and a value on the next line is a statement of its own
+            "func f() -> int { return 1; 2 }",
+            "extern func g()\nfunc f() {\n    return\n    g()\n}",
+            "func f() -> int {\n    return\n    1\n}",
+            "func f(c: boolean) -> int {\n    if c { return 1 } else { return 2 }\n    return 3\n}",
+            // return is a keyword
+            "let return = 1",
+            "func return() { }",
+    })
+    void parseProgramInvalidReturnFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -606,13 +711,6 @@ class FrlIrProgramParsingTest {
                 Arguments.of("consume s {\n    case .end:\n    case .stopped(reason):\n        yield break reason\n"
                                 + "    case .value(x):\n        yield x\n}",
                         new IConsumeFragment(s, valueX, new IConsumeFragment.Case(null, EMPTY_BLOCK), stopForReason)),
-                // a reason stays on the line of its yield break: on the next line, it is a statement of its own
-                Arguments.of("consume s {\n    case .value(x):\n        yield x\n"
-                                + "    case .stopped(reason):\n        yield break\n        reason\n"
-                                + "        yield break reason\n}",
-                        new IConsumeFragment(s, valueX, null, new IConsumeFragment.Case("reason",
-                                block(ImmutableList.of(new IYieldBreakFragment(null), reason,
-                                        new IYieldBreakFragment(reason)))))),
                 // the stopped case ends with a yield break on every path, here in both blocks of an if, of which one
                 // ends the stream instead of stopping it
                 Arguments.of("consume s { case .value(x): yield x; "
@@ -860,6 +958,13 @@ class FrlIrProgramParsingTest {
                     + "        consume s {\n            case .value(x):\n                yield x\n"
                     + "            case .stopped(reason):\n                yield break\n                reason\n"
                     + "        }\n    }\n}",
+            // a reason stays on the line of its yield break: on the next line, it is a statement of its own, which
+            // never runs, since no statement can follow a yield break
+            "func f(s: stream<int>) -> stream<int> {\n    stream {\n"
+                    + "        consume s {\n            case .value(x):\n                yield x\n"
+                    + "            case .stopped(reason):\n                yield break\n                reason\n"
+                    + "                yield break reason\n        }\n    }\n}",
+            "func f() -> stream<int> { stream { yield break; yield 1 } }",
             // a yield break is in a stream block, and its reason is a stopReason
             "yield break",
             "func f() { yield break }",
@@ -956,14 +1061,14 @@ class FrlIrProgramParsingTest {
         final IProgramFragment program = parseProgram("""
                 func f(n: bigint) -> bigint {
                     let m = n
-                    m
+                    return m
                 }
                 f(n: 42)""");
         final IFunctionDefinitionFragment f = new IFunctionDefinitionFragment("f", ImmutableList.of(),
                 ImmutableList.of(new IFunctionDefinitionFragment.Parameter("n", BIGINT)), BIGINT,
                 new IBlockFragment(ImmutableList.of(
                         new IAssignmentFragment("m", new IVariableReferenceFragment("n", BIGINT)),
-                        new IVariableReferenceFragment("m", BIGINT))));
+                        new IReturnFragment(new IVariableReferenceFragment("m", BIGINT)))));
         assertThat(program.statements()).containsExactly(f,
                 // a call on its own is a statement
                 new IFunctionCallFragment(new IFunctionReferenceFragment(f, ImmutableList.of(), f.type()),
@@ -979,14 +1084,14 @@ class FrlIrProgramParsingTest {
                 func f() -> int { 1 }
                 func g() -> int {
                     func f() -> int { 2 }
-                    f()
+                    return f()
                 }""");
         final IFunctionDefinitionFragment innerF = new IFunctionDefinitionFragment("f", ImmutableList.of(),
                 ImmutableList.of(), INT, new IBlockFragment(ImmutableList.of(new ILiteralFragment(2, INT))));
         final IFunctionDefinitionFragment g = (IFunctionDefinitionFragment)program.statements().get(1);
         assertThat(g.body().statements()).containsExactly(innerF,
-                new IFunctionCallFragment(new IFunctionReferenceFragment(innerF, ImmutableList.of(), innerF.type()),
-                        ImmutableList.of()));
+                new IReturnFragment(new IFunctionCallFragment(new IFunctionReferenceFragment(innerF,
+                        ImmutableList.of(), innerF.type()), ImmutableList.of())));
     }
 
     @Test

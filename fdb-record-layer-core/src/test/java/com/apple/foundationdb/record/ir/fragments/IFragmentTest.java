@@ -116,6 +116,8 @@ class IFragmentTest {
                 pinned(() -> new IStreamBlockFragment(intType(),
                         new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42())))), 1105828874),
                 pinned(() -> new IYieldBreakFragment(null), -2130007403),
+                pinned(() -> new IReturnFragment(null), 1098476689),
+                pinned(() -> new IReturnFragment(literal42()), -1998292947),
                 pinned(() -> new IYieldBreakFragment(new IVariableReferenceFragment("reason", stopReasonType())),
                         -558334027),
                 pinned(IFragmentTest::stopReasonType, -1783468642),
@@ -360,6 +362,9 @@ class IFragmentTest {
                 // yield breaks: the reason
                 Arguments.of(new IYieldBreakFragment(null),
                         new IYieldBreakFragment(new IVariableReferenceFragment("reason", stopReasonType()))),
+                // returns: the value
+                Arguments.of(new IReturnFragment(null), new IReturnFragment(literal)),
+                Arguments.of(new IReturnFragment(literal), new IReturnFragment(new ILiteralFragment(43, intType))),
                 // ifs: the condition, the then block, the else block
                 Arguments.of(anIf, new IIfFragment(new IVariableReferenceFragment("d", booleanType()), emptyBlock,
                         null)),
@@ -407,11 +412,13 @@ class IFragmentTest {
     }
 
     @Test
-    void valueLastStatementIsExpressionReturnsIt() {
+    void valueOnlyStatementIsExpressionReturnsIt() {
         final IAssignmentFragment assignment = new IAssignmentFragment("x", literal42());
-        assertThat(new IBlockFragment(ImmutableList.of(assignment, literal42())).value()).contains(literal42());
-        // a block whose last statement is not an expression, or that has no statements, has no value
-        assertThat(new IBlockFragment(ImmutableList.of(literal42(), assignment)).value()).isEmpty();
+        assertThat(new IBlockFragment(ImmutableList.of(literal42())).value()).contains(literal42());
+        // as in Swift, a block of more than one statement has no value, also if its last statement is an expression;
+        // nor has a block whose only statement is not an expression, or that has no statements
+        assertThat(new IBlockFragment(ImmutableList.of(assignment, literal42())).value()).isEmpty();
+        assertThat(new IBlockFragment(ImmutableList.of(assignment)).value()).isEmpty();
         assertThat(emptyBlock().value()).isEmpty();
     }
 
@@ -419,20 +426,46 @@ class IFragmentTest {
     static Stream<Arguments> bodiesAndResultTypes() {
         final IBlockFragment valueIsLiteral = new IBlockFragment(ImmutableList.of(literal42()));
         final IVariableReferenceFragment condition = new IVariableReferenceFragment("c", booleanType());
+        final IReturnFragment return42 = new IReturnFragment(literal42());
+        final IReturnFragment returnNothing = new IReturnFragment(null);
+        final IAssignmentFragment assignment = new IAssignmentFragment("x", literal42());
+        final IClosureFragment returnsOne = new IClosureFragment(ImmutableList.of(), intType(),
+                new IBlockFragment(ImmutableList.of(new IReturnFragment(new ILiteralFragment(1, intType())))));
         return Stream.of(
-                // a value of the result type
+                // a single expression of the result type
                 Arguments.of(valueIsLiteral, intType(), true),
-                Arguments.of(new IBlockFragment(ImmutableList.of(new IAssignmentFragment("x", literal42()),
-                        literal42())), intType(), true),
+                // a return of a value of the result type on every path
+                Arguments.of(new IBlockFragment(ImmutableList.of(assignment, return42)), intType(), true),
+                Arguments.of(new IBlockFragment(ImmutableList.of(new IIfFragment(condition,
+                        new IBlockFragment(ImmutableList.of(return42)),
+                        new IBlockFragment(ImmutableList.of(new IReturnFragment(new ILiteralFragment(43,
+                                intType()))))))), intType(), true),
+                Arguments.of(new IBlockFragment(ImmutableList.of(new IIfFragment(condition,
+                        new IBlockFragment(ImmutableList.of(return42)), null), return42)), intType(), true),
                 // no value, or a value of another type: there is no promotion
                 Arguments.of(emptyBlock(), intType(), false),
-                Arguments.of(new IBlockFragment(ImmutableList.of(new IAssignmentFragment("x", literal42()))), intType(),
-                        false),
+                Arguments.of(new IBlockFragment(ImmutableList.of(assignment)), intType(), false),
                 Arguments.of(valueIsLiteral, bigintType(), false),
                 Arguments.of(valueIsLiteral, intType().withNullability(true), false),
-                // a void function discards the value of its body, if there is one
+                Arguments.of(new IBlockFragment(ImmutableList.of(return42)), bigintType(), false),
+                Arguments.of(new IBlockFragment(ImmutableList.of(returnNothing)), intType(), false),
+                // as in Swift, a block of more than one statement gives its value with a return
+                Arguments.of(new IBlockFragment(ImmutableList.of(assignment, literal42())), intType(), false),
+                // a path that reaches the end of the block without a return: an if without an else, and a for loop,
+                // whose array can be empty
+                Arguments.of(new IBlockFragment(ImmutableList.of(new IIfFragment(condition,
+                        new IBlockFragment(ImmutableList.of(return42)), null))), intType(), false),
+                Arguments.of(new IBlockFragment(ImmutableList.of(new IForFragment("x",
+                        new IVariableReferenceFragment("xs", new IArrayType(false, intType())),
+                        new IBlockFragment(ImmutableList.of(return42))))), intType(), false),
+                // a void function discards the value of a single expression, and its returns have no value
                 Arguments.of(valueIsLiteral, voidType(), true),
                 Arguments.of(emptyBlock(), voidType(), true),
+                Arguments.of(new IBlockFragment(ImmutableList.of(assignment, returnNothing)), voidType(), true),
+                Arguments.of(new IBlockFragment(ImmutableList.of(return42)), voidType(), false),
+                // the returns of a closure in the block leave the closure, so they do not count
+                Arguments.of(new IBlockFragment(ImmutableList.of(returnsOne, returnNothing)), voidType(), true),
+                Arguments.of(new IBlockFragment(ImmutableList.of(returnsOne)), intType(), false),
                 // a block that yields is the body of no function or closure, since a yield belongs to a stream block
                 Arguments.of(new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42()))), voidType(), false),
                 Arguments.of(new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42()))),
@@ -481,6 +514,94 @@ class IFragmentTest {
                 new IConsumeFragment.Case("x", new IBlockFragment(ImmutableList.of(yieldOf42))),
                 new IConsumeFragment.Case(null, new IBlockFragment(ImmutableList.of(yieldOf7))), stoppedCase())))
                 .yields()).containsExactly(yieldOf42, yieldOf7);
+    }
+
+    @Test
+    void returnsReturnsReturnsAmongStatementsOfBlock() {
+        final IReturnFragment return42 = new IReturnFragment(literal42());
+        final IReturnFragment return7 = new IReturnFragment(new ILiteralFragment(7, intType()));
+        // the blocks of statements of control flow run as part of the block, so their returns are returns of the block
+        final IIfFragment ifReturns = new IIfFragment(new IVariableReferenceFragment("c", booleanType()),
+                new IBlockFragment(ImmutableList.of(return42)), null);
+        final IForFragment forReturns = new IForFragment("x",
+                new IVariableReferenceFragment("xs", new IArrayType(false, intType())),
+                new IBlockFragment(ImmutableList.of(return7)));
+        assertThat(new IBlockFragment(ImmutableList.of(ifReturns, forReturns, return42)).returns())
+                .containsExactly(return42, return7, return42);
+        assertThat(new IBlockFragment(ImmutableList.of(literal42())).returns()).isEmpty();
+        // the returns of a closure or a function in the block leave that closure or that function
+        final IClosureFragment closure = new IClosureFragment(ImmutableList.of(), intType(),
+                new IBlockFragment(ImmutableList.of(return42)));
+        final IFunctionDefinitionFragment function = new IFunctionDefinitionFragment("f", ImmutableList.of(),
+                ImmutableList.of(), intType(), new IBlockFragment(ImmutableList.of(return7)));
+        assertThat(new IBlockFragment(ImmutableList.of(closure, function)).returns()).isEmpty();
+    }
+
+    @Test
+    void completesNormallyIsFalseIfNoPathReachesEndOfBlock() {
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", booleanType());
+        final IBlockFragment returns = new IBlockFragment(ImmutableList.of(new IReturnFragment(null)));
+        final IBlockFragment breaks = new IBlockFragment(ImmutableList.of(new IYieldBreakFragment(null)));
+        // a return and a yield break do not complete normally, and neither does an if with an else whose blocks both
+        // do not, or a consume whose end case does not
+        assertThat(returns.completesNormally()).isFalse();
+        assertThat(breaks.completesNormally()).isFalse();
+        assertThat(new IBlockFragment(ImmutableList.of(new IIfFragment(c, returns, breaks))).completesNormally())
+                .isFalse();
+        assertThat(new IBlockFragment(ImmutableList.of(consumeOfT(new IConsumeFragment.Case(null, breaks))))
+                .completesNormally()).isFalse();
+        // a path reaches the end of a block without statements, of an if without an else or with an else that
+        // completes normally, of a for loop, whose array can be empty, and of a consume without an end case
+        assertThat(emptyBlock().completesNormally()).isTrue();
+        assertThat(new IBlockFragment(ImmutableList.of(new IIfFragment(c, returns, null))).completesNormally())
+                .isTrue();
+        assertThat(new IBlockFragment(ImmutableList.of(new IIfFragment(c, returns, emptyBlock())))
+                .completesNormally()).isTrue();
+        assertThat(new IBlockFragment(ImmutableList.of(new IForFragment("x",
+                new IVariableReferenceFragment("xs", new IArrayType(false, intType())), returns)))
+                .completesNormally()).isTrue();
+        assertThat(new IBlockFragment(ImmutableList.of(consumeOfT(null))).completesNormally()).isTrue();
+    }
+
+    @Test
+    void constructorStatementAfterStatementNotCompletingNormallyFails() {
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", booleanType());
+        final IBlockFragment returns = new IBlockFragment(ImmutableList.of(new IReturnFragment(null)));
+        // no statement can follow a statement that does not complete normally, since it would never run
+        assertThatThrownBy(() -> new IBlockFragment(ImmutableList.of(new IReturnFragment(null), literal42())))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IBlockFragment(ImmutableList.of(new IYieldBreakFragment(null),
+                new IYieldFragment(literal42())))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IBlockFragment(ImmutableList.of(new IIfFragment(c, returns, returns),
+                literal42()))).isInstanceOf(IllegalArgumentException.class);
+        // a statement can follow one that completes normally on some path
+        assertThat(new IBlockFragment(ImmutableList.of(new IIfFragment(c, returns, null), literal42())).statements())
+                .hasSize(2);
+    }
+
+    @Test
+    void constructorReturnOutsideFunctionOrClosureFails() {
+        final IReturnFragment returnNothing = new IReturnFragment(null);
+        // a return leaves a function or a closure, so a program cannot have one, also not in a block of an if, and a
+        // stream block cannot have one either, since a yield break ends it
+        assertThatThrownBy(() -> new IProgramFragment(ImmutableList.of(returnNothing)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IProgramFragment(ImmutableList.of(new IIfFragment(
+                new IVariableReferenceFragment("c", booleanType()), new IBlockFragment(ImmutableList.of(returnNothing)),
+                null)))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IStreamBlockFragment(intType(),
+                new IBlockFragment(ImmutableList.of(returnNothing)))).isInstanceOf(IllegalArgumentException.class);
+        // a closure in a stream block can return
+        final IClosureFragment closure = new IClosureFragment(ImmutableList.of(), voidType(),
+                new IBlockFragment(ImmutableList.of(returnNothing)));
+        assertThat(new IStreamBlockFragment(intType(), new IBlockFragment(ImmutableList.of(closure))).body()
+                .statements()).containsExactly(closure);
+        // the value of a return is not void
+        final IFunctionDeclarationFragment g =
+                new IFunctionDeclarationFragment("g", ImmutableList.of(), ImmutableList.of(), voidType());
+        assertThatThrownBy(() -> new IReturnFragment(new IFunctionCallFragment(
+                new IFunctionReferenceFragment(g, ImmutableList.of(), g.type()), ImmutableList.of())))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -845,8 +966,6 @@ class IFragmentTest {
         return Stream.of(
                 emptyBlock(),
                 new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42()))),
-                // a statement after the yield break
-                new IBlockFragment(ImmutableList.of(stop, new IYieldFragment(literal42()))),
                 // an if without an else, or with an else that completes normally
                 new IBlockFragment(ImmutableList.of(new IIfFragment(c, new IBlockFragment(ImmutableList.of(stop)),
                         null))),

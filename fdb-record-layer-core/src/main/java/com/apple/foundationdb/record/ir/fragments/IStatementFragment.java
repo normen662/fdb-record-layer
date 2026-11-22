@@ -24,13 +24,13 @@ import com.apple.foundationdb.annotation.API;
 
 /**
  * A statement in a block or a program: a function, defined or declared, an overloaded function, a type declaration, a
- * type alias, the package statement of a program, an assignment, a yield or a yield break, a statement of control
- * flow, or an expression. An expression on its own is evaluated for its effect, and as the last statement of a block it
- * is the value of the block.
+ * type alias, the package statement of a program, an assignment, a yield or a yield break, a return, a statement of
+ * control flow, or an expression. An expression on its own is evaluated for its effect, and as the only statement of a
+ * block it is the value of the block.
  */
 @API(API.Status.EXPERIMENTAL)
 public sealed interface IStatementFragment extends IFragment
         permits IFunctionFragment, IOverloadedFunctionFragment, ITypeDeclarationFragment, ITypeAliasFragment,
-                IPackageStatementFragment, IAssignmentFragment, IYieldFragment, IYieldBreakFragment,
+                IPackageStatementFragment, IAssignmentFragment, IYieldFragment, IYieldBreakFragment, IReturnFragment,
                 IControlFlowFragment, IExpressionFragment {
 }

@@ -46,9 +46,9 @@ public final class IProgramFragment implements IFragment {
     /**
      * Creates a program.
      *
-     * @param statements the statements in order; only the first one can be a package statement, and none can yield or
-     *        consume, also not in the blocks of a statement of control flow, since a yield, a yield break, and a
-     *        consume belong to a stream block
+     * @param statements the statements in order; only the first one can be a package statement, and none can yield,
+     *        consume, or return, also not in the blocks of a statement of control flow, since a yield, a yield break,
+     *        and a consume belong to a stream block, and a return to a function or a closure
      */
     public IProgramFragment(@Nonnull final List<IStatementFragment> statements) {
         this.statements = ImmutableList.copyOf(statements);
@@ -57,6 +57,8 @@ public final class IProgramFragment implements IFragment {
                 "a package statement can only be the first statement of a program");
         Preconditions.checkArgument(!IBlockFragment.hasStreamStatements(this.statements),
                 "a yield, a yield break, and a consume must be in a stream block");
+        Preconditions.checkArgument(!IBlockFragment.hasReturns(this.statements),
+                "a return must be in a function or a closure");
     }
 
     /**
