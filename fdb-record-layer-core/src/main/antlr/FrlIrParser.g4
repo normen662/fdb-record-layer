@@ -38,8 +38,8 @@ options { tokenVocab=FrlIrLexer; }
 // - the `->` of the result type of a function declaration may start a line, as in Swift (see `functionDeclaration`);
 // - the `else` of an if may stand on the line after the `}` (see `conditional`).
 // The opposite holds for the `(` of a call and for a trailing closure: both stay on the line of what they call, since
-// after `let x = f` a line break ends the statement. On the next line, a parenthesized expression or a closure is a
-// statement of its own.
+// after `let x = f` a line break ends the statement. On the next line, a parenthesized expression, a record
+// constructor, or a closure is a statement of its own.
 //
 // A line break can follow a binary operator. A binary operator can also start a line, as in Swift: if a space or a tab
 // follows it, the line continues the expression of the line before, as in `x` followed by a line `    - y`. The lexer
@@ -104,7 +104,13 @@ primitiveType
 // Records are generic over any number of field types. A field may be named, and a named field may state its number in
 // the stored record: `record<id(1): bigint, name: string?, int>`.
 recordType
-    : RECORD NL* LT NL* (recordField (NL* COMMA NL* recordField)* NL*)? GT
+    : RECORD NL* recordTypeArguments
+    ;
+
+// The fields of a record type, between angle brackets. They are also the type arguments of `record.of`, see
+// `recordConstructor`.
+recordTypeArguments
+    : LT NL* (recordField (NL* COMMA NL* recordField)* NL*)? GT
     ;
 
 recordField
@@ -498,14 +504,16 @@ prefixOperator
 // `(x.f)(1)`, which calls a field of a function type. Parentheses are transparent for labels too: `(f)(x: 1)` needs the
 // label of `f`, as in Swift. A line break may follow the `(` and precede the `)`. Within the parentheses, the line
 // breaks follow the rules of other expressions, so `(a` followed by a line `    - b)` is a subtraction, and a
-// condition in parentheses can take a trailing closure, `if (xs.contains { x in x == 1 }) { }`. The parentheses hold
-// one expression: `(a, b)` is not an expression yet, and neither are `()` and `(name: a)`.
+// condition in parentheses can take a trailing closure, `if (xs.contains { x in x == 1 }) { }`. Parentheses around
+// more than one expression, or around one expression with a label, construct a record, see `recordConstructor`. `()`
+// is not an expression.
 primaryExpression
     : literal                                # literalExpression
     | identifier typeArguments?              # nameExpression
     | closure                                # closureExpression
     | streamBlock                            # streamExpression
     | LPAREN NL* expression NL* RPAREN       # parenthesizedExpression
+    | recordConstructor                      # recordExpression
     ;
 
 // `stream { yield 1; yield 2 }` is a stream block, an expression of type `stream<T>` whose elements are the values that
@@ -517,6 +525,39 @@ primaryExpression
 // the next line.
 streamBlock
     : STREAM NL* block
+    ;
+
+// `(id: 1, name: "a")` constructs a record of the type `record<id: int, name: string>`. The fields have the values in
+// the parentheses, in order, and the label before a value is the name of its field. A field can have no name, as in
+// `(1, "a")` and `(id: 1, "a")`, and the names of a record are distinct. The label `_` needs backticks, because Swift
+// reads `(_: 1, 2)` as a tuple without labels. In this short form, a record of one field needs a label, `(id: 1)`,
+// because `(1)` is a parenthesized expression, and `(1,)` is not an expression. `()` is not a record either: as a
+// type, `()` is `void`, which has no values. The short form states no field numbers.
+//
+// The long form, `record.of(id: 1, name: "a")`, constructs the same record. It also writes the records that the short
+// form cannot write: `record.of(1)` has one field without a name, and `record.of()` has no fields, so its type is
+// `record<>`. The long form is a generic function of any number of parameters, as the constructor `Tuple2.apply` is
+// in Scala. So it can take type arguments, which are the fields, written as in a record type. They can state field
+// numbers: `record.of<id(1): bigint, string>(id: 5, "a")` is a `record<id(1): bigint, string>`. With type arguments,
+// the labels follow the rule of a call: a value has the name of its field as its label, and no label if its field
+// has none. `record` is a keyword, but `of` is not, so `of` can still name a function or a variable. As in a call,
+// the `(` stays on the line of `record.of`, while the `.` may start a line.
+//
+// The context of a record constructor comes first, as for a closure. It gives the values their types: in
+// `let k: record<bigint, string?> = (10, nil)`, `10` is a bigint and `nil` is a nullable string. It can also make the
+// record nullable, as it can make a literal nullable: the record in `let r: record<int, int>? = (1, 2)` is nullable,
+// and without such a context a record is not. This holds for all forms, also with type arguments, because they state
+// the fields but not the nullability. The field names must be those of the type that the context requires, so
+// `(1, "a")` is not a `record<id: int, name: string>`. The line breaks are those of the arguments of a call.
+recordConstructor
+    : LPAREN NL* recordConstructorField (NL* COMMA NL* recordConstructorField)+ NL* RPAREN
+    | LPAREN NL* label=identifier NL* COLON NL* expression NL* RPAREN
+    | RECORD NL* DOT member=identifier recordTypeArguments? LPAREN NL*
+        (recordConstructorField (NL* COMMA NL* recordConstructorField)* NL*)? RPAREN
+    ;
+
+recordConstructorField
+    : (label=identifier NL* COLON NL*)? expression
     ;
 
 // The postfixes of an expression apply from left to right, each to the expression before it.

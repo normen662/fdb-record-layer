@@ -46,7 +46,7 @@ import java.util.Optional;
  * inference for each statement that it types on its own, see {@code FrlIrFragmentVisitor}. An inference finds the
  * types that a program leaves out:
  * <ul>
- *     <li>the type of each literal;</li>
+ *     <li>the type of each literal and of each record constructor;</li>
  *     <li>the type arguments of each reference to a generic function;</li>
  *     <li>the parameter types and the result type of each closure that does not state them;</li>
  *     <li>the variant of each call or reference of an overloaded function, also of each operator.</li>
@@ -100,6 +100,11 @@ import java.util.Optional;
  * <p>Nullability is a property of a type, not a wrapper around a type. So a type parameter {@code T} that occurs as
  * {@code T?} stands for its type, made nullable. The equation {@code T? = int?} makes {@code T} an {@code int}, unless
  * {@code T} must be nullable itself.</p>
+ *
+ * <p>A literal and a record constructor are nullable only if an equation requires it. So {@code let x = 42} makes
+ * {@code 42} an {@code int}, and {@code let x: int? = 42} makes it an {@code int?}. The variable of a record
+ * constructor has the record of its fields as its structure, see {@link #recordConstructor}: {@code (1, 2)} is a
+ * {@code record<int, int>}, and in {@code let r: record<int, int>? = (1, 2)} it is a {@code record<int, int>?}.</p>
  *
  * <p>A call or a reference of an overloaded function needs one more step: the choice of its variant, see
  * {@link #choose}. The reference gets the types of the overloaded function, with a new variable for each type
@@ -220,6 +225,45 @@ final class TypeInference {
     @Nonnull
     Term literal(@Nonnull final LiteralKind kind) {
         return new VariableTerm(newVariable(kind.constraint), false);
+    }
+
+    /**
+     * Returns a term for the type of a record constructor: a new variable whose constraint has the record of the
+     * fields as its structure. The variable can become that record, or that record made nullable. So an equation can
+     * make the record nullable, as it can make a literal nullable, and without one, {@link #solve()} makes it the
+     * record that is not nullable. A field access needs a record that is not nullable, so it makes the record not
+     * nullable, see {@link #fieldType}. Example: {@code (1, nil)} gets a variable that can become
+     * {@code record<vA, vB>} or {@code record<vA, vB>?}, where {@code vA} and {@code vB} are the variables of the two
+     * literals.
+     *
+     * @param fieldTypes the terms of the types of the fields, in order
+     * @param names the names of the fields, in order, and an empty name for a field without one
+     * @return a term for the type of the record constructor
+     */
+    @Nonnull
+    Term recordConstructor(@Nonnull final List<Term> fieldTypes, @Nonnull final List<Optional<String>> names) {
+        final ImmutableList.Builder<FieldTerm> fields = ImmutableList.builder();
+        for (int i = 0; i < fieldTypes.size(); i++) {
+            fields.add(new FieldTerm(fieldTypes.get(i), names.get(i), Optional.empty()));
+        }
+        return new VariableTerm(newVariable(new Constraint(null, new RecordTerm(false, fields.build()), false)),
+                false);
+    }
+
+    /**
+     * Returns a term for the type of a record constructor whose type arguments state its fields, as in
+     * {@code record.of<id(1): bigint>(id: 5)}: a new variable whose constraint has the stated record type as its
+     * structure. The type arguments state the types, the names, and the numbers of the fields, but not the
+     * nullability, so the context can still make the record nullable, as for {@link #recordConstructor(List, List)}.
+     *
+     * @param type the record type that the type arguments state; its nullability does not count
+     * @return a term for the type of the record constructor
+     */
+    @Nonnull
+    Term recordConstructor(@Nonnull final IRecordType type) {
+        // a known record type decomposes to a record term
+        final RecordTerm structure = (RecordTerm)decompose(new Known(type.withNullability(false)));
+        return new VariableTerm(newVariable(new Constraint(null, structure, false)), false);
     }
 
     /**
@@ -458,11 +502,12 @@ final class TypeInference {
 
     /**
      * Makes the open choices of variants, and then gives a default type to each open variable whose constraint has a
-     * default type, see {@link #DEFAULT_KINDS}. Only the constraints of number, string, and boolean literals have one.
-     * The visitor calls this method after the statement stated all of its equations, and before the builders resolve
-     * the terms. The method can run more than one time, and each call changes only the variables that are open at that
-     * time. A for loop with its own inference uses this, because it must know the type of its variable before it
-     * infers its body.
+     * default type, see {@link #DEFAULT_KINDS}. Only the constraints of number, string, and boolean literals, and of
+     * record constructors, have one: the default type of a record constructor is its record, not nullable unless the
+     * constraint requires that. The visitor calls this method after the statement stated all of its equations, and
+     * before the builders resolve the terms. The method can run more than one time, and each call changes only the
+     * variables that are open at that time. A for loop with its own inference uses this, because it must know the
+     * type of its variable before it infers its body.
      *
      * <p>The choices come first, and each must have exactly one variant that fits, see {@link #propagate()}. So the
      * default type of a literal never selects a variant: in {@code 1 + 2}, the literals can have the types of more than
@@ -478,9 +523,9 @@ final class TypeInference {
         propagate();
         Preconditions.checkArgument(choices.stream().allMatch(choice -> choice.chosen != null), AMBIGUOUS_VARIANT);
         for (final Variable variable : variables) {
-            final Optional<IType> defaultType = variable.constraint.defaultType();
+            final Optional<Term> defaultType = variable.constraint.defaultType();
             if (variable.binding == null && defaultType.isPresent()) {
-                variable.binding = new Known(defaultType.get());
+                variable.binding = defaultType.get();
             }
         }
     }
@@ -533,7 +578,7 @@ final class TypeInference {
      * @throws IllegalArgumentException if the term does not stand for a record that is not nullable, or if the record
      *         has no field of this name
      */
-    static int fieldOrdinal(@Nonnull final Term record, @Nonnull final String name) {
+    int fieldOrdinal(@Nonnull final Term record, @Nonnull final String name) {
         final List<FieldTerm> fields = recordFields(record);
         for (int i = 0; i < fields.size(); i++) {
             if (fields.get(i).name().equals(Optional.of(name))) {
@@ -555,7 +600,7 @@ final class TypeInference {
      *         has no field at this ordinal
      */
     @Nonnull
-    static Term fieldType(@Nonnull final Term record, final int ordinal) {
+    Term fieldType(@Nonnull final Term record, final int ordinal) {
         final List<FieldTerm> fields = recordFields(record);
         Preconditions.checkArgument(ordinal >= 0 && ordinal < fields.size(), NO_SUCH_FIELD);
         return fields.get(ordinal).type();
@@ -563,17 +608,26 @@ final class TypeInference {
 
     /**
      * Returns the fields of the record that a term stands for. The term must stand for a record structure: a known
-     * record type, or a record term whose field types can still contain variables. An open variable is not enough,
-     * because many record types can have a field with a given name. So the visitor requires the record structure to be
-     * known where a program accesses a field, as Swift does.
+     * record type, a record term whose field types can still contain variables, or the type of a record constructor,
+     * which the access makes not nullable. An open variable is not enough otherwise, because many record types can
+     * have a field with a given name. So the visitor requires the record structure to be known where a program
+     * accesses a field, as Swift does.
      */
     @Nonnull
-    private static List<FieldTerm> recordFields(@Nonnull final Term record) {
-        final Term structure = decompose(prune(record));
-        if (structure instanceof VariableTerm variableTerm && canBeRecord(variableTerm)) {
-            throw new IllegalArgumentException("the type of a record must be known where a field of it is accessed");
+    private List<FieldTerm> recordFields(@Nonnull final Term record) {
+        final Term decomposed = decompose(prune(record));
+        if (decomposed instanceof VariableTerm variableTerm && canBeRecord(variableTerm)) {
+            final RecordTerm structure = variableTerm.variable().constraint.structure();
+            if (structure == null) {
+                throw new IllegalArgumentException("the type of a record must be known where a field of it is "
+                        + "accessed");
+            }
+            // the variable of a record constructor, whose context left its nullability open: a field access needs a
+            // record that is not nullable, which the structure is
+            setBinding(variableTerm.variable(), structure);
+            return structure.fields();
         }
-        if (!(structure instanceof RecordTerm recordTerm) || recordTerm.isNullable()) {
+        if (!(decomposed instanceof RecordTerm recordTerm) || recordTerm.isNullable()) {
             throw new IllegalArgumentException("a field access needs a record that is not nullable");
         }
         return recordTerm.fields();
@@ -679,6 +733,12 @@ final class TypeInference {
         if (!allows(variable.constraint, value)) {
             return false;
         }
+        // the variable of a record constructor stands for its structure, made nullable or not
+        final RecordTerm structure = variable.constraint.structure();
+        final Term nonNullableValue = withoutNullability(value);
+        if (structure != null && !tryUnify(structure, nonNullableValue == null ? value : nonNullableValue)) {
+            return false;
+        }
         setBinding(variable, value);
         return true;
     }
@@ -703,8 +763,12 @@ final class TypeInference {
     /**
      * Binds a variable to a term over another variable. The constraint of the variable moves to the other variable,
      * without the requirement to be nullable if the term is the nullable version of the other variable, which meets it.
+     * The binding fails if the variable occurs in the structure of the other variable, as in {@code T = (a: T)}.
      */
     private boolean bindToVariable(@Nonnull final Variable variable, @Nonnull final VariableTerm target) {
+        if (occurs(variable, target)) {
+            return false;
+        }
         final Constraint moved = target.isNullable() ? variable.constraint.withoutNullability() : variable.constraint;
         if (!constrain(target.variable(), moved)) {
             return false;
@@ -714,11 +778,22 @@ final class TypeInference {
     }
 
     /**
-     * Adds a constraint to a variable, if a type can meet both the new and the existing one.
+     * Adds a constraint to a variable, if a type can meet both the new and the existing one. If both constraints have
+     * a structure, the two structures must stand for the same record. The variable must not occur in its structure,
+     * which would be an infinite type.
      */
     private boolean constrain(@Nonnull final Variable variable, @Nonnull final Constraint constraint) {
         final Optional<Constraint> combined = variable.constraint.and(constraint);
         if (combined.isEmpty()) {
+            return false;
+        }
+        final RecordTerm structure = variable.constraint.structure();
+        final RecordTerm otherStructure = constraint.structure();
+        if (structure != null && otherStructure != null && !tryUnify(structure, otherStructure)) {
+            return false;
+        }
+        final RecordTerm combinedStructure = combined.get().structure();
+        if (combinedStructure != null && occurs(variable, combinedStructure)) {
             return false;
         }
         remember(variable);
@@ -744,13 +819,15 @@ final class TypeInference {
     }
 
     /**
-     * Returns whether a constraint allows a term that is not a variable term.
+     * Returns whether a constraint allows a term that is not a variable term, as far as its kinds and its nullability
+     * go. {@link #bind} checks the structure of a constraint.
      */
     private static boolean allows(@Nonnull final Constraint constraint, @Nonnull final Term term) {
         if (term instanceof Known known) {
             return constraint.allows(known.type());
         }
-        // an array, record, function, or stream type: only the constraint of nil, which has no kinds, allows one
+        // an array, record, function, or stream type: only a constraint without kinds allows one, such as the one of
+        // nil or of a record constructor
         return constraint.kinds() == null && (!constraint.isNullable() || isNullable(term));
     }
 
@@ -793,12 +870,14 @@ final class TypeInference {
 
     /**
      * Returns whether a variable occurs in a term. A variable must not be bound to a term it occurs in, as in
-     * {@code T = [T]}: that would be an infinite type.
+     * {@code T = [T]}: that would be an infinite type. The structure of an open variable is a part of its type, so the
+     * variable also occurs in a term if it occurs in the structure of an open variable of the term.
      */
     private static boolean occurs(@Nonnull final Variable variable, @Nonnull final Term term) {
         final Term pruned = prune(term);
         if (pruned instanceof VariableTerm variableTerm) {
-            return variableTerm.variable() == variable;
+            final RecordTerm structure = variableTerm.variable().constraint.structure();
+            return variableTerm.variable() == variable || (structure != null && occurs(variable, structure));
         }
         if (pruned instanceof ArrayTerm arrayTerm) {
             return occurs(variable, arrayTerm.elementType());
@@ -935,16 +1014,16 @@ final class TypeInference {
         private final Constraint constraint;
 
         LiteralKind(@Nullable final ImmutableSet<IPrimitiveType.Kind> kinds, final boolean isNullable) {
-            this.constraint = new Constraint(kinds, isNullable);
+            this.constraint = new Constraint(kinds, null, isNullable);
         }
     }
 
     /**
      * A type that can contain inference variables. An {@link IType} cannot contain them, so the fragments contain no
      * terms. The visitor gets terms from {@link TypeInference#known}, {@link TypeInference#unknown},
-     * {@link TypeInference#literal}, {@link TypeInference#function}, {@link TypeInference#array},
-     * {@link TypeInference#stream}, and {@link TypeInference#instantiate}. It gives the terms back to
-     * {@link TypeInference}, and it does not look into them. Only {@link TypeInference} does that.
+     * {@link TypeInference#literal}, {@link TypeInference#recordConstructor}, {@link TypeInference#function},
+     * {@link TypeInference#array}, {@link TypeInference#stream}, and {@link TypeInference#instantiate}. It gives the
+     * terms back to {@link TypeInference}, and it does not look into them. Only {@link TypeInference} does that.
      *
      * <p>A {@code Known} term holds a type without variables. A {@code VariableTerm} refers to a variable. Each type
      * that contains other types has a compound term kind, with a term for each part: {@code ArrayTerm},
@@ -1083,17 +1162,26 @@ final class TypeInference {
 
     /**
      * What an inference variable requires of its type: a primitive type of one of the given kinds, or any type if there
-     * are no kinds, and a nullable type if {@code isNullable}.
+     * are no kinds; if there is a structure, the record of that structure, nullable or not; and a nullable type if
+     * {@code isNullable}. The variable of a record constructor has its record as its structure, so that the context
+     * can make the record nullable, as it can make a literal nullable.
      *
      * @param kinds the kinds of primitive types allowed, or {@code null} for any type
+     * @param structure the record, not nullable, that the type must be, made nullable or not, or {@code null} for any
+     *        type; a constraint has kinds or a structure, never both
      * @param isNullable whether the type must be nullable
      */
-    private record Constraint(@Nullable ImmutableSet<IPrimitiveType.Kind> kinds, boolean isNullable) {
+    private record Constraint(@Nullable ImmutableSet<IPrimitiveType.Kind> kinds, @Nullable RecordTerm structure,
+                              boolean isNullable) {
         @Nonnull
-        private static final Constraint ANY = new Constraint(null, false);
+        private static final Constraint ANY = new Constraint(null, null, false);
         @Nonnull
-        private static final Constraint NULLABLE = new Constraint(null, true);
+        private static final Constraint NULLABLE = new Constraint(null, null, true);
 
+        /**
+         * Returns whether a type meets the kinds and the nullability of this constraint. {@link TypeInference#bind}
+         * checks the structure.
+         */
         private boolean allows(@Nonnull final IType type) {
             return (!isNullable || type.isNullable())
                     && (kinds == null || (type instanceof IPrimitiveType primitiveType && kinds.contains(primitiveType.kind())));
@@ -1101,6 +1189,8 @@ final class TypeInference {
 
         /**
          * Returns the constraint of a type that meets both this constraint and the other one, or empty if no type does.
+         * If both have a structure, the result has the structure of this one, and {@link TypeInference#constrain}
+         * unifies the two.
          */
         @Nonnull
         private Optional<Constraint> and(@Nonnull final Constraint other) {
@@ -1115,19 +1205,28 @@ final class TypeInference {
             if (commonKinds != null && commonKinds.isEmpty()) {
                 return Optional.empty();
             }
-            return Optional.of(new Constraint(commonKinds, isNullable || other.isNullable));
+            final RecordTerm commonStructure = structure == null ? other.structure : structure;
+            if (commonKinds != null && commonStructure != null) {
+                // a primitive type is not a record
+                return Optional.empty();
+            }
+            return Optional.of(new Constraint(commonKinds, commonStructure, isNullable || other.isNullable));
         }
 
         @Nonnull
         private Constraint withoutNullability() {
-            return new Constraint(kinds, false);
+            return new Constraint(kinds, structure, false);
         }
 
         /**
-         * Returns the type of a literal that no equation determines: the first allowed kind in {@link #DEFAULT_KINDS}.
+         * Returns the type of a literal or a record constructor that no equation determines: the first allowed kind in
+         * {@link #DEFAULT_KINDS}, or the structure, nullable only if this constraint requires it.
          */
         @Nonnull
-        private Optional<IType> defaultType() {
+        private Optional<Term> defaultType() {
+            if (structure != null) {
+                return Optional.of(isNullable ? new RecordTerm(true, structure.fields()) : structure);
+            }
             if (kinds == null) {
                 return Optional.empty();
             }
@@ -1135,7 +1234,7 @@ final class TypeInference {
             return DEFAULT_KINDS.stream()
                     .filter(allowedKinds::contains)
                     .findFirst()
-                    .map(kind -> new IPrimitiveType(kind, isNullable));
+                    .<Term>map(kind -> new Known(new IPrimitiveType(kind, isNullable)));
         }
     }
 }

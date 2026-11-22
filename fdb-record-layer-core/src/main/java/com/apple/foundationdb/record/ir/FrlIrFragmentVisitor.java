@@ -46,6 +46,7 @@ import com.apple.foundationdb.record.ir.fragments.IOverloadedFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IProgramFragment;
+import com.apple.foundationdb.record.ir.fragments.IRecordConstructorFragment;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
 import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamBlockFragment;
@@ -199,6 +200,37 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     @Nonnull
     private static final String TYPE_ARGUMENTS =
             "only a generic or an overloaded function takes type arguments, one for each of its type parameters";
+
+    /**
+     * The name after {@code record.} in the long form of a record constructor, {@code record.of(1, 2)}. It is not a
+     * keyword, so it can still name a function or a variable.
+     */
+    @Nonnull
+    private static final String RECORD_CONSTRUCTOR_MEMBER = "of";
+
+    /**
+     * The message of the exception if the type arguments of a record constructor do not state one field for each
+     * value.
+     */
+    @Nonnull
+    private static final String RECORD_CONSTRUCTOR_VALUES =
+            "the type arguments of a record constructor state one field for each of its values";
+
+    /**
+     * The message of the exception if a value of a record constructor with type arguments does not have the label
+     * that the call rule requires.
+     */
+    @Nonnull
+    private static final String RECORD_CONSTRUCTOR_LABELS = "with type arguments, a value of a record constructor has "
+            + "the name of its field as its label, and no label if the field has none";
+
+    /**
+     * The message of the exception if a value of a record constructor does not have the type that its type arguments
+     * state for its field.
+     */
+    @Nonnull
+    private static final String RECORD_CONSTRUCTOR_VALUE_MISMATCH =
+            "a value of a record constructor must be of the type that the type arguments state for its field";
 
     @Nonnull
     private Scope scope = prelude();
@@ -539,6 +571,20 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
      */
     private static boolean isNoLabel(@Nonnull final FrlIrParser.IdentifierContext ctx) {
         return NO_LABEL.equals(ctx.getText());
+    }
+
+    /**
+     * Returns the name of a field of a record constructor: the name that its label gives, or none if it has no label.
+     * The label {@code _} needs backticks, because Swift reads {@code (_: 1, 2)} as a tuple without labels.
+     */
+    @Nonnull
+    private static Optional<String> fieldName(@Nullable final FrlIrParser.IdentifierContext label) {
+        if (label == null) {
+            return Optional.empty();
+        }
+        Preconditions.checkArgument(!isNoLabel(label),
+                "the label of a field of a record constructor cannot be _ without backticks");
+        return Optional.of(name(label));
     }
 
     /**
@@ -1197,6 +1243,16 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     @Nonnull
     @Override
     public IRecordType visitRecordType(@Nonnull final FrlIrParser.RecordTypeContext ctx) {
+        return recordType(ctx.recordTypeArguments());
+    }
+
+    /**
+     * Returns the record type, not nullable, of the fields between angle brackets: those of a record type,
+     * {@code record<id: int>}, or the type arguments of the long form of a record constructor,
+     * {@code record.of<id: int>(id: 1)}.
+     */
+    @Nonnull
+    private IRecordType recordType(@Nonnull final FrlIrParser.RecordTypeArgumentsContext ctx) {
         return new IRecordType(false, ctx.recordField()
                 .stream()
                 .map(this::visitRecordField)
@@ -1782,6 +1838,100 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         }
 
         /**
+         * Infers the type of a record constructor: the short form, {@code (id: 1, name: "a")}, or the long form,
+         * {@code record.of(id: 1, name: "a")}. Both forms give the same fragment. Only the long form can have no fields
+         * or one field without a name, and only the long form takes type arguments, which state the fields:
+         * {@code record.of<id(1): bigint>(id: 5)}.
+         * <ul>
+         *     <li>Without type arguments, each field gets a new variable for its type, and the label of the field, if
+         *     it has one, as its name.</li>
+         *     <li>With type arguments, each field has the type, the name, and the number that they state. The labels
+         *     follow the rule of a call: a value has the name of its field as its label, and no label if the field has
+         *     none.</li>
+         * </ul>
+         * The type of the constructor is the term of a record constructor over these fields, which can still become
+         * nullable, see {@code TypeInference.recordConstructor}. The method unifies this type with the expected type
+         * before it infers the values. So the context gives each value its type, as the type of a parameter does to an
+         * argument, and the context decides whether the record is nullable.
+         *
+         * <p>Example: in {@code let k: record<bigint, string?> = (10, nil)}, the fields get {@code vA} and {@code vB},
+         * and the constructor gets {@code vK}, which stands for {@code record<vA, vB>}, nullable or not. The expected
+         * type gives {@code vK := record<bigint, string?>}, so {@code vA := bigint} and {@code vB := string?}. Then
+         * {@code 10} becomes a bigint, and {@code nil} a nullable string.</p>
+         */
+        @Nonnull
+        @Override
+        public Inferred visitRecordExpression(@Nonnull final FrlIrParser.RecordExpressionContext ctx) {
+            final TypeInference inference = inference();
+            final FrlIrParser.RecordConstructorContext record = ctx.recordConstructor();
+            Preconditions.checkArgument(record.member == null || RECORD_CONSTRUCTOR_MEMBER.equals(name(record.member)),
+                    "the long form of a record constructor is record.of");
+            final List<Optional<String>> labels;
+            final List<FrlIrParser.ExpressionContext> values;
+            if (record.label != null) {
+                // the short form of a record of one field, which has a label
+                labels = ImmutableList.of(fieldName(record.label));
+                values = ImmutableList.of(record.expression());
+            } else {
+                // the short form of two fields or more, or the long form of any number of fields
+                labels = record.recordConstructorField()
+                        .stream()
+                        .map(field -> fieldName(field.label))
+                        .collect(ImmutableList.toImmutableList());
+                values = record.recordConstructorField()
+                        .stream()
+                        .map(FrlIrParser.RecordConstructorFieldContext::expression)
+                        .collect(ImmutableList.toImmutableList());
+            }
+            final List<String> presentLabels =
+                    labels.stream().flatMap(Optional::stream).collect(ImmutableList.toImmutableList());
+            Preconditions.checkArgument(presentLabels.stream().distinct().count() == presentLabels.size(),
+                    "the fields of a record must have distinct names");
+            final IRecordType stated = record.recordTypeArguments() == null
+                    ? null
+                    : recordType(record.recordTypeArguments());
+            final ImmutableList<TypeInference.Term> fieldTypes;
+            final TypeInference.Term type;
+            if (stated == null) {
+                fieldTypes = values.stream()
+                        .map(value -> inference.unknown())
+                        .collect(ImmutableList.toImmutableList());
+                type = inference.recordConstructor(fieldTypes, labels);
+            } else {
+                // the type arguments are the fields, and a value has the label of its field, as an argument has the
+                // label of its parameter
+                Preconditions.checkArgument(stated.fields().size() == values.size(), RECORD_CONSTRUCTOR_VALUES);
+                for (int i = 0; i < values.size(); i++) {
+                    Preconditions.checkArgument(labels.get(i).equals(stated.fields().get(i).name()),
+                            RECORD_CONSTRUCTOR_LABELS);
+                }
+                fieldTypes = stated.fields()
+                        .stream()
+                        .map(field -> TypeInference.known(field.type()))
+                        .collect(ImmutableList.toImmutableList());
+                type = inference.recordConstructor(stated);
+            }
+            if (expected != null) {
+                inference.unify(type, expected, mismatch);
+            }
+            // with type arguments, a value that does not fit is wrong with respect to them, not to the context
+            final String valueMismatch = stated == null ? mismatch : RECORD_CONSTRUCTOR_VALUE_MISMATCH;
+            final ImmutableList.Builder<Inferred> inferredValues = ImmutableList.builder();
+            for (int i = 0; i < values.size(); i++) {
+                inferredValues.add(infer(values.get(i), fieldTypes.get(i), valueMismatch));
+            }
+            final ImmutableList<Inferred> builtValues = inferredValues.build();
+            return new Inferred(type, () -> {
+                final ImmutableList.Builder<IRecordConstructorFragment.Field> fields = ImmutableList.builder();
+                for (int i = 0; i < builtValues.size(); i++) {
+                    fields.add(new IRecordConstructorFragment.Field(builtValues.get(i).builder().get(), labels.get(i),
+                            stated == null ? Optional.empty() : stated.fields().get(i).number()));
+                }
+                return new IRecordConstructorFragment(TypeInference.resolve(type).isNullable(), fields.build());
+            });
+        }
+
+        /**
          * Infers the type of a stream block, {@code stream { … }}, a stream of a new inference variable. The stream
          * type is unified with the expected type before the block is inferred, so that the context determines the
          * element type and every yield has it as the context of its value; without a context, the yielded values
@@ -1974,7 +2124,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
          */
         @Nonnull
         private Inferred fieldByName(@Nonnull final FrlIrParser.IdentifierContext name) {
-            return fieldAccess(before, TypeInference.fieldOrdinal(before.type(), name(name)), expected);
+            return fieldAccess(before, inference().fieldOrdinal(before.type(), name(name)), expected);
         }
 
         /**
@@ -2002,7 +2152,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         @Nonnull
         private Inferred fieldAccess(@Nonnull final Inferred record, final int ordinal,
                                      @Nullable final TypeInference.Term expectedType) {
-            final TypeInference.Term type = TypeInference.fieldType(record.type(), ordinal);
+            final TypeInference.Term type = inference().fieldType(record.type(), ordinal);
             if (expectedType != null) {
                 inference().unify(type, expectedType, mismatch);
             }

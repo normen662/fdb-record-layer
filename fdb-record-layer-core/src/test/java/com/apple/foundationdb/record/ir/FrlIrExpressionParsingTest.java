@@ -38,6 +38,7 @@ import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.IIfFragment;
 import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
+import com.apple.foundationdb.record.ir.fragments.IRecordConstructorFragment;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
 import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamBlockFragment;
@@ -62,9 +63,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Tests for parsing FRL-IR expressions: literals, references, calls, closures, stream blocks, and parenthesized
- * expressions, and the inference of their types. Each test program ends with an assignment or an expression, whose
- * expression the test checks.
+ * Tests for parsing FRL-IR expressions: literals, references, calls, closures, stream blocks, parenthesized
+ * expressions, and record constructors, and the inference of their types. Each test program ends with an assignment
+ * or an expression, whose expression the test checks.
  */
 class FrlIrExpressionParsingTest {
     private static final IType INT = new IPrimitiveType(IPrimitiveType.Kind.INT, false);
@@ -700,6 +701,191 @@ class FrlIrExpressionParsingTest {
                                 new ILiteralFragment(true, BOOLEAN)))), EMPTY_BLOCK, null));
     }
 
+    @Nonnull
+    static Stream<Arguments> recordConstructors() {
+        final ILiteralFragment one = new ILiteralFragment(1, INT);
+        final ILiteralFragment two = new ILiteralFragment(2, INT);
+        final ILiteralFragment a = new ILiteralFragment("a", STRING);
+        final IRecordType intAndInt = new IRecordType(false,
+                ImmutableList.of(IRecordType.Field.unnamedOf(INT), IRecordType.Field.unnamedOf(INT)));
+        final IRecordConstructorFragment oneAndTwo = record(false, ImmutableList.of(unnamed(one), unnamed(two)));
+        final IRecordConstructorFragment idAndName =
+                record(false, ImmutableList.of(named(one, "id"), named(a, "name")));
+        final IGenericType k = new IGenericType("K", false);
+        final IType range = new IExternType(new ITypeDeclarationFragment("range", ImmutableList.of(), null), false);
+        final IType nullableString = STRING.withNullability(true);
+        final IRecordType key = new IRecordType(false,
+                ImmutableList.of(IRecordType.Field.unnamedOf(INT), IRecordType.Field.unnamedOf(nullableString)));
+        final IFunctionDeclarationFragment rangeFunction = declaration("range", ImmutableList.of(k),
+                ImmutableList.of(parameter("closed", k), parameter("open", k)), range);
+        final IFunctionDeclarationFragment g = declaration("g", ImmutableList.of(T),
+                ImmutableList.of(parameter("x", T.withNullability(true))), T);
+        final IFunctionDeclarationFragment first = declaration("first", ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter(null, "r", intAndInt)), INT);
+        final IRecordType noFields = new IRecordType(false, ImmutableList.of());
+        final IRecordConstructorFragment empty = record(false, ImmutableList.of());
+        final IFunctionDeclarationFragment recordFunction = declaration("record", ImmutableList.of(),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter(null, "x", INT)), INT);
+        final IFunctionDeclarationFragment ofFunction =
+                declaration("of", ImmutableList.of(), ImmutableList.of(parameter("x", INT)), INT);
+        return Stream.of(
+                // the fields have the values in order; a label is the name of its field, and a field can have none
+                Arguments.of("let e = (1, 2)", oneAndTwo),
+                Arguments.of("let e = (id: 1, name: \"a\")", idAndName),
+                Arguments.of("let e = (id: 1, \"a\")", record(false, ImmutableList.of(named(one, "id"), unnamed(a)))),
+                // in the short form, a record of one field has a label, and a label can be any name between backticks
+                Arguments.of("let e = (id: 1)", record(false, ImmutableList.of(named(one, "id")))),
+                Arguments.of("let e = (`first name`: \"a\", `_`: 1)",
+                        record(false, ImmutableList.of(named(a, "first name"), named(one, "_")))),
+                // a line break may follow the (, precede the ), and come before or after a , or a :
+                Arguments.of("let e = (\n    id: 1,\n    name: \"a\"\n)", idAndName),
+                Arguments.of("let e = (id\n: 1\n, name:\n\"a\")", idAndName),
+                // the context gives the values their types
+                Arguments.of("let e: record<bigint, string?> = (10, nil)", record(false, ImmutableList.of(
+                        unnamed(new ILiteralFragment(10L, BIGINT)),
+                        unnamed(new ILiteralFragment(null, nullableString))))),
+                Arguments.of("let e: record<int?, int> = (1, 2)", record(false,
+                        ImmutableList.of(unnamed(new ILiteralFragment(1, INT.withNullability(true))), unnamed(two)))),
+                Arguments.of("let e: record<f: (int) -> int, n: int> = (f: { x in x }, n: 1)", record(false,
+                        ImmutableList.of(named(closure(ImmutableList.of(new IClosureFragment.Parameter("x", INT)), INT,
+                                new IVariableReferenceFragment("x", INT)), "f"), named(one, "n")))),
+                // the context can make the record nullable, as it can make a literal nullable
+                Arguments.of("let e: record<int, int>? = (1, 2)",
+                        record(true, ImmutableList.of(unnamed(one), unnamed(two)))),
+                Arguments.of("extern func g<T>(x: T?) -> T\nlet e = g(x: (1, 2))",
+                        new IFunctionCallFragment(reference(g, ImmutableList.of(intAndInt),
+                                function(ImmutableList.of(intAndInt.withNullability(true)), intAndInt)),
+                                ImmutableList.of(record(true, ImmutableList.of(unnamed(one), unnamed(two)))))),
+                Arguments.of(PAIR + "pair(a: (1, 2), b: nil)", new IFunctionCallFragment(reference(PAIR_FUNCTION,
+                        ImmutableList.of(intAndInt.withNullability(true)), function(ImmutableList.of(
+                                intAndInt.withNullability(true), intAndInt.withNullability(true)), VOID)),
+                        ImmutableList.of(record(true, ImmutableList.of(unnamed(one), unnamed(two))),
+                                new ILiteralFragment(null, intAndInt.withNullability(true))))),
+                // without such a context, the record is not nullable
+                Arguments.of(ID + "let e = id(x: (1, 2))", new IFunctionCallFragment(reference(ID_FUNCTION,
+                        ImmutableList.of(intAndInt), function(ImmutableList.of(intAndInt), intAndInt)),
+                        ImmutableList.of(oneAndTwo))),
+                // two records of one type: the values of each give the types of the other one's
+                Arguments.of(PAIR + "pair(a: (1, nil), b: (2, \"a\"))", new IFunctionCallFragment(reference(
+                        PAIR_FUNCTION, ImmutableList.of(key), function(ImmutableList.of(key, key), VOID)),
+                        ImmutableList.of(record(false, ImmutableList.of(unnamed(one),
+                                        unnamed(new ILiteralFragment(null, nullableString)))),
+                                record(false, ImmutableList.of(unnamed(two),
+                                        unnamed(new ILiteralFragment("a", nullableString))))))),
+                // the range of the sketch: the nil of the open end makes the second field of the key nullable
+                Arguments.of("extern type range\nextern func range<K>(closed: K, open: K) -> range\n"
+                                + "let e = range(closed: (5, \"Hello\"), open: (10, nil))",
+                        new IFunctionCallFragment(reference(rangeFunction, ImmutableList.of(key),
+                                function(ImmutableList.of(key, key), range)), ImmutableList.of(
+                                record(false, ImmutableList.of(unnamed(new ILiteralFragment(5, INT)),
+                                        unnamed(new ILiteralFragment("Hello", nullableString)))),
+                                record(false, ImmutableList.of(unnamed(new ILiteralFragment(10, INT)),
+                                        unnamed(new ILiteralFragment(null, nullableString))))))),
+                // records nest
+                Arguments.of("let e = ((1, 2), c: (d: 1))", record(false,
+                        ImmutableList.of(unnamed(oneAndTwo), named(record(false, ImmutableList.of(named(one, "d"))),
+                                "c")))),
+                // a postfix applies to the record: a field access, also by ordinal, and a dot call
+                Arguments.of("let e = (id: 1, name: \"a\").name", new IFieldAccessFragment(idAndName, 1)),
+                Arguments.of("let e = (1, 2).1", new IFieldAccessFragment(oneAndTwo, 1)),
+                Arguments.of("extern func first(_ r: record<int, int>) -> int\nlet e = (1, 2).first()",
+                        new IFunctionCallFragment(reference(first), ImmutableList.of(oneAndTwo))),
+                // a record can be the value of a closure, and a closure whose body starts with a ( has no signature
+                // unless an in follows
+                Arguments.of("let e: () -> record<int, int> = { (1, 2) }",
+                        closure(ImmutableList.of(), intAndInt, oneAndTwo)),
+                Arguments.of("let e = { () -> record<id: int> in (id: 1) }", closure(ImmutableList.of(),
+                        new IRecordType(false, ImmutableList.of(IRecordType.Field.of(INT, "id"))),
+                        record(false, ImmutableList.of(named(one, "id"))))),
+                // a stream block can yield records
+                Arguments.of("let e = stream { yield (1, 2) }", stream(intAndInt, ImmutableList.of(oneAndTwo))),
+                // the long form constructs the same records, and also a record of one field without a name and a
+                // record without fields
+                Arguments.of("let e = record.of(1, 2)", oneAndTwo),
+                Arguments.of("let e = record.of(id: 1, name: \"a\")", idAndName),
+                Arguments.of("let e = record.of(id: 1)", record(false, ImmutableList.of(named(one, "id")))),
+                Arguments.of("let e = record.of(1)", record(false, ImmutableList.of(unnamed(one)))),
+                Arguments.of("let e = record.of()", empty),
+                // the long form has the line breaks of the short form, and its . may start a line
+                Arguments.of("let e = record.of(\n    1,\n    2\n)", oneAndTwo),
+                Arguments.of("let e = record\n    .of(1)", record(false, ImmutableList.of(unnamed(one)))),
+                // the context gives the values their types and can make the record nullable, also in the long form
+                Arguments.of("let e: record<bigint> = record.of(1)",
+                        record(false, ImmutableList.of(unnamed(new ILiteralFragment(1L, BIGINT))))),
+                Arguments.of("let e: record<>? = record.of()", record(true, ImmutableList.of())),
+                Arguments.of(ID + "let e = id(x: record.of())", new IFunctionCallFragment(reference(ID_FUNCTION,
+                        ImmutableList.of(noFields), function(ImmutableList.of(noFields), noFields)),
+                        ImmutableList.of(empty))),
+                // the two forms nest in each other, and a postfix applies to a record of one field
+                Arguments.of("let e = record.of(record.of(), (1, 2))",
+                        record(false, ImmutableList.of(unnamed(empty), unnamed(oneAndTwo)))),
+                Arguments.of("let e = record.of(1).0",
+                        new IFieldAccessFragment(record(false, ImmutableList.of(unnamed(one))), 0)),
+                // type arguments state the fields, also their numbers, and a value has the name of its field as its
+                // label
+                Arguments.of("let e = record.of<int>(1)", record(false, ImmutableList.of(unnamed(one)))),
+                Arguments.of("let e = record.of<id: int, name: string>(id: 1, name: \"a\")", idAndName),
+                Arguments.of("let e = record.of<id(1): bigint, string?>(id: 5, nil)", record(false, ImmutableList.of(
+                        IRecordConstructorFragment.Field.of(new ILiteralFragment(5L, BIGINT), "id", 1),
+                        unnamed(new ILiteralFragment(null, nullableString))))),
+                Arguments.of("let e = record.of<>()", empty),
+                Arguments.of("typealias key = bigint\nlet e = record.of<id: key>(id: 5)",
+                        record(false, ImmutableList.of(named(new ILiteralFragment(5L, BIGINT), "id")))),
+                // the type arguments state no nullability, so the context can still make the record nullable
+                Arguments.of("let e: record<int>? = record.of<int>(1)",
+                        record(true, ImmutableList.of(unnamed(one)))),
+                // a field access reads a field that the type arguments state
+                Arguments.of("let e = record.of<id(1): bigint>(id: 5).id", new IFieldAccessFragment(record(false,
+                        ImmutableList.of(IRecordConstructorFragment.Field.of(new ILiteralFragment(5L, BIGINT), "id",
+                                1))), 0)),
+                // of is not a keyword, so it can name a function, and record between backticks is a name too
+                Arguments.of("extern func of(x: int) -> int\nlet e = of(x: 1)",
+                        new IFunctionCallFragment(reference(ofFunction), ImmutableList.of(one))),
+                Arguments.of("extern func `record`(_ x: int) -> int\nlet e = `record`(1)",
+                        new IFunctionCallFragment(reference(recordFunction), ImmutableList.of(one))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("recordConstructors")
+    void parseProgramRecordConstructorBuildsRecordOfFields(@Nonnull final String text,
+                                                          @Nonnull final IExpressionFragment expected) {
+        assertThat(lastExpression(text)).isEqualTo(expected);
+    }
+
+    @Test
+    void parseProgramRecordConstructorOnNextLineStartsStatement() {
+        final List<IStatementFragment> statements =
+                parseProgram("extern func f(x: int) -> int\nlet e = f\n(1, 2)").statements();
+        // as for a parenthesized expression, the ( on the next line starts a statement of its own
+        assertThat(statements).hasSize(3);
+        assertThat(statements.get(2)).isEqualTo(record(false,
+                ImmutableList.of(unnamed(new ILiteralFragment(1, INT)), unnamed(new ILiteralFragment(2, INT)))));
+    }
+
+    @Test
+    void parseProgramRecordConstructorIsValueOfFunctionBody() {
+        // the projection of the sketch, which the result type of the function gives its type
+        final List<IStatementFragment> statements = parseProgram("""
+                func f(r: record<name: string?, rating: int>) -> record<string?, int> {
+                    (r.name, r.rating)
+                }""").statements();
+        final IVariableReferenceFragment r = new IVariableReferenceFragment("r", new IRecordType(false,
+                ImmutableList.of(IRecordType.Field.of(STRING.withNullability(true), "name"),
+                        IRecordType.Field.of(INT, "rating"))));
+        assertThat(((IFunctionDefinitionFragment)statements.get(0)).body().statements()).containsExactly(
+                record(false, ImmutableList.of(unnamed(new IFieldAccessFragment(r, 0)),
+                        unnamed(new IFieldAccessFragment(r, 1)))));
+    }
+
+    @Test
+    void parseProgramRecordConstructorTypeArgumentsNameTypeParameter() {
+        // the type arguments of record.of are types in the scope of the constructor, so they can name a type parameter
+        final List<IStatementFragment> statements =
+                parseProgram("func f<T>(x: T) -> record<T> { record.of<T>(x) }").statements();
+        assertThat(((IFunctionDefinitionFragment)statements.get(0)).body().statements()).containsExactly(
+                record(false, ImmutableList.of(unnamed(new IVariableReferenceFragment("x", T)))));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
             // a name must be in scope
@@ -807,15 +993,74 @@ class FrlIrExpressionParsingTest {
             "extern func k() -> record<g: () -> int>\nlet e = k().g()",
             // the type of the field is the type of the access
             "extern func r() -> record<id: bigint, name: string?>\nlet e: int = r().name",
-            // parentheses hold one expression: a record literal is not an expression yet
-            "let e = (1, 2)",
+            // parentheses hold one expression without a label, and () is not an expression
             "let e = ()",
             "let e = (\n)",
-            "let e = (x: 1)",
             "let e = (1",
             "let e = 1)",
             // parentheses are transparent for labels
             "extern func f(x: int) -> int\nlet e = (f)(1)",
+            // in the short form, a record of one field needs a label, and no comma follows the last field
+            "let e = (1,)",
+            "let e = (x: 1,)",
+            "let e = (1, 2,)",
+            // the label _ needs backticks, and the names of a record are distinct
+            "let e = (_: 1, 2)",
+            "let e = (a: 1, a: 2)",
+            // the field names and the field numbers are those of the type that the context requires
+            "let e: record<id: int, name: string> = (1, \"a\")",
+            "let e: record<int, string> = (id: 1, name: \"a\")",
+            "let e: record<id(1): int> = (id: 1)",
+            "let e: record<a: int>? = (b: 1)",
+            PAIR + "pair(a: (1, 2), b: (x: 3, 4))",
+            // the values must have the types of the fields, and there must be as many values as fields
+            "let e: record<int, string> = (1, 2)",
+            "let e: record<a: int> = (1, 2)",
+            "let e = (1, nil)",
+            "extern func g()\nlet e = (1, g())",
+            // a record is neither of a primitive type nor a function
+            "let e: int = (1, 2)",
+            "let e: int? = (1, 2)",
+            "let e = (1, 2)(3)",
+            // a field access needs a field of the record
+            "let e = (a: 1).b",
+            "let e = (a: 1, 2).2",
+            // a field access needs a record that is not nullable, so the record cannot also be where nil is
+            PAIR + "let e = { () -> int in\n    let r = (x: 1)\n    pair(a: r, b: nil)\n    r.x\n}",
+            PAIR + "let e = { () -> int in\n    let r = (x: 1)\n    let y = r.x\n    pair(a: r, b: nil)\n    y\n}",
+            // the type of a record cannot contain itself
+            PAIR + "let e = { x in pair(a: x, b: (a: x)) }",
+            PAIR + "let e = { x in pair(a: (a: x), b: x) }",
+            // the long form is record.of; its ( stays on the line of record.of, and no comma follows its last field
+            "let e = record(1)",
+            "let e = record",
+            "let e = record.of",
+            "let e = record.make(1)",
+            "let e = record.of\n(1)",
+            "let e = record.\nof(1)",
+            "let e = record.of(1,)",
+            // the long form has the rules of the short form for labels, names, types, and field accesses
+            "let e = record.of(_: 1)",
+            "let e = record.of(a: 1, a: 2)",
+            "let e: record<a: int> = record.of(1)",
+            "let e: record<> = record.of(1)",
+            "let e: record<int> = record.of()",
+            "let e = record.of().a",
+            "let e = record.of()()",
+            // type arguments state one field for each value, and the labels follow the rule of a call
+            "let e = record.of<int>()",
+            "let e = record.of<int>(1, 2)",
+            "let e = record.of<id: int>(1)",
+            "let e = record.of<id: int>(name: 1)",
+            "let e = record.of<int>(x: 1)",
+            "let e = record.of<int>\n(1)",
+            // the values have the types that the type arguments state, which must be the type of the context
+            "let e = record.of<int>(\"a\")",
+            "let e: record<bigint> = record.of<int>(1)",
+            "let e: record<id: int> = record.of<id(1): int>(id: 1)",
+            // the type arguments are a record type: their names are distinct, and no field is void
+            "let e = record.of<a: int, a: int>(a: 1, a: 2)",
+            "extern func g()\nlet e = record.of<void>(g())",
     })
     void parseProgramInvalidExpressionFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
@@ -886,5 +1131,22 @@ class FrlIrExpressionParsingTest {
         return new IStreamBlockFragment(elementType, new IBlockFragment(values.stream()
                 .<IStatementFragment>map(IYieldFragment::new)
                 .collect(ImmutableList.toImmutableList())));
+    }
+
+    @Nonnull
+    private static IRecordConstructorFragment record(final boolean isNullable,
+                                                     @Nonnull final List<IRecordConstructorFragment.Field> fields) {
+        return new IRecordConstructorFragment(isNullable, fields);
+    }
+
+    @Nonnull
+    private static IRecordConstructorFragment.Field named(@Nonnull final IExpressionFragment value,
+                                                          @Nonnull final String name) {
+        return IRecordConstructorFragment.Field.of(value, name);
+    }
+
+    @Nonnull
+    private static IRecordConstructorFragment.Field unnamed(@Nonnull final IExpressionFragment value) {
+        return IRecordConstructorFragment.Field.unnamedOf(value);
     }
 }

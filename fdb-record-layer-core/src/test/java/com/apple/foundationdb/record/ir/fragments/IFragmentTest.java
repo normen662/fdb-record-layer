@@ -31,6 +31,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Arrays;
+import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -107,6 +108,10 @@ class IFragmentTest {
                 pinned(() -> new IAssignmentFragment("x", literal42()), -405760496),
                 pinned(() -> new IFieldAccessFragment(new IVariableReferenceFragment("r", recordOfIdAndString()), 1),
                         -2146132560),
+                pinned(() -> IRecordConstructorFragment.Field.of(literal42(), "id"), 811497725),
+                pinned(() -> IRecordConstructorFragment.Field.of(literal42(), "id", 1), 811497726),
+                pinned(IFragmentTest::recordConstructor, -272755463),
+                pinned(() -> new IRecordConstructorFragment(false, ImmutableList.of()), -1464006122),
                 pinned(() -> new IYieldFragment(literal42()), 467444080),
                 pinned(() -> new IStreamBlockFragment(intType(),
                         new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42())))), 1105828874),
@@ -176,6 +181,8 @@ class IFragmentTest {
         final IConsumeFragment.Case stoppedCase = stoppedCase();
         final IConsumeFragment aConsume = new IConsumeFragment(s, valueCase, null, stoppedCase);
         final IVariableReferenceFragment r = new IVariableReferenceFragment("r", recordOfIdAndString());
+        final IRecordConstructorFragment aRecord = recordConstructor();
+        final IRecordConstructorFragment.Field idField = IRecordConstructorFragment.Field.of(literal, "id");
         final IOverloadedFunctionFragment overloaded = overloadedIdentity();
         final IOverloadedFunctionFragment.Variant variant = intVariant();
         final IFunctionDefinitionFragment variantDefinition = intVariantDefinition();
@@ -336,6 +343,13 @@ class IFragmentTest {
                 Arguments.of(new IFieldAccessFragment(r, 1),
                         new IFieldAccessFragment(new IVariableReferenceFragment("q", r.type()), 1)),
                 Arguments.of(new IFieldAccessFragment(r, 1), new IFieldAccessFragment(r, 0)),
+                // record constructors: the nullability, the fields; their fields: the value, the name, the number
+                Arguments.of(aRecord, new IRecordConstructorFragment(false, aRecord.fields())),
+                Arguments.of(aRecord, new IRecordConstructorFragment(true, aRecord.fields().subList(0, 1))),
+                Arguments.of(idField, IRecordConstructorFragment.Field.of(new ILiteralFragment(43, intType), "id")),
+                Arguments.of(idField, IRecordConstructorFragment.Field.of(literal, "key")),
+                Arguments.of(idField, IRecordConstructorFragment.Field.unnamedOf(literal)),
+                Arguments.of(idField, IRecordConstructorFragment.Field.of(literal, "id", 1)),
                 // yields: the value
                 Arguments.of(new IYieldFragment(literal), new IYieldFragment(new ILiteralFragment(43, intType))),
                 // stream blocks: the element type, the block
@@ -573,6 +587,20 @@ class IFragmentTest {
                 recordOfIdAndString().withNullability(true)), 0)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new IFieldAccessFragment(r, -1)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new IFieldAccessFragment(r, 2)).isInstanceOf(IllegalArgumentException.class);
+        // the named fields of a record constructor have distinct names
+        assertThatThrownBy(() -> new IRecordConstructorFragment(false, ImmutableList.of(
+                IRecordConstructorFragment.Field.of(literal42(), "a"), IRecordConstructorFragment.Field.of(literal42(),
+                        "a")))).isInstanceOf(IllegalArgumentException.class);
+        // the value of a field is not void, its name can be written, and only a named field has a number
+        final IFunctionDeclarationFragment g =
+                new IFunctionDeclarationFragment("g", ImmutableList.of(), ImmutableList.of(), voidType());
+        assertThatThrownBy(() -> IRecordConstructorFragment.Field.unnamedOf(new IFunctionCallFragment(
+                new IFunctionReferenceFragment(g, ImmutableList.of(), g.type()), ImmutableList.of())))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> IRecordConstructorFragment.Field.of(literal42(), "a`b"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IRecordConstructorFragment.Field(literal42(), Optional.empty(), Optional.of(1)))
+                .isInstanceOf(IllegalArgumentException.class);
         // a reference gives each type parameter of its function a type argument
         assertThatThrownBy(() -> new IFunctionReferenceFragment(identityFunction(), ImmutableList.of(),
                 new IFunctionType(false, ImmutableList.of(intType()), intType())))
@@ -699,6 +727,35 @@ class IFragmentTest {
         final IRecordType record = new IRecordType(false,
                 ImmutableList.of(IRecordType.Field.unnamedOf(intType()), IRecordType.Field.unnamedOf(intType())));
         assertThat(record.fields()).hasSize(2);
+    }
+
+    @Test
+    void typeOfRecordConstructorIsRecordTypeOfItsFields() {
+        final IRecordConstructorFragment record = recordConstructor();
+        // the types and the names of the fields in order, without field numbers, and the nullability of the constructor
+        final IRecordType expectedType = new IRecordType(true, ImmutableList.of(IRecordType.Field.of(intType(), "id"),
+                IRecordType.Field.unnamedOf(stringType().withNullability(true))));
+        assertThat(record.type()).isEqualTo(expectedType);
+        assertThat(record.isNullable()).isTrue();
+        assertThat(record.fields().get(0).value()).isEqualTo(literal42());
+        assertThat(record.fields().get(0).name()).contains("id");
+        assertThat(record.fields().get(1).name()).isEmpty();
+        // a field access can read a field of a record constructor that is not nullable
+        final IRecordConstructorFragment notNullable = new IRecordConstructorFragment(false, record.fields());
+        assertThat(new IFieldAccessFragment(notNullable, 0).type()).isEqualTo(intType());
+        assertThatThrownBy(() -> new IFieldAccessFragment(record, 0)).isInstanceOf(IllegalArgumentException.class);
+        // the long form of the text writes a record without fields and a record of one field without a name
+        assertThat(new IRecordConstructorFragment(false, ImmutableList.of()).type())
+                .isEqualTo(new IRecordType(false, ImmutableList.of()));
+        assertThat(new IRecordConstructorFragment(false,
+                ImmutableList.of(IRecordConstructorFragment.Field.unnamedOf(literal42()))).type())
+                .isEqualTo(new IRecordType(false, ImmutableList.of(IRecordType.Field.unnamedOf(intType()))));
+        // its type arguments can give a field a number, which the type has
+        final IRecordConstructorFragment numbered = new IRecordConstructorFragment(false,
+                ImmutableList.of(IRecordConstructorFragment.Field.of(literal42(), "id", 1)));
+        assertThat(numbered.fields().get(0).number()).contains(1);
+        assertThat(numbered.type())
+                .isEqualTo(new IRecordType(false, ImmutableList.of(IRecordType.Field.of(intType(), "id", 1))));
     }
 
     @Test
@@ -961,6 +1018,18 @@ class IFragmentTest {
     private static IRecordType recordOfIdAndString() {
         return new IRecordType(false, ImmutableList.of(IRecordType.Field.of(bigintType(), "id", 1),
                 IRecordType.Field.unnamedOf(stringType().withNullability(true))));
+    }
+
+    /**
+     * Returns {@code (id: 42, nil)} as a nullable record of type {@code record<id: int, string?>?}, whose second field
+     * has no name.
+     */
+    @Nonnull
+    private static IRecordConstructorFragment recordConstructor() {
+        return new IRecordConstructorFragment(true, ImmutableList.of(
+                IRecordConstructorFragment.Field.of(literal42(), "id"),
+                IRecordConstructorFragment.Field.unnamedOf(new ILiteralFragment(null,
+                        stringType().withNullability(true)))));
     }
 
     /**
