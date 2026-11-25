@@ -170,6 +170,9 @@ public final class IOverloadedFunctionFragment implements IStatementFragment {
         if (type instanceof IStreamType streamType) {
             return new IStreamType(substitute(streamType.elementType(), typeArguments));
         }
+        if (type instanceof IMetaType metaType) {
+            return new IMetaType(substitute(metaType.type(), typeArguments));
+        }
         return type;
     }
 
@@ -192,6 +195,9 @@ public final class IOverloadedFunctionFragment implements IStatementFragment {
         }
         if (type instanceof IStreamType streamType) {
             return hasTypeParameter(streamType.elementType());
+        }
+        if (type instanceof IMetaType metaType) {
+            return hasTypeParameter(metaType.type());
         }
         return false;
     }

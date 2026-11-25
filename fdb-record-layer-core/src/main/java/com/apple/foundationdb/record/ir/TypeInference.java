@@ -24,6 +24,7 @@ import com.apple.foundationdb.record.ir.fragments.IArrayType;
 import com.apple.foundationdb.record.ir.fragments.IFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
+import com.apple.foundationdb.record.ir.fragments.IMetaType;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
@@ -210,6 +211,9 @@ final class TypeInference {
         if (pruned instanceof StreamTerm streamTerm) {
             return isResolved(streamTerm.elementType());
         }
+        if (pruned instanceof MetaTerm metaTerm) {
+            return isResolved(metaTerm.type());
+        }
         // an open variable
         return false;
     }
@@ -298,6 +302,17 @@ final class TypeInference {
     @Nonnull
     Term stream(@Nonnull final Term elementType) {
         return new StreamTerm(elementType);
+    }
+
+    /**
+     * Returns a term for a meta type, the type of a type token. A token is never nullable.
+     *
+     * @param type the term for the type that the token stands for
+     * @return a term for the meta type
+     */
+    @Nonnull
+    Term meta(@Nonnull final Term type) {
+        return new MetaTerm(type);
     }
 
     /**
@@ -564,6 +579,9 @@ final class TypeInference {
         if (pruned instanceof StreamTerm streamTerm) {
             return new IStreamType(resolve(streamTerm.elementType()));
         }
+        if (pruned instanceof MetaTerm metaTerm) {
+            return new IMetaType(resolve(metaTerm.type()));
+        }
         // an open variable: no equation of the statement determines it, and it has no default
         throw new IllegalArgumentException("the type cannot be inferred");
     }
@@ -703,6 +721,9 @@ final class TypeInference {
         if (a instanceof StreamTerm streamA && b instanceof StreamTerm streamB) {
             return tryUnify(streamA.elementType(), streamB.elementType());
         }
+        if (a instanceof MetaTerm metaA && b instanceof MetaTerm metaB) {
+            return tryUnify(metaA.type(), metaB.type());
+        }
         return false;
     }
 
@@ -841,7 +862,7 @@ final class TypeInference {
         if (term instanceof FunctionTerm functionTerm) {
             return functionTerm.isNullable();
         }
-        // a stream type, which is never nullable
+        // a stream type or a meta type, which is never nullable
         return false;
     }
 
@@ -864,7 +885,7 @@ final class TypeInference {
                     ? new FunctionTerm(false, functionTerm.parameterTypes(), functionTerm.resultType())
                     : null;
         }
-        // a stream type, which is never nullable
+        // a stream type or a meta type, which is never nullable
         return null;
     }
 
@@ -891,6 +912,9 @@ final class TypeInference {
         }
         if (pruned instanceof StreamTerm streamTerm) {
             return occurs(variable, streamTerm.elementType());
+        }
+        if (pruned instanceof MetaTerm metaTerm) {
+            return occurs(variable, metaTerm.type());
         }
         return false;
     }
@@ -930,13 +954,13 @@ final class TypeInference {
         if (term instanceof FunctionTerm functionTerm) {
             return new FunctionTerm(true, functionTerm.parameterTypes(), functionTerm.resultType());
         }
-        throw new IllegalArgumentException("a stream type cannot be nullable");
+        throw new IllegalArgumentException("a stream type or a meta type cannot be nullable");
     }
 
     /**
-     * Returns a term of the structure of a known array, record, function, or stream type, whose parts are terms of their
-     * own, so that it can be unified part by part with a term that contains variables. Other terms are returned as
-     * they are.
+     * Returns a term of the structure of a known array, record, function, stream, or meta type, whose parts are terms
+     * of their own, so that it can be unified part by part with a term that contains variables. Other terms are
+     * returned as they are.
      */
     @Nonnull
     private static Term decompose(@Nonnull final Term term) {
@@ -961,6 +985,9 @@ final class TypeInference {
         }
         if (type instanceof IStreamType streamType) {
             return new StreamTerm(new Known(streamType.elementType()));
+        }
+        if (type instanceof IMetaType metaType) {
+            return new MetaTerm(new Known(metaType.type()));
         }
         return term;
     }
@@ -995,6 +1022,9 @@ final class TypeInference {
         if (type instanceof IStreamType streamType) {
             return new StreamTerm(toTerm(streamType.elementType(), substitution));
         }
+        if (type instanceof IMetaType metaType) {
+            return new MetaTerm(toTerm(metaType.type(), substitution));
+        }
         return new Known(type);
     }
 
@@ -1022,14 +1052,16 @@ final class TypeInference {
      * A type that can contain inference variables. An {@link IType} cannot contain them, so the fragments contain no
      * terms. The visitor gets terms from {@link TypeInference#known}, {@link TypeInference#unknown},
      * {@link TypeInference#literal}, {@link TypeInference#recordConstructor}, {@link TypeInference#function},
-     * {@link TypeInference#array}, {@link TypeInference#stream}, and {@link TypeInference#instantiate}. It gives the
-     * terms back to {@link TypeInference}, and it does not look into them. Only {@link TypeInference} does that.
+     * {@link TypeInference#array}, {@link TypeInference#stream}, {@link TypeInference#meta}, and
+     * {@link TypeInference#instantiate}. It gives the terms back to {@link TypeInference}, and it does not look into
+     * them. Only {@link TypeInference} does that.
      *
      * <p>A {@code Known} term holds a type without variables. A {@code VariableTerm} refers to a variable. Each type
      * that contains other types has a compound term kind, with a term for each part: {@code ArrayTerm},
-     * {@code RecordTerm}, {@code FunctionTerm}, and {@code StreamTerm}. A {@code VariableTerm} can be in each part
-     * position. So a term can describe a type with unknown parts, for example {@code [vT]}, an array of an unknown
-     * element type. The interface is sealed, and these six records in this file are its only implementations.</p>
+     * {@code RecordTerm}, {@code FunctionTerm}, {@code StreamTerm}, and {@code MetaTerm}. A {@code VariableTerm} can be
+     * in each part position. So a term can describe a type with unknown parts, for example {@code [vT]}, an array of an
+     * unknown element type. The interface is sealed, and these seven records in this file are its only
+     * implementations.</p>
      *
      * <p>All terms are immutable records. But a {@code VariableTerm} refers to a {@link Variable}, which is mutable. So
      * the type that a term stands for changes when {@link TypeInference#unify} binds a variable in it. Example: after
@@ -1132,6 +1164,9 @@ final class TypeInference {
     }
 
     private record StreamTerm(@Nonnull Term elementType) implements Term {
+    }
+
+    private record MetaTerm(@Nonnull Term type) implements Term {
     }
 
     /**

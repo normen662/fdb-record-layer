@@ -66,6 +66,7 @@ class IFragmentTest {
                 pinned(() -> new IFunctionType(false, ImmutableList.of(intType(), typeParameter("T")),
                         typeParameter("T").withNullability(true)), -2116708027),
                 pinned(() -> new IStreamType(intType()), -943587233),
+                pinned(() -> new IMetaType(intType()), 1355812644),
                 pinned(() -> new IFunctionDefinitionFragment.Parameter("x", typeParameter("T")), -1553751008),
                 pinned(() -> new IFunctionDefinitionFragment.Parameter(null, "x", intType()), -494753699),
                 pinned(IFragmentTest::emptyBlock, -1386164011),
@@ -112,6 +113,7 @@ class IFragmentTest {
                 pinned(() -> IRecordConstructorFragment.Field.of(literal42(), "id", 1), 811497726),
                 pinned(IFragmentTest::recordConstructor, -272755463),
                 pinned(() -> new IRecordConstructorFragment(false, ImmutableList.of()), -1464006122),
+                pinned(() -> new IMetaConstructorFragment(intType()), 1892578938),
                 pinned(() -> new IYieldFragment(literal42()), 467444080),
                 pinned(() -> new IStreamBlockFragment(intType(),
                         new IBlockFragment(ImmutableList.of(new IYieldFragment(literal42())))), 1105828874),
@@ -225,6 +227,10 @@ class IFragmentTest {
                 Arguments.of(function, new IFunctionType(false, ImmutableList.of(intType), intType)),
                 // stream types: the element type
                 Arguments.of(new IStreamType(intType), new IStreamType(bigintType)),
+                // meta types: the type that the token stands for
+                Arguments.of(new IMetaType(intType), new IMetaType(bigintType)),
+                // meta constructors: the type argument
+                Arguments.of(new IMetaConstructorFragment(intType), new IMetaConstructorFragment(bigintType)),
                 // generic types: the name, the nullability
                 Arguments.of(t, typeParameter("U")),
                 Arguments.of(t, t.withNullability(true)),
@@ -388,6 +394,7 @@ class IFragmentTest {
                 Arguments.of(valueCase, new IConsumeFragment.Case(null, emptyBlock)),
                 Arguments.of(valueCase, new IConsumeFragment.Case("x", nonEmptyBlock)),
                 // fragments of different kinds whose parts are equal
+                Arguments.of(new IStreamType(intType), new IMetaType(intType)),
                 Arguments.of(emptyBlock, new IProgramFragment(ImmutableList.of())),
                 Arguments.of(new IFunctionDefinitionFragment.Parameter("x", intType), closureX),
                 Arguments.of(new IVariableReferenceFragment("id", intToInt), new IFunctionReferenceFragment(
@@ -848,6 +855,21 @@ class IFragmentTest {
         final IRecordType record = new IRecordType(false,
                 ImmutableList.of(IRecordType.Field.unnamedOf(intType()), IRecordType.Field.unnamedOf(intType())));
         assertThat(record.fields()).hasSize(2);
+    }
+
+    @Test
+    void typeOfMetaConstructorIsMetaTypeOfItsTypeArgument() {
+        final IMetaConstructorFragment token = new IMetaConstructorFragment(recordOfIdAndString());
+        assertThat(token.typeArgument()).isEqualTo(recordOfIdAndString());
+        assertThat(token.type()).isEqualTo(new IMetaType(recordOfIdAndString()));
+        assertThat(token.type().type()).isEqualTo(recordOfIdAndString());
+        assertThat(token.type()).hasToString("meta<record<id(1): bigint, string?>>");
+        // a token is never null, and it stands for a type that is not void
+        assertThat(token.type().isNullable()).isFalse();
+        assertThatThrownBy(() -> new IMetaType(intType()).withNullability(true))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IMetaType(voidType())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IMetaConstructorFragment(voidType())).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

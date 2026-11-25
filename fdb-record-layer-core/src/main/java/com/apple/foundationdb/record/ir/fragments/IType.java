@@ -34,7 +34,7 @@ import javax.annotation.Nonnull;
  */
 @API(API.Status.EXPERIMENTAL)
 public sealed interface IType extends IFragment permits IPrimitiveType, IRecordType, IArrayType, IVectorType, IEnumType,
-        IFunctionType, IStreamType, IGenericType, IExternType {
+        IFunctionType, IStreamType, IMetaType, IGenericType, IExternType {
 
     /**
      * Returns whether values of this type can be null.

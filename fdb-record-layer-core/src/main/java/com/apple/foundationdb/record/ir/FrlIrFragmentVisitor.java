@@ -42,6 +42,8 @@ import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.IIfFragment;
 import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
+import com.apple.foundationdb.record.ir.fragments.IMetaConstructorFragment;
+import com.apple.foundationdb.record.ir.fragments.IMetaType;
 import com.apple.foundationdb.record.ir.fragments.IOverloadedFunctionFragment;
 import com.apple.foundationdb.record.ir.fragments.IPackageStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
@@ -210,11 +212,11 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             "only a generic or an overloaded function takes type arguments, one for each of its type parameters";
 
     /**
-     * The name after {@code record.} in the long form of a record constructor, {@code record.of(1, 2)}. It is not a
+     * The name after the keyword of a constructor: {@code record.of(1, 2)} and {@code meta.of<int>()}. It is not a
      * keyword, so it can still name a function or a variable.
      */
     @Nonnull
-    private static final String RECORD_CONSTRUCTOR_MEMBER = "of";
+    private static final String CONSTRUCTOR_MEMBER = "of";
 
     /**
      * The message of the exception if the type arguments of a record constructor do not state one field for each
@@ -1353,6 +1355,12 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         return new IStreamType(type(ctx.type()));
     }
 
+    @Nonnull
+    @Override
+    public IMetaType visitMetaType(@Nonnull final FrlIrParser.MetaTypeContext ctx) {
+        return new IMetaType(type(ctx.type()));
+    }
+
     //
     // Helpers
     //
@@ -1898,7 +1906,7 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         public Inferred visitRecordExpression(@Nonnull final FrlIrParser.RecordExpressionContext ctx) {
             final TypeInference inference = inference();
             final FrlIrParser.RecordConstructorContext record = ctx.recordConstructor();
-            Preconditions.checkArgument(record.member == null || RECORD_CONSTRUCTOR_MEMBER.equals(name(record.member)),
+            Preconditions.checkArgument(record.member == null || CONSTRUCTOR_MEMBER.equals(name(record.member)),
                     "the long form of a record constructor is record.of");
             final List<Optional<String>> labels;
             final List<FrlIrParser.ExpressionContext> values;
@@ -1963,6 +1971,30 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
                 }
                 return new IRecordConstructorFragment(TypeInference.resolve(type).isNullable(), fields.build());
             });
+        }
+
+        /**
+         * Infers the type of a meta constructor, {@code meta.of<int>()}: the meta type of its type argument. As for a
+         * generic function, the type argument is optional, and without it the type comes from the context, as in
+         * {@code let m: meta<int> = meta.of()}. The type argument can be a type parameter of an enclosing function,
+         * since the runtime specializes a function before it runs it.
+         */
+        @Nonnull
+        @Override
+        public Inferred visitMetaExpression(@Nonnull final FrlIrParser.MetaExpressionContext ctx) {
+            final FrlIrParser.MetaConstructorContext meta = ctx.metaConstructor();
+            Preconditions.checkArgument(CONSTRUCTOR_MEMBER.equals(name(meta.member)),
+                    "the constructor of a meta type is meta.of");
+            final TypeInference.Term typeArgument;
+            if (meta.typeArguments() == null) {
+                typeArgument = inference().unknown();
+            } else {
+                final List<IType> typeArguments = typeArguments(meta.typeArguments());
+                Preconditions.checkArgument(typeArguments.size() == 1, "meta.of takes one type argument");
+                typeArgument = TypeInference.known(typeArguments.get(0));
+            }
+            return fit(new Inferred(inference().meta(typeArgument),
+                    () -> new IMetaConstructorFragment(TypeInference.resolve(typeArgument))));
         }
 
         /**

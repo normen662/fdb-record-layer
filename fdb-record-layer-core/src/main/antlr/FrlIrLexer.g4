@@ -49,6 +49,7 @@ VOID    : 'void';
 RECORD   : 'record';
 ARRAY    : 'array';
 STREAM   : 'stream';
+META     : 'meta';
 VECTOR   : 'vector';
 ENUM     : 'enum';
 FUNCTION : 'function';

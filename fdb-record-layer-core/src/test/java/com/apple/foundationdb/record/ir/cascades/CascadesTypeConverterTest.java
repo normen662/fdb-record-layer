@@ -25,6 +25,7 @@ import com.apple.foundationdb.record.TestRecords1Proto;
 import com.apple.foundationdb.record.ir.fragments.IExternType;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
+import com.apple.foundationdb.record.ir.fragments.IMetaType;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IType;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
@@ -114,7 +115,9 @@ class CascadesTypeConverterTest {
                 new IGenericType("T", false),
                 new IFunctionType(false, ImmutableList.of(intType), intType),
                 // only extern functions know what the values of an extern type are
-                new IExternType(new ITypeDeclarationFragment("range", ImmutableList.of(), null), false));
+                new IExternType(new ITypeDeclarationFragment("range", ImmutableList.of(), null), false),
+                // a type token is opaque, and Cascades has no such type
+                new IMetaType(intType));
     }
 
     @ParameterizedTest

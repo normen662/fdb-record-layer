@@ -37,6 +37,8 @@ import com.apple.foundationdb.record.ir.fragments.IFunctionType;
 import com.apple.foundationdb.record.ir.fragments.IGenericType;
 import com.apple.foundationdb.record.ir.fragments.IIfFragment;
 import com.apple.foundationdb.record.ir.fragments.ILiteralFragment;
+import com.apple.foundationdb.record.ir.fragments.IMetaConstructorFragment;
+import com.apple.foundationdb.record.ir.fragments.IMetaType;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IRecordConstructorFragment;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
@@ -82,6 +84,7 @@ class FrlIrExpressionParsingTest {
     private static final String ID = "extern func id<T>(x: T) -> T\n";
     private static final String PAIR = "extern func pair<T>(a: T, b: T)\n";
     private static final String APPLY = "extern func apply<T, U>(g: (T) -> U, x: T) -> U\n";
+    private static final String SCAN = "extern func scan<T>(_ recordType: string, as: meta<T>) -> stream<T>\n";
 
     private static final IGenericType T = new IGenericType("T", false);
     private static final IGenericType U = new IGenericType("U", false);
@@ -911,6 +914,71 @@ class FrlIrExpressionParsingTest {
                 record(false, ImmutableList.of(unnamed(new IVariableReferenceFragment("x", T)))));
     }
 
+    @Nonnull
+    static Stream<Arguments> metaConstructors() {
+        final IRecordType idRecord = new IRecordType(false, ImmutableList.of(IRecordType.Field.of(INT, "id")));
+        final IMetaType metaOfT = new IMetaType(T);
+        final IFunctionDeclarationFragment scan = declaration("scan", ImmutableList.of(T),
+                ImmutableList.of(new IFunctionDefinitionFragment.Parameter(null, "recordType", STRING),
+                        parameter("as", metaOfT)), new IStreamType(T));
+        return Stream.of(
+                // a token stands for its type argument, and its type is the meta type of that type
+                Arguments.of("let e = meta.of<int>()", new IMetaConstructorFragment(INT)),
+                Arguments.of("let e = meta.of<record<id: int>>()", new IMetaConstructorFragment(idRecord)),
+                Arguments.of("typealias row = record<id: int>\nlet e = meta.of<row>()",
+                        new IMetaConstructorFragment(idRecord)),
+                // as for a generic function, the context gives the type if there is no type argument
+                Arguments.of("let e: meta<bigint> = meta.of()", new IMetaConstructorFragment(BIGINT)),
+                // the . may start a line
+                Arguments.of("let e = meta\n    .of<int>()", new IMetaConstructorFragment(INT)),
+                // a token fixes the type parameter of the function that it is passed to, and so its result type
+                Arguments.of(SCAN + "let e = scan(\"restaurants\", as: meta.of<record<id: int>>())",
+                        new IFunctionCallFragment(reference(scan, ImmutableList.of(idRecord),
+                                function(ImmutableList.of(STRING, new IMetaType(idRecord)), new IStreamType(idRecord))),
+                                ImmutableList.of(new ILiteralFragment("restaurants", STRING),
+                                        new IMetaConstructorFragment(idRecord)))),
+                // without a type argument, the result type of the call fixes the type of the token
+                Arguments.of(SCAN + "let e: stream<bigint> = scan(\"numbers\", as: meta.of())",
+                        new IFunctionCallFragment(reference(scan, ImmutableList.of(BIGINT),
+                                function(ImmutableList.of(STRING, new IMetaType(BIGINT)), new IStreamType(BIGINT))),
+                                ImmutableList.of(new ILiteralFragment("numbers", STRING),
+                                        new IMetaConstructorFragment(BIGINT)))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("metaConstructors")
+    void parseProgramMetaConstructorMakesTokenOfItsType(@Nonnull final String text,
+                                                       @Nonnull final IExpressionFragment expected) {
+        assertThat(lastExpression(text)).isEqualTo(expected);
+    }
+
+    @Test
+    void parseProgramMetaConstructorTypeArgumentNamesTypeParameter() {
+        // the runtime specializes a function before it runs it, so a token can stand for a type parameter, and a
+        // generic function can also pass a token that it receives on
+        final List<IStatementFragment> statements = parseProgram(SCAN + """
+                func token<T>(_ x: T) -> meta<T> { meta.of<T>() }
+                func scanAll<T>(_ name: string, as: meta<T>) -> stream<T> { scan(name, as: as) }""").statements();
+        assertThat(((IFunctionDefinitionFragment)statements.get(1)).body().statements())
+                .containsExactly(new IMetaConstructorFragment(T));
+        final IFunctionCallFragment call =
+                (IFunctionCallFragment)((IFunctionDefinitionFragment)statements.get(2)).body().statements().get(0);
+        assertThat(call.arguments().get(1)).isEqualTo(new IVariableReferenceFragment("as", new IMetaType(T)));
+        assertThat(call.type()).isEqualTo(new IStreamType(T));
+    }
+
+    @Test
+    void parseProgramMetaConstructorSelectsVariantByType() {
+        // the type of a token can select the variant of an overloaded function, and so the type of its result
+        final String parse = """
+                overloaded func parse<T>(_ s: string, as: meta<T>)
+                extern variant func parse<int>(_ s: string, as: meta<int>) -> int
+                extern variant func parse<bigint>(_ s: string, as: meta<bigint>) -> bigint
+                """;
+        assertThat(lastExpression(parse + "let e = parse(\"42\", as: meta.of<int>())").type()).isEqualTo(INT);
+        assertThat(lastExpression(parse + "let e = parse(\"42\", as: meta.of<bigint>())").type()).isEqualTo(BIGINT);
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
             // a name must be in scope
@@ -1095,6 +1163,22 @@ class FrlIrExpressionParsingTest {
             // the type arguments are a record type: their names are distinct, and no field is void
             "let e = record.of<a: int, a: int>(a: 1, a: 2)",
             "extern func g()\nlet e = record.of<void>(g())",
+            // meta.of makes a token of one type, which is not void and which must be known, and it takes no arguments
+            "let e = meta.of()",
+            "let e = meta.of<int, int>()",
+            "let e = meta.of<void>()",
+            "let e = meta.make<int>()",
+            "let e = meta.of<int>(1)",
+            "let e = meta.of<int>\n()",
+            "let e: meta<int> = meta.of<bigint>()",
+            // a type is not a value, so only a token stands for a type
+            "let e = meta",
+            "let e = meta<int>",
+            SCAN + "let e = scan(\"restaurants\", as: record<id: int>)",
+            SCAN + "let e = scan(\"restaurants\", as: 1)",
+            // a program can do nothing with a token but pass it on
+            "let e = meta.of<record<a: int>>().a",
+            "let e = meta.of<int>()()",
     })
     void parseProgramInvalidExpressionFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);

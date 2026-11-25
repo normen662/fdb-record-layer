@@ -23,6 +23,7 @@ package com.apple.foundationdb.record.ir;
 import com.apple.foundationdb.record.ir.fragments.IArrayType;
 import com.apple.foundationdb.record.ir.fragments.IEnumType;
 import com.apple.foundationdb.record.ir.fragments.IFunctionType;
+import com.apple.foundationdb.record.ir.fragments.IMetaType;
 import com.apple.foundationdb.record.ir.fragments.IPrimitiveType;
 import com.apple.foundationdb.record.ir.fragments.IRecordType;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
@@ -114,6 +115,13 @@ class FrlIrTypeParsingTest {
                 // streams are never nullable, but their elements can be
                 Arguments.of("stream<record<ID: bigint>?>", new IStreamType(new IRecordType(true,
                         ImmutableList.of(IRecordType.Field.of(BIGINT, "ID"))))),
+                // a meta type is never nullable either, and it can stand for any type that is not void
+                Arguments.of("meta<int>", new IMetaType(INT)),
+                Arguments.of("meta<record<ID: bigint>?>", new IMetaType(new IRecordType(true,
+                        ImmutableList.of(IRecordType.Field.of(BIGINT, "ID"))))),
+                Arguments.of("meta<stream<int>>", new IMetaType(new IStreamType(INT))),
+                Arguments.of("meta<meta<int>>", new IMetaType(new IMetaType(INT))),
+                Arguments.of("(meta<int>) -> int", new IFunctionType(false, ImmutableList.of(new IMetaType(INT)), INT)),
                 // line breaks are whitespace, line comments end at the line break, and block comments nest
                 Arguments.of("record< // the key comes first\n  ID(1): bigint,\n  /* the /* nested */ name */ NAME: string\n>",
                         new IRecordType(false, ImmutableList.of(
@@ -164,6 +172,7 @@ class FrlIrTypeParsingTest {
             "[T?]?                   | [T?]?",
             "function<T, U>          | (T) -> U",
             "record<x: T, `y`: U?>   | record<x: T, y: U?>",
+            "meta<T>                 | meta<T>",
     })
     void parseTypeTypeParameterInScopeCreatesGenericType(@Nonnull final String text,
                                                          @Nonnull final String canonical) {
@@ -211,8 +220,10 @@ class FrlIrTypeParsingTest {
             "",
             // type names are lowercase keywords, and there are no placeholder types
             "Int", "INT", "long", "integer", "unknown", "null", "none", "any",
-            // nullability applies at most once, and never to a stream
-            "int??", "(int?)?", "stream<int>?", "(stream<int>)?",
+            // nullability applies at most once, and never to a stream or a meta type
+            "int??", "(int?)?", "stream<int>?", "(stream<int>)?", "meta<int>?", "(meta<int>)?",
+            // malformed meta types: one type between angle brackets
+            "meta", "meta<>", "meta<int, int>",
             // the `?` of a nullable type stays on the line of its type
             "int\n?", "record<x: int\n?>",
             // keywords are hard keywords, so they cannot name a field unless they are between backticks
@@ -233,7 +244,8 @@ class FrlIrTypeParsingTest {
             // malformed functions
             "function<>", "(int) ->", "(int,) -> int", "int -> int",
             // void is only a result type, and it is never nullable
-            "void?", "()?", "[void]", "array<()>", "record<void>", "record<x: void>", "stream<void>",
+            "void?", "()?", "[void]", "array<()>", "record<void>", "record<x: void>", "stream<void>", "meta<void>",
+            "meta<()>",
             "(void) -> int", "(int, ()) -> int", "function<void, int>",
             // a block comment must be closed
             "/* not closed int",

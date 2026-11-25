@@ -67,6 +67,7 @@ program
 type
     : valueType
     | streamType
+    | metaType
     ;
 
 // As in Swift, a type is written by its name alone if its values are never null, and with a trailing `?` if they can be:
@@ -181,6 +182,14 @@ namedType
 // trailing `?`.
 streamType
     : STREAM NL* LT NL* type NL* GT
+    ;
+
+// `meta<T>` is the type of a type token, an opaque value that stands for the type `T`; `meta.of<T>()` makes one (see
+// `metaConstructor`). A token fixes the type parameter of the function it is passed to: for
+// `scan<T>(_ name: string, as: meta<T>) -> stream<T>`, the call `scan("restaurants", as: meta.of<restaurantType>())`
+// returns a `stream<restaurantType>`. A token is never null, so a meta type takes no trailing `?`.
+metaType
+    : META NL* LT NL* type NL* GT
     ;
 
 integer
@@ -527,6 +536,7 @@ primaryExpression
     | streamBlock                            # streamExpression
     | LPAREN NL* expression NL* RPAREN       # parenthesizedExpression
     | recordConstructor                      # recordExpression
+    | metaConstructor                        # metaExpression
     ;
 
 // `stream { yield 1; yield 2 }` is a stream block, an expression of type `stream<T>` whose elements are the values that
@@ -571,6 +581,17 @@ recordConstructor
 
 recordConstructorField
     : (label=identifier NL* COLON NL*)? expression
+    ;
+
+// `meta.of<restaurantType>()` makes the type token of `restaurantType`, a value of type `meta<restaurantType>`. It is
+// the only way to make a token, and a program can do nothing with a token but pass it on: the runtime gives its type to
+// the external function that receives it. `meta.of` is a generic function of one type parameter and no parameters, so
+// without a type argument the type comes from the context, as in `let m: meta<int> = meta.of()`. The type argument
+// can be a type parameter of an enclosing function, since the runtime specializes a function before it runs it. As
+// for `record.of`, `meta` is a keyword but `of` is not, the `.` may start a line, and the `(` stays on the line of
+// `meta.of`.
+metaConstructor
+    : META NL* DOT member=identifier typeArguments? LPAREN NL* RPAREN
     ;
 
 // The postfixes of an expression apply from left to right, each to the expression before it.
