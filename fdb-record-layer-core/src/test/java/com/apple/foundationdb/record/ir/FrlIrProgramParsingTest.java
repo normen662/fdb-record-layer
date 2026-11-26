@@ -26,6 +26,7 @@ import com.apple.foundationdb.record.ir.fragments.IAssignmentFragment;
 import com.apple.foundationdb.record.ir.fragments.IBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IClosureFragment;
 import com.apple.foundationdb.record.ir.fragments.IConsumeFragment;
+import com.apple.foundationdb.record.ir.fragments.IEnumType;
 import com.apple.foundationdb.record.ir.fragments.IExternType;
 import com.apple.foundationdb.record.ir.fragments.IFieldAccessFragment;
 import com.apple.foundationdb.record.ir.fragments.IForFragment;
@@ -46,6 +47,7 @@ import com.apple.foundationdb.record.ir.fragments.IReturnFragment;
 import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
+import com.apple.foundationdb.record.ir.fragments.ISwitchFragment;
 import com.apple.foundationdb.record.ir.fragments.IType;
 import com.apple.foundationdb.record.ir.fragments.ITypeAliasFragment;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
@@ -80,6 +82,9 @@ class FrlIrProgramParsingTest {
     private static final IType BOOLEAN = new IPrimitiveType(IPrimitiveType.Kind.BOOLEAN, false);
     private static final IType VOID = new IPrimitiveType(IPrimitiveType.Kind.VOID, false);
     private static final IType STOP_REASON = IConsumeFragment.STOP_REASON_TYPE;
+    private static final IEnumType COLOR = new IEnumType(false, ImmutableList.of(new IEnumType.Value("RED", 0),
+            new IEnumType.Value("GREEN", 1), new IEnumType.Value("BLUE", 2)));
+    private static final String COLOR_ALIAS = "typealias color = enum<RED = 0, GREEN = 1, BLUE = 2>\n";
     private static final IGenericType T = new IGenericType("T", false);
     private static final IGenericType U = new IGenericType("U", false);
     private static final IBlockFragment EMPTY_BLOCK = new IBlockFragment(ImmutableList.of());
@@ -999,6 +1004,131 @@ class FrlIrProgramParsingTest {
     }
 
     @Nonnull
+    static Stream<Arguments> validSwitches() {
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", COLOR);
+        final IEnumType.Value red = COLOR.values().get(0);
+        final IEnumType.Value green = COLOR.values().get(1);
+        final IEnumType.Value blue = COLOR.values().get(2);
+        final IReturnFragment returnOne = new IReturnFragment(new ILiteralFragment(1, INT));
+        final IReturnFragment returnTwo = new IReturnFragment(new ILiteralFragment(2, INT));
+        final IReturnFragment returnThree = new IReturnFragment(new ILiteralFragment(3, INT));
+        final IFunctionDeclarationFragment g =
+                new IFunctionDeclarationFragment("g", ImmutableList.of(), ImmutableList.of(), VOID);
+        final IFunctionCallFragment callG =
+                new IFunctionCallFragment(new IFunctionReferenceFragment(g, ImmutableList.of(), g.type()),
+                        ImmutableList.of());
+        return Stream.of(
+                // the cases name every value, so there is no default, and since every case returns, the switch gives
+                // the body a value on every path
+                Arguments.of(COLOR_ALIAS + "func f(c: color) -> int {\n    switch c {\n    case .RED: return 1\n"
+                                + "    case .GREEN: return 2\n    case .BLUE: return 3\n    }\n}",
+                        new ISwitchFragment(c, ImmutableList.of(switchCase(red, returnOne),
+                                switchCase(green, returnTwo), switchCase(blue, returnThree)), null)),
+                // a case can name several values, and the default runs for the values that no case names
+                Arguments.of(COLOR_ALIAS + "func f(c: color) -> int { switch c { case .RED, .GREEN: return 1; "
+                                + "default: return 2 } }",
+                        new ISwitchFragment(c, ImmutableList.of(new ISwitchFragment.Case(ImmutableList.of(red, green),
+                                block(ImmutableList.of(returnOne)))), block(ImmutableList.of(returnTwo)))),
+                // a case does not fall through, so a case without statements does nothing
+                Arguments.of(COLOR_ALIAS + "extern func g()\nfunc f(c: color) {\n    switch c {\n    case .RED:\n"
+                                + "    case .GREEN, .BLUE:\n        g()\n    }\n}",
+                        new ISwitchFragment(c, ImmutableList.of(new ISwitchFragment.Case(ImmutableList.of(red),
+                                EMPTY_BLOCK), new ISwitchFragment.Case(ImmutableList.of(green, blue),
+                                block(ImmutableList.of(callG)))), null)),
+                // the value can be any expression of an enum type, such as a stop reason
+                Arguments.of("func f(r: stopReason) -> int { switch r { case .TIME_LIMIT_REACHED: return 1; "
+                                + "default: return 2 } }",
+                        new ISwitchFragment(new IVariableReferenceFragment("r", STOP_REASON),
+                                ImmutableList.of(new ISwitchFragment.Case(
+                                        ImmutableList.of(new IEnumType.Value("TIME_LIMIT_REACHED", 2)),
+                                        block(ImmutableList.of(returnOne)))), block(ImmutableList.of(returnTwo)))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("validSwitches")
+    void parseProgramSwitchCreatesSwitch(@Nonnull final String text, @Nonnull final ISwitchFragment expected) {
+        assertThat(lastStatementOfLastFunction(text)).isEqualTo(expected);
+    }
+
+    @Test
+    void parseProgramSwitchInStreamBlockYieldsAndBreaks() {
+        // the cases of a switch run as part of the block that the switch is in, so they can yield, and a stopped case
+        // whose switch ends with a yield break in every case ends with a yield break on every path
+        final IStatementFragment last = lastStatementOfLastFunction(COLOR_ALIAS + """
+                func f(c: color, s: stream<int>) -> stream<int> {
+                    stream {
+                        switch c {
+                        case .RED: yield 1
+                        default: yield 2
+                        }
+                        consume s {
+                            case .value(x):
+                                yield x
+                            case .stopped(reason):
+                                switch reason {
+                                case .TIME_LIMIT_REACHED:
+                                    yield break reason
+                                default:
+                                    yield break
+                                }
+                        }
+                    }
+                }""");
+        final List<IStatementFragment> stream = ((IStreamBlockFragment)last).body().statements();
+        assertThat(((IStreamBlockFragment)last).body().yields()).hasSize(3);
+        final IConsumeFragment consume = (IConsumeFragment)stream.get(1);
+        assertThat(consume.stoppedCase().body().statements()).singleElement().isInstanceOf(ISwitchFragment.class);
+        // a yield break with an enum value states the reason directly
+        assertThat(lastStatementOfLastFunction(
+                "func f() -> stream<int> { stream { yield break .SCAN_LIMIT_REACHED } }"))
+                .isEqualTo(new IStreamBlockFragment(INT, block(ImmutableList.of(new IYieldBreakFragment(
+                        new ILiteralFragment(new IEnumType.Value("SCAN_LIMIT_REACHED", 3), STOP_REASON))))));
+    }
+
+    @Test
+    void parseProgramSwitchInClosureTypesCasesWithClosure() {
+        // as for an if, the statements of the cases join the inference of a closure, so a later statement of a case
+        // can make 42 a bigint there, which the invalid programs show it cannot in a function body
+        final IClosureFragment closure = (IClosureFragment)((IAssignmentFragment)lastStatement(COLOR_ALIAS
+                + "extern func h(x: bigint)\nlet e = { (c: color) in switch c { case .RED: let a = 42; h(x: a); "
+                + "default: } }")).expression();
+        final ISwitchFragment switchStatement = (ISwitchFragment)closure.body().statements().get(0);
+        assertThat(switchStatement.cases().get(0).body().statements().get(0))
+                .isEqualTo(new IAssignmentFragment("a", new ILiteralFragment(42L, BIGINT)));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            // the cases name every value of the enum, or there is a default, but not both
+            COLOR_ALIAS + "func f(c: color) { switch c { case .RED: } }",
+            COLOR_ALIAS + "func f(c: color) { switch c { case .RED, .GREEN, .BLUE: default: } }",
+            // the cases name values of the enum, each at most once
+            COLOR_ALIAS + "func f(c: color) { switch c { case .RED: case .RED, .GREEN: default: } }",
+            COLOR_ALIAS + "func f(c: color) { switch c { case .YELLOW: default: } }",
+            // the value is an enum value that is not nullable
+            COLOR_ALIAS + "func f(c: color?) { switch c { case .RED, .GREEN, .BLUE: } }",
+            "func f(x: int) { switch x { case .RED: default: } }",
+            // a switch has a case, a case names a value, and the default comes last
+            COLOR_ALIAS + "func f(c: color) { switch c { default: } }",
+            COLOR_ALIAS + "func f(c: color) { switch c { case : default: } }",
+            COLOR_ALIAS + "func f(c: color) { switch c { default: case .RED: } }",
+            // a case that completes normally leaves the body without a value, and nothing can follow a switch whose
+            // cases all return
+            COLOR_ALIAS + "func f(c: color) -> int { switch c { case .RED: return 1; default: } }",
+            COLOR_ALIAS + "func f(c: color) -> int {\n    switch c { case .RED: return 1; default: return 2 }\n"
+                    + "    return 3\n}",
+            // in a function body, the statements of a case are typed one by one, as those of an if are
+            COLOR_ALIAS + "extern func h(x: bigint)\nfunc f(c: color) { switch c { case .RED: let a = 42; h(x: a); "
+                    + "default: } }",
+            // switch and default are keywords
+            "let switch = 1",
+            "let default = 1",
+    })
+    void parseProgramInvalidSwitchFails(@Nonnull final String text) {
+        assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Nonnull
     static Stream<Arguments> validAssignments() {
         final IAssignmentFragment bigintX = new IAssignmentFragment("x", new ILiteralFragment(42L, BIGINT));
         return Stream.of(
@@ -1383,5 +1513,23 @@ class FrlIrProgramParsingTest {
         final List<IStatementFragment> body =
                 ((IFunctionDefinitionFragment)statements.get(statements.size() - 1)).body().statements();
         return body.get(body.size() - 1);
+    }
+
+    /**
+     * Returns the last statement of a program.
+     */
+    @Nonnull
+    private static IStatementFragment lastStatement(@Nonnull final String text) {
+        final List<IStatementFragment> statements = parseProgram(text).statements();
+        return statements.get(statements.size() - 1);
+    }
+
+    /**
+     * Returns a case of a switch that names one value and whose block holds one statement.
+     */
+    @Nonnull
+    private static ISwitchFragment.Case switchCase(@Nonnull final IEnumType.Value value,
+                                                   @Nonnull final IStatementFragment statement) {
+        return new ISwitchFragment.Case(ImmutableList.of(value), block(ImmutableList.of(statement)));
     }
 }

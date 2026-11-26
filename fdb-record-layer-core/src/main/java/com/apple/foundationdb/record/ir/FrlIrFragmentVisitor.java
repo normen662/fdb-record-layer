@@ -54,6 +54,7 @@ import com.apple.foundationdb.record.ir.fragments.IReturnFragment;
 import com.apple.foundationdb.record.ir.fragments.IStatementFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IStreamType;
+import com.apple.foundationdb.record.ir.fragments.ISwitchFragment;
 import com.apple.foundationdb.record.ir.fragments.IType;
 import com.apple.foundationdb.record.ir.fragments.ITypeAliasFragment;
 import com.apple.foundationdb.record.ir.fragments.ITypeDeclarationFragment;
@@ -582,6 +583,19 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
+     * Returns the value of an enum type that has the given name, for an enum value, {@code .RED}, or a case of a
+     * switch, {@code case .RED:}.
+     */
+    @Nonnull
+    private static IEnumType.Value enumValue(@Nonnull final IEnumType enumType, @Nonnull final String name) {
+        return enumType.values()
+                .stream()
+                .filter(value -> value.name().equals(name))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("an enum value must be a value of its enum type"));
+    }
+
+    /**
      * Returns the name of a field of a record constructor: the name that its label gives, or none if it has no label.
      * The label {@code _} needs backticks, because Swift reads {@code (_: 1, 2)} as a tuple without labels.
      */
@@ -687,8 +701,9 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
     }
 
     /**
-     * Infers the type of the expression in front of the block of an if, a for, or a consume, whose calls take no
-     * trailing closure. Its operators are those of an expression, see {@link #binary}.
+     * Infers the type of the expression in front of the block of an if, a for, or a consume, or in front of the cases
+     * of a switch, whose calls take no trailing closure. Its operators are those of an expression, see
+     * {@link #binary}.
      */
     @Nonnull
     private Inferred infer(@Nonnull final FrlIrParser.ConditionExpressionContext ctx,
@@ -1660,6 +1675,47 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
         }
 
         /**
+         * Infers a switch. Its value has no context. The builder looks up the names of the cases among the values of
+         * the enum type of the value, once the value is typed, and the switch itself checks that its cases name every
+         * value of the enum type or that it has a default case. The statements of the cases are typed as those of the
+         * blocks of an if, see {@link #block(FrlIrParser.BlockContext)}.
+         */
+        @Nonnull
+        @Override
+        public PendingStatement visitSwitchStatement(@Nonnull final FrlIrParser.SwitchStatementContext ctx) {
+            final FrlIrParser.EnumSwitchContext enumSwitch = ctx.enumSwitch();
+            final String mismatch = "the value of a switch must be an enum value";
+            final Inferred value = infer(enumSwitch.conditionExpression(), null, mismatch);
+            final ImmutableList.Builder<List<String>> names = ImmutableList.builder();
+            final ImmutableList.Builder<Supplier<IBlockFragment>> bodies = ImmutableList.builder();
+            for (final FrlIrParser.SwitchCaseContext switchCase : enumSwitch.switchCase()) {
+                names.add(switchCase.identifier()
+                        .stream()
+                        .map(FrlIrFragmentVisitor::name)
+                        .collect(ImmutableList.toImmutableList()));
+                bodies.add(block(switchCase.statements()));
+            }
+            final Supplier<IBlockFragment> defaultBody =
+                    enumSwitch.defaultCase() == null ? null : block(enumSwitch.defaultCase().statements());
+            final List<List<String>> caseNames = names.build();
+            final List<Supplier<IBlockFragment>> caseBodies = bodies.build();
+            return new PendingStatement(() -> {
+                final IExpressionFragment builtValue = value.builder().get();
+                if (!(builtValue.type() instanceof IEnumType enumType)) {
+                    throw new IllegalArgumentException(mismatch);
+                }
+                final ImmutableList.Builder<ISwitchFragment.Case> cases = ImmutableList.builder();
+                for (int i = 0; i < caseNames.size(); i++) {
+                    cases.add(new ISwitchFragment.Case(caseNames.get(i)
+                            .stream()
+                            .map(name -> enumValue(enumType, name))
+                            .collect(ImmutableList.toImmutableList()), caseBodies.get(i).get()));
+                }
+                return new ISwitchFragment(builtValue, cases.build(), defaultBody == null ? null : defaultBody.get());
+            }, null);
+        }
+
+        /**
          * Infers a consume, which can be where a yield can be, since its stopped case stops or ends the stream block
          * that it is in. The consumed expression is a stream, whose element type is the type of the binding of the
          * value case; the binding of the stopped case is a {@code stopReason}. The consume itself checks that the
@@ -1729,7 +1785,16 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
          */
         @Nonnull
         private Supplier<IBlockFragment> block(@Nonnull final FrlIrParser.BlockContext ctx) {
-            final PendingStatements statements = inScope(blockScope(), () -> statements(ctx.statements(), null));
+            return block(ctx.statements());
+        }
+
+        /**
+         * Infers statements that form a block of a statement of control flow, such as the statements of a case of a
+         * switch, see {@link #block(FrlIrParser.BlockContext)}.
+         */
+        @Nonnull
+        private Supplier<IBlockFragment> block(@Nonnull final FrlIrParser.StatementsContext ctx) {
+            final PendingStatements statements = inScope(blockScope(), () -> statements(ctx, null));
             return () -> new IBlockFragment(statements.builder().get());
         }
 
@@ -1995,6 +2060,28 @@ public class FrlIrFragmentVisitor extends FrlIrParserBaseVisitor<IFragment> {
             }
             return fit(new Inferred(inference().meta(typeArgument),
                     () -> new IMetaConstructorFragment(TypeInference.resolve(typeArgument))));
+        }
+
+        /**
+         * Infers the type of an enum value, {@code .RED}: the enum type that the context requires. Enum types have no
+         * names, so the value alone does not tell its type. The type must be known at this point, as the type of a
+         * record must be known at a field access, and a nullable context makes the value nullable.
+         *
+         * <p>Example: in {@code pair(a: c, b: .RED)} with {@code pair<T>(a: T, b: T)}, the argument {@code c} gives
+         * {@code vT} its enum type before the visitor reaches {@code .RED}, so {@code .RED} has a known context. In
+         * {@code pair(a: .RED, b: c)}, {@code vT} is still open at {@code .RED}, and the method fails.</p>
+         */
+        @Nonnull
+        @Override
+        public Inferred visitEnumLiteral(@Nonnull final FrlIrParser.EnumLiteralContext ctx) {
+            Preconditions.checkArgument(expected != null && TypeInference.isResolved(expected),
+                    "the enum type of an enum value must be known where the value is written");
+            if (!(TypeInference.resolve(expected) instanceof IEnumType enumType)) {
+                throw new IllegalArgumentException("an enum value needs an enum type as its context");
+            }
+            final String name = name(ctx.identifier());
+            final IEnumType.Value value = enumValue(enumType, name);
+            return new Inferred(TypeInference.known(enumType), () -> new ILiteralFragment(value, enumType));
         }
 
         /**

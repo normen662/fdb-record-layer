@@ -26,14 +26,15 @@ import javax.annotation.Nonnull;
 import java.util.List;
 
 /**
- * A statement of control flow, an if, a for, or a consume: a statement with blocks that run as part of the block that
- * the statement is in. The blocks of a function, a closure, or a stream block run when the function or closure is
- * called, or as the stream is consumed, so they are not of this kind. A yield in the blocks of a control-flow statement
- * therefore belongs to the stream block that the statement is in, see {@link IBlockFragment#yields()}.
+ * A statement of control flow, an if, a for, a switch, or a consume: a statement with blocks that run as part of the
+ * block that the statement is in. The blocks of a function, a closure, or a stream block run when the function or
+ * closure is called, or as the stream is consumed, so they are not of this kind. A yield in the blocks of a
+ * control-flow statement therefore belongs to the stream block that the statement is in, see
+ * {@link IBlockFragment#yields()}.
  */
 @API(API.Status.EXPERIMENTAL)
 public sealed interface IControlFlowFragment extends IStatementFragment
-        permits IIfFragment, IForFragment, IConsumeFragment {
+        permits IIfFragment, IForFragment, ISwitchFragment, IConsumeFragment {
 
     /**
      * Returns the blocks of the statement, in the order in which they appear in it.

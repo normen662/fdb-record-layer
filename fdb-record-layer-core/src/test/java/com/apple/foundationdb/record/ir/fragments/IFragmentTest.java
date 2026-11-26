@@ -132,7 +132,11 @@ class IFragmentTest {
                 pinned(() -> new IConsumeFragment.Case("x", emptyBlock()), -1344930928),
                 pinned(() -> new IConsumeFragment.Case(null, emptyBlock()), -1344934648),
                 pinned(() -> new IConsumeFragment(new IVariableReferenceFragment("s", new IStreamType(intType())),
-                        new IConsumeFragment.Case("x", emptyBlock()), null, stoppedCase()), 1470978896));
+                        new IConsumeFragment.Case("x", emptyBlock()), null, stoppedCase()), 1470978896),
+                pinned(() -> new ISwitchFragment.Case(ImmutableList.of(new IEnumType.Value("RED", 0)), emptyBlock()),
+                        1057297529),
+                pinned(IFragmentTest::colorSwitch, -1550038976),
+                pinned(() -> new ILiteralFragment(new IEnumType.Value("RED", 0), colorType()), 49938601));
     }
 
     @ParameterizedTest
@@ -393,6 +397,20 @@ class IFragmentTest {
                 Arguments.of(valueCase, new IConsumeFragment.Case("y", emptyBlock)),
                 Arguments.of(valueCase, new IConsumeFragment.Case(null, emptyBlock)),
                 Arguments.of(valueCase, new IConsumeFragment.Case("x", nonEmptyBlock)),
+                // switches: the value, the cases, the default block; their cases: the values, the body
+                Arguments.of(colorSwitch(), new ISwitchFragment(new IVariableReferenceFragment("d", colorType()),
+                        colorSwitch().cases(), emptyBlock)),
+                Arguments.of(colorSwitch(), new ISwitchFragment(colorSwitch().value(), ImmutableList.of(
+                        new ISwitchFragment.Case(ImmutableList.of(colorType().values().get(1)), emptyBlock)),
+                        emptyBlock)),
+                Arguments.of(colorSwitch(),
+                        new ISwitchFragment(colorSwitch().value(), colorSwitch().cases(), nonEmptyBlock)),
+                Arguments.of(colorSwitch().cases().get(0), new ISwitchFragment.Case(colorType().values(), emptyBlock)),
+                Arguments.of(colorSwitch().cases().get(0),
+                        new ISwitchFragment.Case(colorSwitch().cases().get(0).values(), nonEmptyBlock)),
+                // enum literals: the value
+                Arguments.of(new ILiteralFragment(colorType().values().get(0), colorType()),
+                        new ILiteralFragment(colorType().values().get(1), colorType())),
                 // fragments of different kinds whose parts are equal
                 Arguments.of(new IStreamType(intType), new IMetaType(intType)),
                 Arguments.of(emptyBlock, new IProgramFragment(ImmutableList.of())),
@@ -858,6 +876,66 @@ class IFragmentTest {
     }
 
     @Test
+    void constructorIllFormedSwitchFails() {
+        final IEnumType.Value red = colorType().values().get(0);
+        final IEnumType.Value green = colorType().values().get(1);
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", colorType());
+        final ISwitchFragment.Case redCase = new ISwitchFragment.Case(ImmutableList.of(red), emptyBlock());
+        // the value is an enum value that is not nullable
+        assertThatThrownBy(() -> new ISwitchFragment(literal42(), ImmutableList.of(redCase), emptyBlock()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ISwitchFragment(new IVariableReferenceFragment("c",
+                colorType().withNullability(true)), ImmutableList.of(redCase), emptyBlock()))
+                .isInstanceOf(IllegalArgumentException.class);
+        // a switch has a case, and a case names a value
+        assertThatThrownBy(() -> new ISwitchFragment(c, ImmutableList.of(), emptyBlock()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ISwitchFragment.Case(ImmutableList.of(), emptyBlock()))
+                .isInstanceOf(IllegalArgumentException.class);
+        // the cases name values of the enum type, each at most once
+        assertThatThrownBy(() -> new ISwitchFragment(c, ImmutableList.of(new ISwitchFragment.Case(
+                ImmutableList.of(new IEnumType.Value("BLUE", 2)), emptyBlock())), emptyBlock()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ISwitchFragment(c, ImmutableList.of(redCase, redCase), emptyBlock()))
+                .isInstanceOf(IllegalArgumentException.class);
+        // the cases name every value, or there is a default block, but not both
+        assertThatThrownBy(() -> new ISwitchFragment(c, ImmutableList.of(redCase), null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ISwitchFragment(c, ImmutableList.of(new ISwitchFragment.Case(
+                ImmutableList.of(red, green), emptyBlock())), emptyBlock()))
+                .isInstanceOf(IllegalArgumentException.class);
+        // a literal of an enum type is one of the values of that type
+        assertThatThrownBy(() -> new ILiteralFragment(new IEnumType.Value("BLUE", 2), colorType()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ILiteralFragment(42, colorType())).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void blocksOfSwitchAreCaseBodiesThenDefault() {
+        final IBlockFragment first = new IBlockFragment(ImmutableList.of(literal42()));
+        final IBlockFragment second = new IBlockFragment(ImmutableList.of(new ILiteralFragment(7, intType())));
+        final IEnumType.Value red = colorType().values().get(0);
+        final IEnumType.Value green = colorType().values().get(1);
+        final IVariableReferenceFragment c = new IVariableReferenceFragment("c", colorType());
+        final ISwitchFragment withDefault = new ISwitchFragment(c,
+                ImmutableList.of(new ISwitchFragment.Case(ImmutableList.of(red), first)), second);
+        assertThat(withDefault.blocks()).containsExactly(first, second);
+        assertThat(withDefault.defaultBlock()).contains(second);
+        final ISwitchFragment exhaustive = new ISwitchFragment(c, ImmutableList.of(
+                new ISwitchFragment.Case(ImmutableList.of(red), first),
+                new ISwitchFragment.Case(ImmutableList.of(green), second)), null);
+        assertThat(exhaustive.blocks()).containsExactly(first, second);
+        assertThat(exhaustive.defaultBlock()).isEmpty();
+        // a switch always runs one of its blocks, so it cannot complete normally if none of them can
+        final IBlockFragment returns = new IBlockFragment(ImmutableList.of(new IReturnFragment(null)));
+        assertThat(new IBlockFragment(ImmutableList.of(new ISwitchFragment(c, ImmutableList.of(
+                new ISwitchFragment.Case(ImmutableList.of(red), returns)), returns))).completesNormally()).isFalse();
+        assertThat(new IBlockFragment(ImmutableList.of(new ISwitchFragment(c, ImmutableList.of(
+                new ISwitchFragment.Case(ImmutableList.of(red), returns)), emptyBlock()))).completesNormally())
+                .isTrue();
+    }
+
+    @Test
     void typeOfMetaConstructorIsMetaTypeOfItsTypeArgument() {
         final IMetaConstructorFragment token = new IMetaConstructorFragment(recordOfIdAndString());
         assertThat(token.typeArgument()).isEqualTo(recordOfIdAndString());
@@ -1180,6 +1258,23 @@ class IFragmentTest {
     private static IConsumeFragment.Case stoppedCase() {
         return new IConsumeFragment.Case("reason",
                 new IBlockFragment(ImmutableList.of(new IYieldBreakFragment(null))));
+    }
+
+    /**
+     * Returns {@code enum<RED = 0, GREEN = 1>}.
+     */
+    @Nonnull
+    private static IEnumType colorType() {
+        return new IEnumType(false, ImmutableList.of(new IEnumType.Value("RED", 0), new IEnumType.Value("GREEN", 1)));
+    }
+
+    /**
+     * Returns {@code switch c { case .RED: default: }} for {@code c} of {@link #colorType()}.
+     */
+    @Nonnull
+    private static ISwitchFragment colorSwitch() {
+        return new ISwitchFragment(new IVariableReferenceFragment("c", colorType()), ImmutableList.of(
+                new ISwitchFragment.Case(ImmutableList.of(new IEnumType.Value("RED", 0)), emptyBlock())), emptyBlock());
     }
 
     /**

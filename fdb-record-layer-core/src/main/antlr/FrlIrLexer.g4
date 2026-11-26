@@ -56,10 +56,10 @@ FUNCTION : 'function';
 
 // Definitions and statements. `extern` declares a function or a type that the runtime provides, `typealias` names
 // a type, `package` names the package that a program belongs to, and `yield` adds a value to the stream of a stream
-// block, `stream { … }`, which `yield break` ends or stops. `return` leaves a function or a closure. `if`, `for`, and
-// `consume` are the statements of control flow; `consume` pulls the elements of a stream, one `case` for each way a
-// stream can answer. `overloaded` declares an overloaded function, and `variant` defines or declares one of its
-// variants.
+// block, `stream { … }`, which `yield break` ends or stops. `return` leaves a function or a closure. `if`, `for`,
+// `switch`, and `consume` are the statements of control flow; `switch` picks a `case` by an enum value, or its
+// `default`, and `consume` pulls the elements of a stream, one `case` for each way a stream can answer. `overloaded`
+// declares an overloaded function, and `variant` defines or declares one of its variants.
 FUNC       : 'func';
 EXTERN     : 'extern';
 TYPE       : 'type';
@@ -73,6 +73,8 @@ RETURN     : 'return';
 IF         : 'if';
 ELSE       : 'else';
 FOR        : 'for';
+SWITCH     : 'switch';
+DEFAULT    : 'default';
 CONSUME    : 'consume';
 CASE       : 'case';
 OVERLOADED : 'overloaded';

@@ -31,10 +31,11 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
- * A literal: {@code 42}, {@code 1.5}, {@code "text"}, {@code true}, or {@code nil}. A literal takes its type from its
- * context, so the same spelling denotes values of different types: {@code 42} is an int on its own and a bigint where a
- * bigint is required. A literal therefore holds its value as a Java object of the type it has, a bigint {@code 42} as a
- * {@link Long}.
+ * A literal: {@code 42}, {@code 1.5}, {@code "text"}, {@code true}, {@code nil}, or an enum value, {@code .RED}. A
+ * literal takes its type from its context, so the same spelling denotes values of different types: {@code 42} is an
+ * int on its own and a bigint where a bigint is required, and {@code .RED} is a value of the enum type that its context
+ * requires. A literal therefore holds its value as a Java object of the type it has, a bigint {@code 42} as a
+ * {@link Long}, and an enum value as the {@link IEnumType.Value} of its enum type.
  */
 @API(API.Status.EXPERIMENTAL)
 public final class ILiteralFragment implements IExpressionFragment {
@@ -50,7 +51,8 @@ public final class ILiteralFragment implements IExpressionFragment {
      *
      * @param value the value, or {@code null} for {@code nil}: a {@link Boolean} for a boolean, an {@link Integer} for
      *        an int, a {@link Long} for a bigint, a {@link Half} for a half, a {@link Float} for a float, a
-     *        {@link Double} for a double, and a {@link String} for a string
+     *        {@link Double} for a double, a {@link String} for a string, and one of the values of an enum type for that
+     *        enum type
      * @param type the type of the literal: one of these types, or its nullable version; {@code nil} can be of any
      *        nullable type
      */
@@ -62,6 +64,9 @@ public final class ILiteralFragment implements IExpressionFragment {
     }
 
     private static boolean isValueOf(@Nonnull final Object value, @Nonnull final IType type) {
+        if (type instanceof IEnumType enumType) {
+            return value instanceof IEnumType.Value enumValue && enumType.values().contains(enumValue);
+        }
         if (!(type instanceof IPrimitiveType primitiveType)) {
             return false;
         }

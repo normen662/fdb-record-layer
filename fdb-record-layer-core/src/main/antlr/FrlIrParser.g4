@@ -384,6 +384,7 @@ statement
     | returnValue                      # returnStatement
     | conditional                      # ifStatement
     | forLoop                          # forStatement
+    | enumSwitch                       # switchStatement
     | consumeLoop                      # consumeStatement
     | expression                       # expressionStatement
     ;
@@ -459,6 +460,25 @@ consumeLoop
 
 consumeCase
     : CASE NL* DOT kind=identifier (LPAREN NL* binding=identifier NL* RPAREN)? NL* COLON statements
+    ;
+
+// `switch c { case .RED, .GREEN: … case .BLUE: … default: … }` runs the statements of the case that names the value
+// of `c`, which is an enum value that is not nullable, or those after `default` if no case names it. The cases name
+// every value of the enum, or a `default` comes last; a `default` after cases that name every value would never run,
+// so it is an error. A case names each value at most once, and no value is named in two cases. As in a consume, a case
+// does not fall through to the next one, and its statements may be empty. Like an if, a switch is a statement and has
+// no value, and the statements of its cases are typed as the statements around the switch. The expression in front of
+// the cases takes no trailing closure (see `conditionExpression`).
+enumSwitch
+    : SWITCH NL* conditionExpression NL* LBRACE NL* switchCase+ defaultCase? RBRACE
+    ;
+
+switchCase
+    : CASE NL* DOT identifier (NL* COMMA NL* DOT identifier)* NL* COLON statements
+    ;
+
+defaultCase
+    : DEFAULT NL* COLON statements
     ;
 
 //
@@ -619,7 +639,8 @@ postfix
 // trailing closure has no label: `fold(initial: 0) { a, x in a }` is `fold(initial: 0, combine: { a, x in a })` for
 // `fold(initial: int, combine: (int, int) -> int)`. Without other arguments, the parentheses can go, `run { 42 }`, also
 // in a dot call, `xs.map { x in x }`. A call has one trailing closure at most. The expression in front of the block of
-// an if, a for, or a consume takes no trailing closure, see `conditionExpression`.
+// an if, a for, or a consume, or in front of the cases of a switch, takes no trailing closure, see
+// `conditionExpression`.
 callArguments
     : arguments closure?
     | closure
@@ -637,10 +658,11 @@ argument
     : (label=identifier NL* COLON NL*)? expression
     ;
 
-// The expression in front of the block of an if, a for, or a consume: an expression whose calls take no trailing
-// closure, as in Swift, because a `{` after it starts the block. A closure argument goes into the parentheses there,
-// `if xs.contains({ x in x == 1 }) { }`. Field accesses and operators are the same as in other expressions,
-// `for t in r.reviews { }` and `if !t.isEmpty() { }`, so the rules below repeat those of `expression`.
+// The expression in front of the block of an if, a for, or a consume, or in front of the cases of a switch: an
+// expression whose calls take no trailing closure, as in Swift, because a `{` after it starts the block or the cases. A
+// closure argument goes into the parentheses there, `if xs.contains({ x in x == 1 }) { }`. Field accesses and
+// operators are the same as in other expressions, `for t in r.reviews { }` and `if !t.isEmpty() { }`, so the rules
+// below repeat those of `expression`.
 conditionExpression
     : conditionAdditiveExpression (comparisonOperator NL* conditionAdditiveExpression)?
     ;
@@ -669,6 +691,14 @@ conditionPostfix
 // An integer literal can be of any numeric type, a floating-point literal of any floating-point type, and `nil` of any
 // nullable type. A literal can also be of the nullable version of such a type: in `let x: int? = 42`, the literal is a
 // nullable int.
+//
+// `.RED` is a value of an enum type, written as in Swift. Enum types have no names, and two of them can have a value of
+// the same name, so the enum type comes from the context, as in `let r: stopReason = .TIME_LIMIT_REACHED` or
+// `yield break .SCAN_LIMIT_REACHED`. The context must be known where the value is written, as the type of a record
+// must be known where a field of it is accessed: `pair(a: c, b: .RED)` works, while in `pair(a: .RED, b: c)` the type
+// is not known yet at `.RED`. A nullable context makes the value nullable, as it makes `42` nullable. A line that
+// starts with a `.` continues the expression of the line before (see `postfix`), so an enum value does not start a
+// statement.
 literal
     : MINUS? INTEGER_LITERAL     # integerLiteral
     | MINUS? FLOATING_LITERAL    # floatingLiteral
@@ -676,6 +706,7 @@ literal
     | TRUE                       # trueLiteral
     | FALSE                      # falseLiteral
     | NIL                        # nilLiteral
+    | DOT identifier             # enumLiteral
     ;
 
 //

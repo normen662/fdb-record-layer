@@ -122,9 +122,10 @@ public final class IBlockFragment implements IFragment {
 
     /**
      * Returns whether a statement can complete normally, so that a statement after it can run. A return and a yield
-     * break cannot. An if with an else cannot if both of its blocks cannot. A consume cannot if it has an end case that
-     * cannot: its stopped case cannot, and its value case returns to its loop. Every other statement can: a for loop,
-     * since its array can be empty, and a stream block or a closure, whose returns and yield breaks are their own.
+     * break cannot. An if with an else cannot if both of its blocks cannot, and a switch cannot if none of its blocks
+     * can, since it always runs one of them. A consume cannot if it has an end case that cannot: its stopped case
+     * cannot, and its value case returns to its loop. Every other statement can: a for loop, since its array can be
+     * empty, and a stream block or a closure, whose returns and yield breaks are their own.
      *
      * @param statement the statement
      * @return {@code true} if the statement can complete normally
@@ -136,6 +137,9 @@ public final class IBlockFragment implements IFragment {
         if (statement instanceof IIfFragment conditional) {
             return conditional.elseBlock().isEmpty() || conditional.thenBlock().completesNormally()
                     || conditional.elseBlock().get().completesNormally();
+        }
+        if (statement instanceof ISwitchFragment switchStatement) {
+            return switchStatement.blocks().stream().anyMatch(IBlockFragment::completesNormally);
         }
         if (statement instanceof IConsumeFragment consume) {
             return consume.endCase().isEmpty() || consume.endCase().get().body().completesNormally();

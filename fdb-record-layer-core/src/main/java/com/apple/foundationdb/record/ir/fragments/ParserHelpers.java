@@ -44,8 +44,8 @@ public final class ParserHelpers {
     private static final ImmutableSet<String> KEYWORDS = ImmutableSet.of(
             "boolean", "int", "bigint", "half", "float", "double", "string", "bytes", "uuid", "version", "void",
             "record", "array", "stream", "meta", "vector", "enum", "function", "func", "extern", "type", "typealias",
-            "package", "in", "let", "yield", "break", "return", "if", "else", "for", "consume", "case", "overloaded",
-            "variant", "true", "false", "nil");
+            "package", "in", "let", "yield", "break", "return", "if", "else", "for", "switch", "default", "consume",
+            "case", "overloaded", "variant", "true", "false", "nil");
 
     @Nonnull
     private static final Pattern IDENTIFIER = Pattern.compile("[a-zA-Z_][a-zA-Z_0-9]*");

@@ -25,6 +25,8 @@ import com.apple.foundationdb.record.ir.fragments.IArrayType;
 import com.apple.foundationdb.record.ir.fragments.IAssignmentFragment;
 import com.apple.foundationdb.record.ir.fragments.IBlockFragment;
 import com.apple.foundationdb.record.ir.fragments.IClosureFragment;
+import com.apple.foundationdb.record.ir.fragments.IConsumeFragment;
+import com.apple.foundationdb.record.ir.fragments.IEnumType;
 import com.apple.foundationdb.record.ir.fragments.IExpressionFragment;
 import com.apple.foundationdb.record.ir.fragments.IExternType;
 import com.apple.foundationdb.record.ir.fragments.IFieldAccessFragment;
@@ -79,6 +81,9 @@ class FrlIrExpressionParsingTest {
     private static final IType STRING = new IPrimitiveType(IPrimitiveType.Kind.STRING, false);
     private static final IType BOOLEAN = new IPrimitiveType(IPrimitiveType.Kind.BOOLEAN, false);
     private static final IType VOID = new IPrimitiveType(IPrimitiveType.Kind.VOID, false);
+    private static final IEnumType COLOR = new IEnumType(false,
+            ImmutableList.of(new IEnumType.Value("RED", 0), new IEnumType.Value("GREEN", 1)));
+    private static final IType STOP_REASON = IConsumeFragment.STOP_REASON_TYPE;
     private static final IBlockFragment EMPTY_BLOCK = new IBlockFragment(ImmutableList.of());
 
     private static final String ID = "extern func id<T>(x: T) -> T\n";
@@ -979,6 +984,63 @@ class FrlIrExpressionParsingTest {
         assertThat(lastExpression(parse + "let e = parse(\"42\", as: meta.of<bigint>())").type()).isEqualTo(BIGINT);
     }
 
+    @Nonnull
+    static Stream<Arguments> enumLiterals() {
+        final IEnumType.Value red = COLOR.values().get(0);
+        final IEnumType.Value green = COLOR.values().get(1);
+        final IEnumType keywordNamed = new IEnumType(false,
+                ImmutableList.of(new IEnumType.Value("default", 0), new IEnumType.Value("OTHER", 1)));
+        final IFunctionDeclarationFragment f =
+                declaration("f", ImmutableList.of(), ImmutableList.of(parameter("color", COLOR)), VOID);
+        final IFunctionDeclarationFragment c = declaration("c", ImmutableList.of(), ImmutableList.of(), COLOR);
+        return Stream.of(
+                // the context gives the enum type, and the literal is the value of that name
+                Arguments.of("let e: stopReason = .TIME_LIMIT_REACHED",
+                        new ILiteralFragment(new IEnumType.Value("TIME_LIMIT_REACHED", 2), STOP_REASON)),
+                Arguments.of("let e: enum<RED = 0, GREEN = 1> = .GREEN", new ILiteralFragment(green, COLOR)),
+                Arguments.of("typealias color = enum<RED = 0, GREEN = 1>\nlet e: color = .RED",
+                        new ILiteralFragment(red, COLOR)),
+                // a name that is a keyword is between backticks, as in the enum type
+                Arguments.of("let e: enum<`default` = 0, OTHER = 1> = .`default`",
+                        new ILiteralFragment(keywordNamed.values().get(0), keywordNamed)),
+                // a nullable context makes the value nullable
+                Arguments.of("let e: enum<RED = 0, GREEN = 1>? = .RED",
+                        new ILiteralFragment(red, COLOR.withNullability(true))),
+                // the context can be a parameter, a field of a record, or a type that an earlier argument fixes
+                Arguments.of("extern func f(color: enum<RED = 0, GREEN = 1>)\nf(color: .RED)",
+                        new IFunctionCallFragment(reference(f), ImmutableList.of(new ILiteralFragment(red, COLOR)))),
+                Arguments.of("let e: record<c: enum<RED = 0, GREEN = 1>, n: int> = (c: .GREEN, n: 1)",
+                        record(false, ImmutableList.of(named(new ILiteralFragment(green, COLOR), "c"),
+                                named(new ILiteralFragment(1, INT), "n")))),
+                Arguments.of(PAIR + "extern func c() -> enum<RED = 0, GREEN = 1>\npair(a: c(), b: .RED)",
+                        new IFunctionCallFragment(reference(PAIR_FUNCTION, ImmutableList.of(COLOR),
+                                function(ImmutableList.of(COLOR, COLOR), VOID)),
+                                ImmutableList.of(new IFunctionCallFragment(reference(c), ImmutableList.of()),
+                                        new ILiteralFragment(red, COLOR)))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("enumLiterals")
+    void parseProgramEnumLiteralIsValueOfItsContextType(@Nonnull final String text,
+                                                       @Nonnull final IExpressionFragment expected) {
+        assertThat(lastExpression(text)).isEqualTo(expected);
+    }
+
+    @Test
+    void parseProgramEnumLiteralIsValueOfFunctionBody() {
+        // the result type is the context of a single expression and of the value of a return
+        final List<IStatementFragment> statements = parseProgram("""
+                func f() -> enum<RED = 0, GREEN = 1> { .RED }
+                func g() -> enum<RED = 0, GREEN = 1> {
+                    let x = 1
+                    return .GREEN
+                }""").statements();
+        assertThat(((IFunctionDefinitionFragment)statements.get(0)).body().statements())
+                .containsExactly(new ILiteralFragment(COLOR.values().get(0), COLOR));
+        assertThat(((IFunctionDefinitionFragment)statements.get(1)).body().statements().get(1))
+                .isEqualTo(new IReturnFragment(new ILiteralFragment(COLOR.values().get(1), COLOR)));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
             // a name must be in scope
@@ -1179,6 +1241,17 @@ class FrlIrExpressionParsingTest {
             // a program can do nothing with a token but pass it on
             "let e = meta.of<record<a: int>>().a",
             "let e = meta.of<int>()()",
+            // an enum value needs a known enum type as its context, and that type has a value of the name
+            "let e = .RED",
+            "let e: int = .RED",
+            "let e: stopReason = .SOURCE_EXHAUSTED",
+            "let e: enum<RED = 0> = .red",
+            PAIR + "extern func c() -> enum<RED = 0, GREEN = 1>\npair(a: .RED, b: c())",
+            // a line that starts with a dot continues the line before, so an enum value does not start a statement
+            "extern func c() -> enum<RED = 0>\nlet e = c()\n.RED",
+            // what a field access or a call applies to has no context, so an enum value there has no known type
+            "let e: enum<RED = 0> = .RED.x",
+            "let e: enum<RED = 0> = .RED()",
     })
     void parseProgramInvalidExpressionFails(@Nonnull final String text) {
         assertThatThrownBy(() -> parseProgram(text)).isInstanceOf(IllegalArgumentException.class);
